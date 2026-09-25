@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (3) — AUD-05: a linha da trilha LGPD vai para o tenant cujo dado foi lido
+
+**O defeito.** `_record_access` (`analytics-api/audit.py`) gravava `tenant_id` de
+`request.query_params`, e os dois handlers de `/v1/audit/*` liam os dados de
+`claims_tenant or tenant_id`: duas fontes para o mesmo fato. Sem `?tenant_id=` a linha ia com
+tenant **vazio** (o default `Query("tenant_demo")` não aparece em `query_params`); com
+`?tenant_id=outro` ia para o tenant errado, enquanto os dados vinham do tenant do JWT. O DPO não via
+o acesso, ou o via no tenant de outro. Nenhum aviso.
+
+**Medido antes do conserto** (`plughub_demo.audit_access_log`): **72 de 1 130** linhas escritas pela
+analytics-api com tenant vazio — 68 recusas e 4 leituras bem-sucedidas, de 2026-08-20 a 2026-09-12.
+Não há correção retroativa: a linha não guarda de onde veio o tenant. As linhas do channel-gateway
+(tópico `audit.access`) não passam por aqui.
+
+**O conserto.** `tenant_id` virou argumento obrigatório de `_record_access`, e o handler passa o
+mesmo valor da leitura. Na recusa 403 as claims já foram verificadas, então `AuditDenied` carrega o
+tenant delas; na 401/503 fica o tenant que a rota leria, com o default.
+
+**Testes** (`test_audit_handler_trail.py` § 5; 48 verdes nas três suítes de auditoria): a linha de
+sucesso é comparada com o tenant que o `_fetch_*` **recebeu** — não com um literal, que só provaria
+que os dois concordam com o teste —, sem query e com query de outro tenant, nas duas rotas; a
+recusa 403 vai para o tenant de quem foi barrado; a 401 usa `tenant_demo`; `open_access` também.
+Mutação: linha voltando a ler a query → 9 vermelhos; recusa ignorando as claims → 2 vermelhos.
+
+Não rebuildado: vale para a analytics-api no próximo build da imagem. Doc:
+`docs/arcos/audit-lgpd.md` § *A linha é do tenant cujo dado foi LIDO*.
+
+## 2026-09-25 (2) — SFE-01: o `complete` que cai no outcome literal passa a dizer por quê
+
+**O defeito.** `steps/complete.ts` resolve `outcome_from` em `pipeline_state.results` e, quando a
+chave falta, o valor não é string ou está fora de `SegmentOutcomeSchema`, mantinha o `outcome`
+literal **sem log nenhum** — o comentário chamava de *"fallback explícito"*, explícito só no código.
+Um flow que gravasse `escalated_humano` (ou sob outro `output_as`) fecharia como `resolved`, e o
+relatório de resolução contaria um contato não resolvido: o valor plausível da § Postura.
+
+**O conserto.** No ramo de fallback, `console.warn` com step, chave, o que foi achado (`ausente em
+results` ou o valor, truncado em 120) e o literal usado, mais a sessão. Os dois ramos — ausente e
+inválido — logam, porque grafia errada de `output_as` é a mesma falha com outra cara.
+
+**Testes** (`src/__tests__/steps/complete.test.ts`, 13 verdes): três exigem exatamente um warn
+(inválido, ausente, não-string) e dois são a testemunha de que o caminho válido e o sem
+`outcome_from` **não** logam. Mutação: warn removido → 3 vermelhos; warn incondicional → 5 vermelhos.
+
+**Exposição medida: zero.** Nenhum dos 61 skills vivos do `tenant_demo` (128 steps `complete`)
+declara `outcome_from`, nem os YAML do repositório; a contagem histórica que a ficha pedia é
+impossível por construção — o fallback nunca deixou rastro. O conserto protege o primeiro uso.
+Não rebuildado: vale para o `skill-flow-service` no próximo build da imagem.
+
+Doc: `docs/pacotes/skill-flow-engine.md` § `complete` (ganhou `outcome_from` e o domínio completo
+do literal, que listava 3 de 8 valores).
+
 ## 2026-09-25 (1) — NLF-02/03: a autoria por linguagem natural sai; entra o editor tipado com narrativa derivada
 
 **O que mudou.** A direção de 2026-09-24 (`decagon-paralelo-2026-09.md` § 1) propunha texto em

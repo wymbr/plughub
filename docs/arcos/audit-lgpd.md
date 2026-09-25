@@ -180,6 +180,16 @@ Hoje a identidade sai do próprio portão. Gates: `infra/test/probe_audit_surfac
 (`status_code=denied.status` → `403`) sobreviveu a **23 testes verdes**: eles cobriam o VEREDICTO, e
 nada atravessava a rota.
 
+### A linha é do tenant cujo dado foi LIDO *(AUD-05, 2026-09-25)*
+
+`_record_access` recebe o `tenant_id` do handler, pela mesma regra da leitura
+(`claims_tenant or tenant_id`); na recusa 403, o das claims já verificadas; na 401/503, o que a
+rota leria (inclusive o default). Até aqui ele saía de `request.query_params`: sem `?tenant_id=` a
+linha ia **vazia** (o default do `Query` não aparece ali) e com `?tenant_id=outro` ia para o tenant
+errado. Medido antes do conserto: **72 de 1 130** linhas da analytics-api com tenant vazio
+(2026-08-20 → 2026-09-12), sem correção retroativa possível. Testes: `test_audit_handler_trail.py`
+§ 5, que compara a linha com o tenant que o `_fetch_*` recebeu.
+
 ### ⚠️ Correção de 2026-08-22, por medição
 
 O `CLAUDE.md` afirmava `_require_audit_access()` e o dual-write `[timeline_row, mcp_audit_log_row]`

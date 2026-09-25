@@ -131,14 +131,21 @@ class AuditDenied(Exception):
     E carrega o `status` porque 401 e 403 respondem a perguntas diferentes — *"não
     sei quem é"* × *"sei, e não pode"*. Colapsá-las apaga a distinção no log de quem
     investiga acesso negado (decisão canônica do `py-authz`).
+
+    E carrega o `tenant_id` das claims quando elas foram VERIFICADAS (a recusa 403):
+    a linha da recusa pertence ao tenant de quem foi barrado, pela mesma regra da
+    leitura (AUD-05). Sem claims verificadas (401/503) fica vazio, e o handler usa o
+    tenant que a rota teria lido.
     """
 
     def __init__(self, motivo: str, *, status: int = 403,
-                 actor_sub: str = "", actor_kind: str = "anonymous") -> None:
+                 actor_sub: str = "", actor_kind: str = "anonymous",
+                 tenant_id: str = "") -> None:
         super().__init__(motivo)
         self.status = status
         self.actor_sub = actor_sub
         self.actor_kind = actor_kind
+        self.tenant_id = tenant_id
 
 
 def _check_audit_access(request: Request, field: str) -> tuple[str, str, str]:
@@ -178,6 +185,7 @@ def _check_audit_access(request: Request, field: str) -> tuple[str, str, str]:
         raise AuditDenied(
             f"sem module_config.audit.{field}",
             status=403, actor_sub=actor_sub, actor_kind=actor_kind,
+            tenant_id=str(claims.get("tenant_id") or ""),
         )
     return actor_sub, actor_kind, str(claims.get("tenant_id") or "")
 
@@ -189,11 +197,17 @@ def _store(request: Request):
 
 
 async def _record_access(
-    request: Request, *, actor_sub: str, actor_kind: str, endpoint: str,
-    target_kind: str, target_id: str, result: str, row_count: int,
+    request: Request, *, tenant_id: str, actor_sub: str, actor_kind: str,
+    endpoint: str, target_kind: str, target_id: str, result: str, row_count: int,
 ) -> None:
     """
     Escreve a linha imutável em `audit_access_log`.
+
+    `tenant_id` é OBRIGATÓRIO e vem do handler, pela mesma regra da leitura
+    (`claims_tenant or tenant_id`). Até a AUD-05 ele saía de `request.query_params`:
+    sem `?tenant_id=` a linha ia com tenant VAZIO (o default do `Query` não aparece
+    ali), e com `?tenant_id=outro` ia para o tenant errado enquanto os dados vinham
+    do tenant do JWT — o DPO de um tenant não via o acesso, ou o via no do outro.
 
     Nunca derruba a resposta: a falha de gravação vira ERROR com prefixo estável.
     Mas ela é ERROR, não `pass` — uma trilha de auditoria que some em silêncio é
@@ -205,7 +219,7 @@ async def _record_access(
     try:
         await _store(request).insert_audit_access_log({
             "access_id":   str(uuid.uuid4()),
-            "tenant_id":   request.query_params.get("tenant_id") or "",
+            "tenant_id":   tenant_id,
             "actor_sub":   actor_sub,
             "actor_kind":  actor_kind,
             "endpoint":    endpoint,
@@ -305,7 +319,8 @@ async def audit_session_messages(
         actor_sub, actor_kind, claims_tenant = _check_audit_access(request, "sessions")
     except AuditDenied as denied:
         await _record_access(
-            request, actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
+            request, tenant_id=denied.tenant_id or tenant_id,
+            actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
             endpoint="audit.sessions.messages", target_kind="session",
             target_id=session_id, result="denied", row_count=0,
         )
@@ -324,7 +339,7 @@ async def audit_session_messages(
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
     await _record_access(
-        request, actor_sub=actor_sub, actor_kind=actor_kind,
+        request, tenant_id=effective_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
         endpoint="audit.sessions.messages", target_kind="session",
         target_id=session_id, result="ok", row_count=len(messages),
     )
@@ -427,7 +442,8 @@ async def audit_mcp_calls(
         actor_sub, actor_kind, claims_tenant = _check_audit_access(request, "mcp_calls")
     except AuditDenied as denied:
         await _record_access(
-            request, actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
+            request, tenant_id=denied.tenant_id or tenant_id,
+            actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
             endpoint="audit.mcp_calls", target_kind="mcp_calls",
             target_id=session_id or "", result="denied", row_count=0,
         )
@@ -446,7 +462,7 @@ async def audit_mcp_calls(
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
     await _record_access(
-        request, actor_sub=actor_sub, actor_kind=actor_kind,
+        request, tenant_id=effective_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
         endpoint="audit.mcp_calls", target_kind="mcp_calls",
         target_id=session_id or "", result="ok", row_count=len(calls),
     )

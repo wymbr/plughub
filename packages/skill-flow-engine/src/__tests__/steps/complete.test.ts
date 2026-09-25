@@ -3,7 +3,7 @@
  * F1.2 (bancada de agentes): outcome dinâmico via `outcome_from` + fallback literal.
  */
 
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, afterEach } from "vitest"
 import { executeComplete }       from "../../steps/complete"
 import type { StepContext }      from "../../executor"
 import type { CompleteStep, PipelineState } from "@plughub/schemas"
@@ -77,5 +77,52 @@ describe("executeComplete", () => {
     }
     const ctx = makeCtx({ wrapup_classificacao: "nao_existe" })
     expect(executeComplete(step, ctx).outcome).toBe("resolved")
+  })
+})
+
+// SFE-01: o fallback para o literal nunca é mudo — e o caminho válido não loga
+// (testemunha: sem ela, um warn incondicional passaria nos ramos de fallback).
+describe("executeComplete — fallback barulhento (SFE-01)", () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const step: CompleteStep = {
+    id: "fin", type: "complete", outcome: "resolved",
+    outcome_from: "wrapup_classificacao",
+  }
+
+  it("loga valor inválido, nomeando chave, valor, literal e sessão", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    executeComplete(step, makeCtx({ wrapup_classificacao: "escalated_humano" }))
+    expect(warn).toHaveBeenCalledTimes(1)
+    const msg = String(warn.mock.calls[0][0])
+    expect(msg).toContain("wrapup_classificacao")
+    expect(msg).toContain("escalated_humano")
+    expect(msg).toContain('"resolved"')
+    expect(msg).toContain("s1")
+  })
+
+  it("loga chave ausente (output_as com outro nome)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    executeComplete(step, makeCtx({ outra_chave: "escalated" }))
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain("ausente")
+  })
+
+  it("loga valor não-string", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    executeComplete(step, makeCtx({ wrapup_classificacao: { outcome: "escalated" } }))
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it("NÃO loga quando o valor dinâmico é válido", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    expect(executeComplete(step, makeCtx({ wrapup_classificacao: "escalated" })).outcome).toBe("escalated")
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it("NÃO loga quando não há outcome_from", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    executeComplete({ id: "fin", type: "complete", outcome: "resolved" }, makeCtx({}))
+    expect(warn).not.toHaveBeenCalled()
   })
 })

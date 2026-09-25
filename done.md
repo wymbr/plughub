@@ -544,3 +544,15 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | id | tarefa | data | ancora |
 |---|---|---|---|
 | DEN-01 | **As regras de dados e de teste de 2026-09-23 chegaram às skills, testadas em sessão nova.** `data-engineering`: MV sobre RMT conta versões; negação sobre `Nullable` no `countIf` (esta também no `CLAUDE.md` § Postura). `testing-pattern`: mutação sem população, população antes do veredicto, `sed` com endereço + `cmp`, censo por outro caminho, `ioredis-mock` com `flushall` + `toHaveLength`. Três rodadas de canário | 2026-09-23 | `CHANGELOG.md` § 2026-09-23 (10) |
+
+## `docs/pacotes/skill-flow-engine.md` — interpretador de Skill Flow
+
+| id | tarefa | data | ancora |
+|---|---|---|---|
+| SFE-01 | `complete.outcome_from` que cai no literal passa a logar chave, valor achado, literal e sessão | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (2) |
+
+## `docs/arcos/audit-lgpd.md` — trilha e direitos do titular
+
+| id | tarefa | data | ancora |
+|---|---|---|---|
+| AUD-05 | A linha da trilha LGPD vai para o tenant cujo dado foi lido, não o da query | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (3) |

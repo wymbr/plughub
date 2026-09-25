@@ -10,7 +10,7 @@
  * outcome dinâmico. Se `outcome_from` estiver presente, resolve o valor da chave
  * correspondente em pipeline_state (ex.: `output_as` de um menu) e valida contra o
  * domínio canônico SegmentOutcomeSchema. Valor ausente/inválido → cai no `outcome`
- * literal (fallback obrigatório do YAML). Mantém o step síncrono — pipeline_state
+ * literal (fallback obrigatório do YAML), com WARN nomeando o que foi achado. Mantém o step síncrono — pipeline_state
  * é in-memory (ctx.state.results), mesmo acesso usado pelo choice step.
  */
 
@@ -28,8 +28,18 @@ export function executeComplete(
     const raw = ctx.state?.results?.[step.outcome_from]
     if (typeof raw === "string" && SegmentOutcomeSchema.safeParse(raw).success) {
       outcome = raw
+    } else {
+      // Fallback para o literal — nunca mudo (SFE-01): um valor calculado com grafia
+      // errada ou gravado sob outro output_as fecharia como o literal (ex.: `resolved`)
+      // e o relatório contaria um contato que não foi resolvido.
+      const found = raw === undefined
+        ? "ausente em results"
+        : `= ${JSON.stringify(raw)?.slice(0, 120)} fora do domínio`
+      console.warn(
+        `[complete] ${step.id}: outcome_from="${step.outcome_from}" ${found} — ` +
+        `usando o literal "${step.outcome}" (sessão ${ctx.sessionId})`
+      )
     }
-    // else: mantém o literal step.outcome como fallback explícito
   }
 
   return {

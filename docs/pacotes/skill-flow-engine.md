@@ -348,9 +348,16 @@ Encerra o pipeline com o `outcome` declarado. O orquestrador chama `agent_done` 
 {
   id:      string
   type:    "complete"
-  outcome: "resolved" | "escalated_human" | "transferred_agent"
+  outcome: "resolved" | "escalated" | "escalated_human" | "transferred_agent"
+         | "callback" | "failed" | "suspended" | "abandoned"
+  outcome_from?: string   // chave em pipeline_state.results com o outcome DINÂMICO
 }
 ```
+
+`outcome_from` (F1.2): o valor em `results[outcome_from]` vence o literal quando é string do
+domínio `SegmentOutcomeSchema`. Chave ausente, valor fora do domínio ou não-string caem no `outcome`
+literal **com `console.warn`** nomeando step, chave, valor achado, literal usado e sessão (SFE-01,
+2026-09-25) — antes o fallback era mudo e uma grafia errada fechava o contato como `resolved`.
 
 Retorna `__complete__` ao loop do engine. O engine marca o `pipeline_state` como `completed` e retorna `{ outcome, pipeline_state }`.
 

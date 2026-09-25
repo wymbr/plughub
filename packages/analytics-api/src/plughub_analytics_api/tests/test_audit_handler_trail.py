@@ -199,6 +199,83 @@ def test_open_access_grava_o_ator_NOMEADO(monkeypatch, app_e_store):
     assert linha["actor_kind"] == "open_access"
 
 
+# ── 5. a linha pertence ao tenant cujo dado foi LIDO (AUD-05) ─────────────────
+#
+# O tenant da linha saía de `request.query_params`, e a leitura de
+# `claims_tenant or tenant_id`. Duas fontes para o mesmo fato: sem `?tenant_id=` a
+# linha ia VAZIA, com `?tenant_id=outro` ia para o tenant errado. A testemunha da
+# leitura é o argumento que o `_fetch_*` recebeu — comparar com um literal só provaria
+# que os dois concordam com o teste, não um com o outro.
+
+@pytest.fixture
+def tenant_lido(monkeypatch):
+    lidos: list[str] = []
+
+    def msgs(_c, _db, tenant, *_a, **_k):
+        lidos.append(tenant)
+        return [{"stream_entry_id": "1"}]
+
+    def calls(_c, _db, tenant, *_a, **_k):
+        lidos.append(tenant)
+        return [{"event_id": "e1"}]
+
+    monkeypatch.setattr("plughub_analytics_api.audit._fetch_audit_messages", msgs)
+    monkeypatch.setattr("plughub_analytics_api.audit._fetch_mcp_calls", calls)
+    return lidos
+
+
+@pytest.mark.parametrize("url,_endpoint,campo", ROTAS)
+@pytest.mark.parametrize("params", [{}, {"tenant_id": "outro_tenant"}],
+                         ids=["sem_query", "query_de_outro_tenant"])
+def test_linha_ok_vai_para_o_tenant_LIDO(app_e_store, tenant_lido, url, _endpoint,
+                                         campo, params):
+    client, store = app_e_store
+    tok = _token({"audit": {campo: {"access": "read_only"}}}, tenant="tenant_x")
+    r = client.get(url, params=params, headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200
+    assert tenant_lido == ["tenant_x"], "a leitura segue as claims"
+    (linha,) = _linhas(store)
+    assert linha["tenant_id"] == tenant_lido[0]
+
+
+@pytest.mark.parametrize("url,_endpoint,_campo", ROTAS)
+def test_recusa_403_vai_para_o_tenant_de_QUEM_FOI_BARRADO(app_e_store, url,
+                                                          _endpoint, _campo):
+    """Claims verificadas: a query não decide de que tenant é a recusa."""
+    client, store = app_e_store
+    tok = _token({}, sub="fulano", tenant="tenant_x")
+    r = client.get(url, params={"tenant_id": "outro_tenant"},
+                   headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 403
+    (linha,) = _linhas(store)
+    assert linha["tenant_id"] == "tenant_x"
+
+
+@pytest.mark.parametrize("url,_endpoint,_campo", ROTAS)
+def test_recusa_401_usa_o_tenant_que_a_rota_LERIA(app_e_store, url, _endpoint, _campo):
+    """Sem claims verificadas, a única fonte é a rota — inclusive o default, que não
+    aparece em `query_params` e fazia a linha ir VAZIA."""
+    client, store = app_e_store
+    assert client.get(url).status_code == 401
+    (linha,) = _linhas(store)
+    assert linha["tenant_id"] == "tenant_demo"
+
+
+def test_open_access_linha_vai_para_o_tenant_LIDO(monkeypatch, app_e_store, tenant_lido):
+    """Sem claims, a leitura usa o parâmetro da rota — e a linha, o mesmo."""
+    client, store = app_e_store
+    from plughub_analytics_api import config as cfg
+
+    class S:
+        analytics_open_access = True
+        auth_jwt_secret = SECRET
+
+    monkeypatch.setattr(cfg, "get_settings", lambda: S())
+    assert client.get(ROTAS[1][0]).status_code == 200
+    (linha,) = _linhas(store)
+    assert linha["tenant_id"] == tenant_lido[0] == "tenant_demo"
+
+
 # ── a falha da própria trilha nunca derruba a resposta ───────────────────────
 
 def test_falha_ao_gravar_trilha_nao_derruba_a_resposta(app_e_store, caplog):
