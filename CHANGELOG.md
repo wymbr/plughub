@@ -1,5 +1,27 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (1) — NLF-02/03: a autoria por linguagem natural sai; entra o editor tipado com narrativa derivada
+
+**O que mudou.** A direção de 2026-09-24 (`decagon-paralelo-2026-09.md` § 1) propunha texto em
+linguagem natural convertido por LLM em Skill Flow YAML, inspirada na AOP da Decagon. O dono a
+descartou um dia depois, e as fichas NLF-02 (conversor) e NLF-03 (YAML → texto) fecharam sem código.
+
+**Por quê.** Quem é leigo e precisa usar as expressões certas para o texto gerar a alteração certa
+está escrevendo numa linguagem de programação sem gramática publicada — é o que as críticas à Decagon
+descrevem (depuração difícil, engenheiro dedicado). Somaram-se os riscos do próprio conversor: o mesmo
+texto gerando YAML diferente, e texto e YAML divergindo com o tempo.
+
+**No lugar.** O contrato formal fica e a linguagem natural vai só para a LEITURA: editor tipado com
+templates e conferência de referências (`IDE-01`); descritivo padrão por step derivado dos campos, em
+vocabulário de negócio, complementável e carimbado por hash, e a visão narrativa deles (`IDE-02`);
+execução passo a passo (`IDE-03`); simulador de canal (`IDE-04`); a `NLF-01` ampliada para construtor
+de tools ao estilo Postman. E quatro modelos que mudam O QUE o negócio edita: política como dado
+(`DTB-01`), cenários de aceite com vocabulário fechado (`SCN-01`), biblioteca de blocos (`BLK-01`) e
+mineração de processo (`PMN-01`). A `RRH-02` passou a prever replay de histórico **até divergir**.
+
+Nenhum código tocado. Documento: `docs/product/decagon-paralelo-2026-09.md` § 1 e § 9; decisão do
+editor no `TODO.md` § *Editor de fluxo próprio*.
+
 ## 2026-09-24 (8) — NIV-15: o e-mail entrega o menu e a resposta volta ao fluxo
 
 **O defeito, medido.** O e-mail tinha o defeito do SMS e um a mais:

@@ -2235,14 +2235,15 @@ genérico) e **N4** (editor de DialogForm).
 investimento apodrece. Se passarem dois trimestres sem commit em `agent-flow`, esta frente virou o
 *"fallback sem investimento"* que o documento abortado proibia com razão.
 
-**Decisão de 2026-09-24 (dono): o canvas sai; a autoria passa a ser por TEXTO que gera o YAML.**
-Motivo: o paralelo com a AOP da Decagon mostrou que o mercado está trocando o canvas por procedimento
-escrito, e que o risco de um canvas é o mesmo registrado acima — apodrecer sem investimento. A parte
-deste texto que continua valendo é a alavanca: **rodar e ver**. Ela muda de casa, não de peso — vira a
-simulação da versão candidata contra conversas reais (`RRH-02`). O LLM entra só na AUTORIA (converte o
-texto em Skill Flow YAML, que é o que se revisa e roda); em runtime nada muda, e um fluxo sem IA continua
-sem LLM. Pré-requisito: o catálogo de ferramentas tipado, sem o qual o conversor inventaria interface.
-Fichas: `NLF-01..03`, `RRH-02`. Raciocínio completo: `docs/product/decagon-paralelo-2026-09.md` § 1 e § 3.
+**Decisão de 2026-09-24, corrigida em 2026-09-25 (dono): o canvas sai, e a autoria por linguagem
+natural também.** A primeira versão trocava o canvas por texto em linguagem natural convertido por LLM
+em YAML. Caiu no dia seguinte: quem precisa das expressões certas para o texto gerar a alteração certa
+está programando numa linguagem sem gramática publicada. **Fica o editor TIPADO** (templates por step
+e conferência de referências), com **execução observável** — a alavanca deste texto, *rodar e ver*:
+passo a passo com breakpoint e ContextStore, simulador de canal, replay de histórico até divergir — e a
+linguagem natural só na LEITURA: descritivo padrão derivado dos campos de cada step, complementável, e a
+visão narrativa deles. Fichas: `IDE-01..04`, `NLF-01`, `RRH-02`; `NLF-02/03` fechadas como
+descartadas. Raciocínio completo: `docs/product/decagon-paralelo-2026-09.md` § 1 e § 9.
 
 ### Capacidade de IA — `reserved` × `shared`
 

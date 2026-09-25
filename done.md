@@ -10,6 +10,15 @@
 
 ---
 
+## `docs/product/decagon-paralelo-2026-09.md` — autoria, análise e qualidade
+
+| id | tarefa | data | âncora no `CHANGELOG.md` |
+|---|---|---|---|
+| NLF-02 | **Descartada:** texto em linguagem natural convertido por LLM em Skill Flow YAML. Substituída pelo editor tipado com narrativa derivada (`IDE-01..04`) | 2026-09-25 | CHANGELOG.md § 2026-09-25 (1) |
+| NLF-03 | **Descartada** com a NLF-02: YAML → texto só existia para a ida e volta do conversor | 2026-09-25 | CHANGELOG.md § 2026-09-25 (1) |
+
+---
+
 ## `docs/adr/adr-contextstore-allowlist.md` — ContextStore como ALLOWLIST
 
 *(V0–V3, V1b, V2b, D6, D7-metade, D8 e a FATIA 1 da D9 fecharam antes deste ledger existir —
