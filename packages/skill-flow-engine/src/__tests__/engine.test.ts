@@ -449,3 +449,38 @@ describe("SkillFlowEngine — reason → choice", () => {
     }
   })
 })
+
+// ── SFE-02: o motivo declarado no `complete` chega ao RunResult ────────────────
+// É o objeto que o skill-flow-service devolve ao bridge sem alterar, e que o bridge
+// carimba no segmento. Sem `issue_status` aqui, o motivo não tem por onde viajar.
+
+describe("SkillFlowEngine — SFE-02: issue_status do complete no RunResult", () => {
+  const flowComMotivo: SkillFlow = {
+    entry: "consultar",
+    steps: [
+      { ...simpleFlow.steps[0]!, on_success: "encerrar" } as SkillFlow["steps"][number],
+      { id: "encerrar", type: "complete", outcome: "failed", issue_status: "SLA de análise estourou" },
+      { id: "escalar",  type: "escalate", target: { pool: "especialista" }, context: "pipeline_state" },
+    ],
+  }
+
+  it("devolve o issue_status que o autor declarou", async () => {
+    mockMcpCall.mockResolvedValue({})
+    const result = await makeEngine().run({
+      tenantId: TENANT, sessionId: "session-sfe02", customerId: "c",
+      skillId: "skill_test_v1", flow: flowComMotivo, sessionContext: {},
+    }) as Record<string, unknown>
+    expect(result["outcome"]).toBe("failed")
+    expect(result["issue_status"]).toBe("SLA de análise estourou")
+  })
+
+  it("TESTEMUNHA: complete sem issue_status não inventa um", async () => {
+    mockMcpCall.mockResolvedValue({})
+    const result = await makeEngine().run({
+      tenantId: TENANT, sessionId: "session-sfe02b", customerId: "c",
+      skillId: "skill_test_v1", flow: simpleFlow, sessionContext: {},
+    }) as Record<string, unknown>
+    expect(result["outcome"]).toBe("resolved")
+    expect("issue_status" in result).toBe(false)
+  })
+})

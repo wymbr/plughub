@@ -513,6 +513,9 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
               participant_id,
               instance_id,
               outcome:       payload.outcome,
+              // SFE-02: a tool EXIGE issue_status (min 1) e o evento o descartava —
+              // o segmento do especialista de conferência saía sem o motivo.
+              issue_status:  payload.issue_status,
               timestamp:     new Date().toISOString(),
             })
           } catch { /* Non-fatal */ }

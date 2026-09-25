@@ -4497,6 +4497,24 @@ def _segment_close_reason_from_transport(
 # sobrescreveria o anterior. O acumulador garante que cada re-publish carrega
 # todos os campos conhecidos. Suporta N humanos/pools por contato.
 
+def _flow_issue_status(agent_result: dict | None) -> str | None:
+    """
+    SFE-02 — POR QUE o fluxo fechou, como o autor declarou no step `complete`.
+
+    O engine o devolve no RunResult (`issue_status`), e o skill-flow-service repassa o
+    objeto sem alterar. Uma casa só para os QUATRO publicadores de `participant_left`
+    nativo: ativação, agente de fila, janela de resume do webhook e o especialista de
+    conferência externo (G5), cujo `conference_agent_completed` traz o campo que a tool
+    `agent_done` exige.
+
+    Ausente ⇒ ``None``, nunca um default: ``None`` é "não declarado", e é o que deixa o
+    relatório distinguir o fluxo que calou do que disse algo. Antes da SFE-02 o campo
+    era descartado pelo parse do schema e nenhum segmento de IA o tinha.
+    """
+    raw = (agent_result or {}).get("issue_status")
+    return raw if isinstance(raw, str) and raw else None
+
+
 def _seg_signal_key(session_id: str, segment_id: str) -> str:
     return f"session:{session_id}:seg_signal:{segment_id}"
 
@@ -5754,6 +5772,7 @@ async def process_routed(
         # persistido em pipeline_state.results.escalation_reason via output_as.
         _part_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
         _part_esc = str(_part_results.get("escalation_reason", "") or "") or None
+        _part_issue = _flow_issue_status(agent_result)
         # ── Fase A (queue-attended-model): record last primary outcome ────────
         # Single source of truth for outcome is the segment; the session-level
         # outcome in contact_closed is DERIVED from the last primary segment.
@@ -5785,6 +5804,7 @@ async def process_routed(
             outcome=_part_outcome,
             flow_id=_part_flow_id,
             escalation_reason=_part_esc,
+            issue_status=_part_issue,
         ))
         # G5 dedup guard: conference_agent_completed checks this key before emitting
         # participant_left for external conference specialists.  Native bridge agents
@@ -6835,9 +6855,14 @@ async def process_queued(
         (datetime.now(timezone.utc) - _q_joined_at).total_seconds() * 1000
     )
     _q_outcome = (agent_result or {}).get("outcome") or None
+    # SFE-02: o motivo do fluxo só vale junto com o desfecho DO FLUXO. Quando o override
+    # abaixo troca o outcome por `abandoned`, o motivo declarado descreveria o desfecho
+    # que foi substituído — então ele cai junto, em vez de contradizer a linha.
+    _q_issue = _flow_issue_status(agent_result)
     try:
         if await redis_client.exists(f"session:{session_id}:closed"):
             _q_outcome = "abandoned"
+            _q_issue = None
     except Exception:
         pass
     _q_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
@@ -6855,6 +6880,7 @@ async def process_queued(
         duration_ms=_q_duration_ms,
         outcome=_q_outcome,
         flow_id=_q_flow_id,
+        issue_status=_q_issue,
     ))
 
     # Clean up marker after the queue agent completes.
@@ -7145,6 +7171,9 @@ async def process_contact_event(
                             joined_at=_g5_joined_iso,
                             duration_ms=_g5_dur,
                             outcome=outcome,
+                            # SFE-02: o evento carrega o issue_status que a tool
+                            # `agent_done` exige; mesmo leitor, mesma regra (ausente → None).
+                            issue_status=_flow_issue_status(msg),
                         ))
                         logger.info(
                             "G5: participant_left emitted for external conference specialist: "
@@ -9570,6 +9599,7 @@ async def _handle_webhook_session_resumed(
         joined_at=_resume_joined_iso, duration_ms=_resume_duration_ms,
         outcome=_ai_outcome or None,
         flow_id=(((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or "",
+        issue_status=_flow_issue_status(agent_result),
     ))
 
     # ── Outcome de SESSÃO: a janela de resume é o último segmento primary ──────

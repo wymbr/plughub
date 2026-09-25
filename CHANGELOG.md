@@ -1,5 +1,41 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (5) — SFE-02: o `issue_status` do `complete` sobrevive ao parse e chega ao segmento de IA
+
+**O defeito, medido.** 37 dos 96 `complete` do repositório (20 skills) declaram por que o fluxo
+fechou — `outbound_drain_failed`, *"SLA de análise estourou sem decisão do aprovador"*,
+*"Identidade não verificada — devolvido ao chamador"* — e **nenhum** segmento de IA o tinha. O
+`CompleteStepSchema` não declarava o campo e não era `.strict()`: o Zod o **descartava calado**.
+E o descarte não era só no engine: o agent-registry valida com o mesmo schema ao gravar, então os
+**111 `complete` dos snapshots vivos** (49 pools com `current`) tinham `issue_status` em **0**, e
+as definições no DB também o perderam.
+
+**Prova da inércia antes do conserto** (a ficha a pedia): `complete-step.test.ts` escrito e rodado
+primeiro — **4 vermelhos**, só a testemunha verde.
+
+**O conserto, elo por elo:**
+- `schemas`: `issue_status: z.string().min(1).optional()` e `.strict()` — chave desconhecida é
+  recusada (422 no registry), nunca descartada. Medido antes: nenhuma outra chave em `complete` no
+  repositório; o editor da UI é YAML cru e não injeta metadado.
+- engine: `complete` devolve o campo, `RunResult` o carrega; o skill-flow-service repassa sem alterar.
+- bridge: `_flow_issue_status` (ausente → `None`, nunca default) nos publicadores de
+  `participant_left` nativo. Eram **quatro**, não três: o teste por AST achou o do especialista de
+  conferência externo (G5), cujo `conference_agent_completed` também descartava o campo que a tool
+  `agent_done` **exige** — o mcp-server passou a publicá-lo. No agente de fila, quando o bridge
+  troca o outcome por `abandoned`, o motivo do fluxo cai junto em vez de contradizer a linha.
+
+**Testes:** schemas 383/383 (+5), engine 309/309 (+4), mcp-server 508/508, bridge 222 (+9),
+agent-registry 132/132; `tsc` limpo. Mutação: **6 de 6 vermelhas** (campo removido, schema aberto,
+step e engine sem repassar, leitor com default, publicador sem o kwarg). ⚠️ O ramo do agente de
+fila (motivo cai com o `abandoned`) **não tem teste** — está no meio do handler; fica na ficha.
+
+**Nada muda em produção ainda.** Precisa de rebuild dos quatro serviços, `PUT` dos 20 skills e
+re-promote dos 16 pools, um por vez (o `outbound_survey_worker` é dívida da CNS-22). Deixou ficha:
+**SFE-04**; ANL-01 e KPI-08 passaram a esperar por ela. ⚠️ O build local do `dist` do schemas não
+conseguiu reescrever 3 módulos que pertencem ao root (`audit-access`, `media-calls`,
+`speech-metrics`) — sem relação com esta mudança, mas o `dist` local fica misto até um build limpo.
+Doc: `docs/pacotes/skill-flow-engine.md` § `complete`.
+
 ## 2026-09-25 (4) — MSK-04: texto de agente mascarado em toda saída, e a falha nunca entrega o original
 
 **A ficha estava certa no código que olhou e errada no dano.** Ela mediu o mcp-server

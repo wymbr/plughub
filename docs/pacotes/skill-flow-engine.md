@@ -351,8 +351,18 @@ Encerra o pipeline com o `outcome` declarado. O orquestrador chama `agent_done` 
   outcome: "resolved" | "escalated" | "escalated_human" | "transferred_agent"
          | "callback" | "failed" | "suspended" | "abandoned"
   outcome_from?: string   // chave em pipeline_state.results com o outcome DINÂMICO
+  issue_status?: string   // POR QUE fechou, texto do autor (não vazio) — vai ao segmento
 }
 ```
+
+O schema é **estrito** desde a SFE-02 (2026-09-25): chave desconhecida num `complete` é
+recusada no parse (422 no registry), em vez de descartada calada — foi assim que o
+`issue_status` sumiu por meses de 37 dos 96 `complete` do repositório.
+
+`issue_status` (SFE-02) viaja `complete` → `RunResult.issue_status` → skill-flow-service (sem
+alteração) → bridge (`_flow_issue_status`, nos quatro publicadores de `participant_left`
+nativo) → `segments.issue_status`. Ausente fica ausente (`NULL`), nunca um default. No agente de
+fila, quando o bridge troca o outcome por `abandoned`, o motivo do fluxo cai junto.
 
 `outcome_from` (F1.2): o valor em `results[outcome_from]` vence o literal quando é string do
 domínio `SegmentOutcomeSchema`. Chave ausente, valor fora do domínio ou não-string caem no `outcome`

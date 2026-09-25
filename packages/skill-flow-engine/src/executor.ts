@@ -315,6 +315,11 @@ export interface StepResult {
   output_declared?:  boolean
   transition_reason: PipelineState["transitions"][number]["reason"]
   /**
+   * SFE-02: POR QUE o fluxo fechou — só o `complete` o produz, e só quando o autor o
+   * declarou. O engine o devolve no `RunResult` e o bridge o carimba no segmento.
+   */
+  issue_status?:     string
+  /**
    * NIV-19: `next_step_id` é um ramo que o AUTOR declarou para este desfecho (`on_timeout`,
    * `on_invalid`, `on_disconnect` do menu) — não o fallback para `on_failure`. Dentro de
    * `begin_transaction` o engine segue este ramo em vez de desviar para o `on_failure` do bloco.

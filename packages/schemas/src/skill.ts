@@ -303,7 +303,17 @@ export const CompleteStepSchema = z.object({
   // SegmentOutcomeSchema e usa-o; se ausente/inválido, cai no `outcome` literal acima
   // (fallback obrigatório). Ex.: wrap-up usa `outcome_from: wrapup_classificacao`.
   outcome_from: z.string().optional(),
+  // SFE-02 (2026-09-25): POR QUE o fluxo fechou, em texto do autor — viaja até o
+  // `issue_status` do segmento (bridge → participant_left). Ausente = não declarado,
+  // e fica ausente: nunca inventado. Vazio é recusado, como no `agent_done`.
+  // Antes de existir aqui ele era DESCARTADO em silêncio pelo parse (37 de 96
+  // `complete` do repositório o declaravam; 0 segmentos de IA o tinham).
+  issue_status: z.string().min(1).optional(),
 })
+  // `.strict()`: chave desconhecida é RECUSADA no parse — foi o objeto aberto que
+  // deixou o `issue_status` sumir calado, e ele faria o mesmo com o próximo campo.
+  // Medido antes: nenhuma outra chave em `complete` no repositório nem nos snapshots.
+  .strict()
 
 export const InvokeStepSchema = z.object({
   id:         z.string(),

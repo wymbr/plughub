@@ -46,5 +46,7 @@ export function executeComplete(
     next_step_id:      "__complete__",
     outcome,
     transition_reason: "on_success",
+    // SFE-02: o motivo declarado viaja; ausente fica ausente (nunca inventado).
+    ...(step.issue_status ? { issue_status: step.issue_status } : {}),
   }
 }

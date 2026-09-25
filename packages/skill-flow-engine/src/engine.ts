@@ -174,7 +174,8 @@ export interface SkillFlowEngineConfig {
 }
 
 export type RunResult =
-  | { outcome: string; pipeline_state: PipelineState }
+  /** `issue_status` (SFE-02): só no fechamento por `complete` que o declarou. */
+  | { outcome: string; issue_status?: string; pipeline_state: PipelineState }
   | { error: "PRECONDITION_FAILED"; active_job_id: string }
 
 // ─────────────────────────────────────────────
@@ -654,7 +655,11 @@ export class SkillFlowEngine {
         )
         const completedState = { ...state, status: "completed" as const }
         await this.stateManager.complete(tenantId, pipelineSessionId, state)
-        return { outcome: result.outcome ?? "resolved", pipeline_state: completedState }
+        return {
+          outcome: result.outcome ?? "resolved",
+          ...(result.issue_status ? { issue_status: result.issue_status } : {}),
+          pipeline_state: completedState,
+        }
       }
 
       // Aguardando task assíncrona (execution_mode: async)

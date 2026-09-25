@@ -126,3 +126,16 @@ describe("executeComplete — fallback barulhento (SFE-01)", () => {
     expect(warn).not.toHaveBeenCalled()
   })
 })
+
+// SFE-02: o step devolve o motivo declarado, e só ele.
+describe("executeComplete — SFE-02: issue_status", () => {
+  it("devolve o issue_status declarado", () => {
+    const step: CompleteStep = { id: "fin", type: "complete", outcome: "failed", issue_status: "Escalação falhou" }
+    expect(executeComplete(step, makeCtx({})).issue_status).toBe("Escalação falhou")
+  })
+
+  it("TESTEMUNHA: sem declaração, o campo fica ausente", () => {
+    const r = executeComplete({ id: "fin", type: "complete", outcome: "resolved" }, makeCtx({}))
+    expect("issue_status" in r).toBe(false)
+  })
+})
