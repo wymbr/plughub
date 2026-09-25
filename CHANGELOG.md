@@ -1,5 +1,29 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (15) — SFE-06: os três pools que faltavam recebem o `issue_status`, e as duas premissas da ficha caem
+
+**As duas razões pelas quais os três ficaram de fora estavam erradas — e as duas eram minhas.**
+
+- **"`auth_form_ia` e `auth_ia` rodam skills sem YAML no disco."** Falso: os YAMLs são
+  `agente_auth_form_v1.yaml` e `agente_auth_ia_v1.yaml`, cujo nome de arquivo não é o
+  `skill_id` (`skill_auth_form_v1`/`skill_auth_ia_v1`). A busca foi por nome de arquivo; a
+  busca pelo id achou os dois, com os três `complete` e dois `issue_status` cada.
+- **"`demo_llm_ia` carrega uma mudança alheia nunca promovida."** Falso: o `candidatos` entrou
+  na ORQ-13 em 22/09 às 22:15, e o snapshot vivo é de 23/09 às 14:18 — **depois**. A diferença que
+  vi era o registry descartando `description` e `items` do `output_schema` no parse.
+
+Antes de promover, medido de novo: nos três, a diferença entre o snapshot e o YAML é só default de
+parse e campo que o schema descarta — promover muda só o `issue_status`. Promovidos um por vez
+com `deploy_skill_to_slot.sh`, âncora conferida, config preservada. **Os 16 pools da SFE-04
+rodam o campo.** O mecanismo já foi medido ao vivo na (14); aqui a prova é o snapshot.
+
+**O achado que as premissas escondiam vira ficha (`SFE-07`).** Censo dos 42 flows pelo
+`SkillFlowSchema` compilado: `reason.output_schema.*.description`/`items` descartados em 4 steps
+(os três avaliadores e o classificador da navegação por LLM), mais `minItems`, `nullable` e
+`properties` nos revisores, e `menu.context_tags` em 2 steps do `agente_auth_form_v1` (a tag
+`caller.email` nunca é escrita). É a família da SFE-02 fora do `complete` — e é exposição, não
+dano medido.
+
 ## 2026-09-25 (14) — PID-23 e SFE-04 fecham com as verificações ao vivo que faltavam
 
 Um contato só, pelo chat da porta `limite_ia`, com um CPF **não importado** (`ab1eac69`), fechou

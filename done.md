@@ -560,6 +560,7 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | SFE-02 | O `issue_status` declarado no `complete` passa a sobreviver ao parse e viajar até o segmento de IA (schema estrito, engine, bridge nos quatro publicadores) | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (5) |
 | SFE-03 | A sessão retomada executa a versão em que NASCEU (pin no engine) e o segmento carimba a versão executada | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (12) |
 | SFE-04 | O `issue_status` passa a viajar no que roda: rebuild + 13 de 16 pools re-promovidos, medido ao vivo (0 → 1) com o controle | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (14) |
+| SFE-06 | Os três pools que faltavam da SFE-04 re-promovidos com o `issue_status` — as duas premissas da ficha estavam erradas | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (15) |
 
 ## `docs/arcos/audit-lgpd.md` — trilha e direitos do titular
 
