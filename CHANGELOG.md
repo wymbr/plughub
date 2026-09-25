@@ -1,5 +1,45 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (13) — Rodada de subida: o trabalho do dia passa a RODAR no demo, 13 pools re-promovidos e a porta nova no ar
+
+**Nada do que foi entregue hoje estava rodando**: todas as imagens vivas eram anteriores aos commits
+(a do `routing-engine` de 15/09). Árvore limpa conferida antes do build — ele leva a ÁRVORE, e
+trabalho não commitado de outra sessão entraria junto.
+
+**Fase 1 — código.** `build` de 10 serviços (`agent-registry`, `skill-flow-service`,
+`orchestrator-bridge`, `mcp-server-plughub`, `routing-engine`, `channel-gateway`,
+`quality-ingest`, `config-api`, `analytics-api`, `platform-ui`) + `infra/scripts/up.sh` (52
+containers, one-shots com exit 0). Provado DENTRO dos containers, com âncora de cada entrega:
+SFE-02 (`.strict()` do `complete` no schema de três serviços), SFE-03 (`isResumption`,
+`pinned_version`, `_flow_deploy_version`), WAI-01, AGH-03, MSK-04, CTX-12 (quatro motores) e
+AUD-05. O build levou 58 s — muito cache —, e por isso a âncora, não o exit code, é o veredicto.
+⚠️ A reconstrução levou também o que outras sessões commitaram desde a imagem anterior.
+
+**Fase 2 — conteúdo (SFE-04).** Antes de promover, medi a diferença entre cada snapshot vivo e o
+YAML: quase toda era default de parse (`channel`, `urgency`, `business_hours`…). As reais eram
+três — o par `outbound_survey_dispatch`/`outbound_survey_worker` (o dispatch passa a ESCREVER
+`core.survey.grain` e o worker a LER: é a CNS-22, com produtor medido) e o `demo_llm_ia`, que
+carrega uma mudança alheia nunca promovida e ficou de fora. Promovidos **um por vez** com
+`deploy_skill_to_slot.sh`, que confere o snapshot e preserva a config: 11 pools. O `next`
+pendente do `limite_processo` (de 14/09) foi substituído depois de conferido **idêntico** ao
+`current`. O gate de alias reprovou no ramo C como devia, e a linha do `outbound_survey_worker`
+saiu da dívida.
+
+**PID-23, pelo caminho que não pede credencial minha.** O job `dialog-seed` do compose, com
+`DIALOG_SEED_RECONCILE=true` sobre um diretório com SÓ os dois roteiros — rodar o job como está
+reescreveria os 16 formulários com o arquivo, apagando edição de tela. Antes, conferido que o vivo
+diferia do arquivo apenas no `text` dos três nós da PID-19. Depois, `skill_intake_runner_v1` em lote
+nos dois pools (um snapshot, âncora conferida) e `probe_intake_runner.sh` VERDE com o ramo B ao vivo.
+
+**Medição ao vivo, no contato do probe:** SFE-05 — 3 pins nascidos com o `set_at` do slot e os
+segmentos carimbados com a mesma identidade; SFE-04 — o CONTROLE (`finalizar` sem o campo ⇒ `NULL`).
+
+**O que NÃO foi feito, e por quê:** o `PUT` do catálogo da CTX-13 exige `X-Admin-Token` ou Bearer
+de admin, e o claim de pull da WAI-03 exige agente logado — não uso credencial. `demo_llm_ia`
+carrega mudança alheia não promovida; `auth_form_ia` e `auth_ia` rodam skills sem YAML no disco, e
+o `issue_status` que o registry apagou não tem fonte. Faltam ainda a metade positiva da SFE-04, a
+retomada da SFE-05 e o chat com cliente não importado da PID-23. O progresso está em cada linha.
+
 ## 2026-09-25 (12) — SFE-03: a sessão retomada executa a versão em que NASCEU
 
 **O defeito era real e medido.** O bridge resolve o fluxo lendo o slot `current` do pool a cada

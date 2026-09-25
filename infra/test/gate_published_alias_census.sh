@@ -106,7 +106,8 @@ DIVIDA = {
     # pelo routing, `core.survey.grain` pelo gateway e pelo dispatch) — re-promover os
     # quita. O terceiro NAO: `core.sentiment.category` nao tem produtor por decisao, e
     # a definicao viva do skill le o mesmo alias. Quitar e reescrever o skill (CNS-27).
-    ("pool", "outbound_survey_worker"): ["session.survey_grain"],
+    # `outbound_survey_worker` QUITADO em 2026-09-25 (rodada de subida da SFE-04):
+    # re-promovido junto com o dispatch, que passou a ESCREVER `core.survey.grain`.
     ("pool", "survey_multi_ia"):        ["session.pool.id"],
     ("pool", "copilot_sac"):            ["session.sentimento.categoria"],  # CNS-27
 }
