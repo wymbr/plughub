@@ -32,6 +32,7 @@ espécie que se cross-checa barato entre duas linguagens.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable, Mapping, Pattern
 
 __all__ = [
@@ -179,3 +180,56 @@ def detected_display(
         if padrao.search(d):
             return "***"
     return d
+
+
+# ── A REDE de texto livre, em Python (MSK-06, 2026-09-25) ───────────────────────
+#
+# Espelho das regras DETECTÁVEIS de `DEFAULT_MASKING_RULES` (@plughub/schemas/audit.ts,
+# derivadas do catálogo semeado): categoria + padrão + validador. A ordem é contrato — a
+# rede aplica em sequência, e o CPF cru com DV inválido tem de chegar à regra de telefone.
+#
+# Mora AQUI para ser a casa Python única: o bridge (fala do cliente) e o channel-gateway
+# (edições de aprovação) a consomem. O quality-ingest não depende deste pacote e mantém
+# cópia declarada. Quem acusa divergência com o TS é `probe_detect_validator_parity.sh`,
+# que roda `mask_free_text` sobre a mesma fixture da rede do engine.
+FREE_TEXT_RULES: tuple[tuple[str, Pattern[str], str | None], ...] = (
+    ("cpf",         re.compile(r"\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b"), "cpf_dv"),
+    ("credit_card", re.compile(r"\b(?:\d{4}[\s-]?){3}\d{4}\b"), None),
+    # `(?<!\w)` e não `\b` — com `\b` o `\(?` é ramo morto e o parêntese ficava órfão.
+    ("phone",       re.compile(r"(?<!\w)(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b"), None),
+    ("email_addr",  re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b"), None),
+)
+
+
+def mask_free_text(
+    text: str,
+    catalogo: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, list[str]]:
+    """Mascara PII reconhecível por FORMA em `text`. Gêmeo de `maskFreeText` (TS), só folha.
+
+    Devolve `(texto_mascarado, categorias_detectadas)`. A exibição de cada trecho é
+    `detected_display` sobre `catalogo` (`masking.types` indexado por id; `{}` esconde tudo).
+    Idempotente: a exibição nunca casa a rede. Texto sem dado sai idêntico, com
+    `categorias` vazia — é ela, nunca a comparação dos textos, que diz se houve máscara.
+
+    ⚠️ MITIGAÇÃO, nunca controle (§D12 do ADR de plateia): pega 4 tipos, só por forma.
+    """
+    if not text:
+        return text, []
+    rede = [p for _, p, _ in FREE_TEXT_RULES]
+    detectadas: list[str] = []
+    s = text
+    for categoria, padrao, validador in FREE_TEXT_RULES:
+        casou = False
+
+        def _troca(m: "re.Match[str]", c: str = categoria, v: str | None = validador) -> str:
+            nonlocal casou
+            if not passes_detect_validator(v, m.group(0)):
+                return m.group(0)
+            casou = True
+            return detected_display(m.group(0), c, catalogo, rede)
+
+        s = padrao.sub(_troca, s)
+        if casou and categoria not in detectadas:
+            detectadas.append(categoria)
+    return (s if detectadas else text), detectadas

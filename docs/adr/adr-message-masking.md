@@ -144,6 +144,32 @@ Texto de agente sai por dois caminhos, e cada um tem a sua casa, **uma só**:
   o Python esconde (`{}` → `***`), e os dois LOGAM. Gate: `probe_masking_display_parity.sh`,
   que dá às portas o catálogo VIVO.
 
+## Mensagem do CLIENTE — a rede nos destinos de pessoa e de armazenamento *(MSK-06, 2026-09-25)*
+
+O texto que o cliente digita **não passa pelo `message_send`**: no webchat ele chega ao bridge
+como inbound e ao histórico pelo channel-gateway. A MSK-04 supunha o contrário, e o contato
+medido gravou telefone e e-mail em claro no stream (exposição no ClickHouse: 260 CPF, 445
+telefone, 55 e-mail em mensagens `customer`).
+
+| destino | escritor | o que recebe |
+|---|---|---|
+| Console ao vivo (`agent:events`) | bridge | exibição do `by_role` |
+| stream canônico | bridge (`customer_message_stream_fields`) | exibição + `original_content` / `masked` / `masked_categories` quando houve detecção — o layout do `message_send` |
+| `conversations.events` → ClickHouse | bridge | exibição (sem coluna de original, como no `message_send`) |
+| histórico do Console (`session:{sid}:messages`) | channel-gateway (`SessionRegistry.append_message`, escritor único) | exibição — sem original |
+| log do bridge | bridge | exibição |
+| **o FLUXO** (`menu:result`, `receive`) | bridge | **o valor cru** — o fluxo consome o que ele mesmo pediu |
+
+- **Sem token**, por decisão do dono: o fluxo já tem o valor, então ninguém precisa resolver
+  token, e um gêmeo Python do `TokenVault` seria uma segunda casa do cofre sem consumidor.
+- A rede Python é **uma** (`plughub_contextstore.masking.mask_free_text`), consumida pelo bridge
+  e pelo channel-gateway; a cópia do gateway saiu. Paridade com o TS:
+  `probe_detect_validator_parity.sh` (as duas redes Python contra a do engine).
+- Catálogo indisponível: `{}` → todo trecho detectado sai `***`, e o loader loga.
+- O cliente não vê a própria mensagem mascarada: o `stream_subscriber` não ecoa `customer`.
+- ⚠️ Mitigação por FORMA (4 tipos). `55 11 98765-4321` sai `55 ***4321` — o padrão de telefone
+  só consome o `55` com `+`; o que sobra não é o número.
+
 ## Redis keys
 
 | Key | Conteúdo | TTL |

@@ -23,7 +23,7 @@ def redis(mock_redis):
 
 @pytest.fixture
 def registry(redis):
-    return SessionRegistry(redis=redis, instance_id=INSTANCE_ID, ttl=TTL)
+    return SessionRegistry(redis=redis, instance_id=INSTANCE_ID, ttl=TTL, tenant_id="tenant_test")
 
 
 @pytest.fixture
@@ -142,3 +142,40 @@ class TestPubSubListener:
         message = {"type": "subscribe", "channel": b"chat:deliver:*", "data": 1}
         # No error should be raised; nothing to assert besides no exceptions
         assert message["type"] != "pmessage"
+
+
+# ─── MSK-06 — o histórico do Console passa pela rede de texto livre ─────────────────
+# Esta lista (`session:{sid}:messages`) é o que a aba de histórico do Console mostra, e
+# recebia o texto do cliente em claro. Pares: mascara ↔ texto limpo intacto; catálogo do
+# tenant ↔ catálogo indisponível esconde.
+
+def _cat(**por_id):
+    return {i: {"id": i, "mascara": {"by_role": {"operator": m}}} for i, m in por_id.items()}
+
+
+class TestHistoricoMascarado:
+    async def _gravado(self, registry, redis, texto, catalogo, monkeypatch):
+        pedidos = []
+
+        async def _catalogo(tenant_id, *a, **kw):
+            pedidos.append(tenant_id)
+            return catalogo
+        monkeypatch.setattr("plughub_channel_gateway.session_registry.get_masking_catalog", _catalogo)
+        redis.rpush = AsyncMock()
+        redis.expire = AsyncMock()
+        await registry.append_message("s-1", "m-1", "customer", texto, "2026-09-25T00:00:00Z")
+        return json.loads(redis.rpush.call_args[0][1])["text"], pedidos
+
+    async def test_fala_do_cliente_sai_com_a_exibicao_do_catalogo(self, registry, redis, monkeypatch):
+        texto, pedidos = await self._gravado(
+            registry, redis, "meu fone e (11) 98765-4321", _cat(phone="last_4"), monkeypatch)
+        assert texto == "meu fone e ***4321"
+        assert pedidos == ["tenant_test"]
+
+    async def test_controle_texto_limpo_intacto(self, registry, redis, monkeypatch):
+        texto, _ = await self._gravado(registry, redis, "quero trocar de plano", _cat(), monkeypatch)
+        assert texto == "quero trocar de plano"
+
+    async def test_catalogo_indisponivel_esconde(self, registry, redis, monkeypatch):
+        texto, _ = await self._gravado(registry, redis, "email joao@exemplo.com", {}, monkeypatch)
+        assert texto == "email ***"

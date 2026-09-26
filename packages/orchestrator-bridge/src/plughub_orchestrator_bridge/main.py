@@ -50,7 +50,8 @@ import json
 import logging
 
 from plughub_contextstore.writer import write_context_tags
-from plughub_contextstore.loader import set_context_map_fetcher
+from plughub_contextstore.loader import get_masking_catalog, set_context_map_fetcher
+from plughub_contextstore.masking import mask_free_text
 import os
 import uuid
 from datetime import datetime, timezone
@@ -515,6 +516,8 @@ def customer_message_stream_fields(
     content_type: str = "text",
     speech: dict | None = None,
     author_role: str = "customer",
+    original_text: str | None = None,
+    masked_categories: list[str] | None = None,
 ) -> dict[str, str]:
     """Entrada de stream da mensagem do CLIENTE no layout CANÔNICO (RPL-01).
 
@@ -530,11 +533,23 @@ def customer_message_stream_fields(
     payload `{}`. Medido em 2026-09-16: 1 276 mensagens assim, e o avaliador nunca via o cliente.
     O SSE do supervisor lê os dois formatos, então nada o perde.
 
-    `text` já chega REDIGIDO (`redact_customer_reply`); esta função não decide mascaramento.
+    `text` já chega REDIGIDO (`redact_customer_reply`) e passado pela rede
+    (`rede_texto_cliente`); esta função não decide mascaramento. Quando a rede mascarou,
+    `original_text` e `masked_categories` vão ao payload no layout do `message_send`
+    (`original_content` · `masked` · `masked_categories`), e o original só é servido a
+    `authorized_roles` — MSK-06.
     """
     content = {"type": content_type, "text": text}
     if speech:
         content["speech"] = speech
+    payload: dict = {"message_id": event_id, "content": content, "text": text}
+    if masked_categories and original_text is not None:
+        original = {"type": content_type, "text": original_text}
+        if speech:
+            original["speech"] = speech
+        payload["original_content"] = original
+        payload["masked"] = True
+        payload["masked_categories"] = list(masked_categories)
     return {
         "event_id":    event_id,
         "type":        "message",
@@ -545,10 +560,39 @@ def customer_message_stream_fields(
                                    "role": author_role}),
         "visibility":  json.dumps(visibility),
         "segment_id":  "",
-        "payload":     json.dumps({"message_id": event_id,
-                                   "content": content,
-                                   "text": text}, ensure_ascii=False),
+        "payload":     json.dumps(payload, ensure_ascii=False),
     }
+
+
+def rede_texto_cliente(
+    texto: str,
+    catalogo: dict,
+) -> tuple[str, str | None, list[str]]:
+    """A rede de texto livre sobre a fala do CLIENTE — MSK-06 (2026-09-25).
+
+    Devolve `(exibido, original, categorias)`: `original` é `None` quando nada foi
+    detectado, e aí `exibido` é o próprio `texto`. A exibição é o `by_role` do
+    `operator` no catálogo do tenant (`detected_display`); catálogo indisponível (`{}`)
+    esconde todo trecho detectado.
+
+    Vale para os destinos de PESSOA e de ARMAZENAMENTO — Console, stream, ClickHouse, log.
+    **Nunca** para o do FLUXO (`menu:result`, `receive`): o fluxo consome o valor que ele
+    mesmo pediu, e mascará-lo ali quebraria o atendimento, não o protegeria. Mitigação por
+    FORMA (4 tipos), nunca controle: o que garante é declarar o campo num DialogForm.
+    """
+    exibido, categorias = mask_free_text(texto, catalogo)
+    return (exibido, texto, categorias) if categorias else (texto, None, [])
+
+
+async def catalogo_da_rede(redis_client, session_id: str) -> dict:
+    """`masking.types` do tenant da sessão, para a rede. Nunca lança: falha vira `{}`, que
+    ESCONDE — e o loader já loga o que deixou de valer; aqui só a falha de resolver o tenant."""
+    try:
+        return await get_masking_catalog(await resolve_session_tenant(redis_client, session_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Rede do texto do cliente SEM catálogo (session=%s: %s) — todo dado "
+                       "detectado sai '***', a exibição de /config/masking não vale", session_id, exc)
+        return {}
 
 
 def speech_meta(msg: dict) -> tuple[str, dict | None]:
@@ -10103,6 +10147,11 @@ async def process_inbound(
             except Exception:
                 pass
 
+        # MSK-06 — a rede de texto livre sobre a fala do cliente, nos destinos de pessoa e de
+        # armazenamento (nunca no do fluxo). Catálogo lido UMA vez por mensagem (loader com
+        # cache de 60 s por tenant).
+        _catalogo_rede = await catalogo_da_rede(redis_client, session_id)
+
         if is_human:
             # ── Human agent: forward to Agent Assist UI via Redis pub/sub ────
             # Check if the active menu step is masked — if so, suppress the raw
@@ -10120,6 +10169,11 @@ async def process_inbound(
                 suppressed_text = _MASKED_SUPPRESSED_HUMAN,
                 interaction     = menu_interaction,
             )
+            display_text, _display_original, _display_cats = rede_texto_cliente(
+                display_text, _catalogo_rede)
+            if _display_cats:
+                logger.info("Rede mascarou a fala do cliente (Console/stream): session=%s "
+                            "categorias=%s", session_id, ",".join(_display_cats))
             if any_masked:
                 logger.info(
                     "Masked menu reply suppressed for human agent: session=%s", session_id,
@@ -10169,6 +10223,8 @@ async def process_inbound(
                             visibility = visibility,
                             content_type = spoken_type,
                             speech       = speech,
+                            original_text     = _display_original,
+                            masked_categories = _display_cats,
                         ),
                     )
                     await redis_client.expire(stream_key_human, _stl())  # 4h TTL
@@ -10200,13 +10256,15 @@ async def process_inbound(
                 # era só `any_masked` (step-level) e o masking daquele skill é
                 # por CAMPO. `decorate_non_text=False` preserva o formato do
                 # conteúdo analítico quando nada está mascarado.
-                "content":      redact_customer_reply(
+                # MSK-06: e a rede de texto livre — o ClickHouse não tem coluna de original,
+                # como no `message_send`; o original durável é o do stream (persister).
+                "content":      rede_texto_cliente(redact_customer_reply(
                     reply_text,
                     msg_type          = msg_type,
                     any_masked        = any_masked,
                     masked_fields     = all_masked_fields,
                     decorate_non_text = False,
-                )[0],
+                )[0], _catalogo_rede)[0],
                 "visibility":   "all",
                 "timestamp":    msg.get("timestamp", datetime.now(timezone.utc).isoformat()),
             }
@@ -10296,6 +10354,7 @@ async def process_inbound(
                         any_masked    = any_masked,
                         masked_fields = all_masked_fields,
                     )
+                    _log_text = rede_texto_cliente(_log_text, _catalogo_rede)[0]  # MSK-06: log é destino
                     logger.info(
                         "Pushed menu reply to AI agent: session=%s agent=%s key=%s text=%r",
                         session_id, agent_key, result_key, _log_text[:80],
@@ -10316,6 +10375,11 @@ async def process_inbound(
                     masked_fields = all_masked_fields,
                     interaction   = menu_interaction,
                 )
+                _ai_stream_display, _ai_original, _ai_cats = rede_texto_cliente(
+                    _ai_stream_display, _catalogo_rede)
+                if _ai_cats:
+                    logger.info("Rede mascarou a fala do cliente (stream IA): session=%s "
+                                "categorias=%s", session_id, ",".join(_ai_cats))
 
                 try:
                     await redis_client.xadd(
@@ -10328,6 +10392,8 @@ async def process_inbound(
                             visibility = _ai_stream_vis,
                             content_type = spoken_type,
                             speech       = speech,
+                            original_text     = _ai_original,
+                            masked_categories = _ai_cats,
                         ),
                     )
                     await redis_client.expire(stream_key, _stl())

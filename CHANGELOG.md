@@ -1,5 +1,57 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (20) — MSK-06: o que o cliente digita aparece mascarado para quem lê e para o que guarda, e cru só para o fluxo
+
+**O defeito (medido na MSK-05).** Um contato `demo_ia` pelo webchat gravou o telefone e o e-mail
+que o cliente digitou EM CLARO no stream canônico. O texto do cliente não passa pelo
+`message_send` — chega ao bridge como inbound —, e o bridge só redigia campo DECLARADO
+mascarado (`redact_customer_reply`). A MSK-04 supunha o contrário. Exposição no ClickHouse:
+260 mensagens `customer` com padrão de CPF, 445 de telefone, 55 de e-mail.
+
+**Decisão do dono:** máscara pelo `by_role` nos destinos, o original à parte no stream
+(`original_content`, servido só a `authorized_roles` — o layout do `message_send`), e **sem
+token**: o fluxo já tem o valor, então ninguém precisa resolvê-lo, e um gêmeo Python do
+`TokenVault` seria uma segunda casa do cofre sem consumidor.
+
+**O que mudou.**
+- `plughub_contextstore.masking`: `FREE_TEXT_RULES` (as quatro regras detectáveis do catálogo
+  semeado, na ordem que é contrato) e `mask_free_text(texto, catálogo)` — a rede Python ÚNICA.
+  O channel-gateway, que tinha cópia própria das regras (`_PII_RULES`), passou a usá-la.
+- Bridge: `rede_texto_cliente` + `catalogo_da_rede` (catálogo do tenant da sessão, uma leitura
+  por mensagem, cache de 60 s do loader). Aplicada nos destinos de PESSOA e de ARMAZENAMENTO —
+  Console ao vivo (`agent:events`), stream (os dois ramos, humano e IA), `conversations.events`
+  e o log —, e **nunca** no do fluxo (`menu:result`, `receive`).
+  `customer_message_stream_fields` leva `original_content` / `masked` / `masked_categories`
+  quando houve detecção; sem detecção, o layout é o de antes.
+- **O quinto destino, achado no meio do trabalho:** a aba de HISTÓRICO do Console lê
+  `session:{sid}:messages`, escrita pelo channel-gateway com o texto cru. A rede entrou no
+  escritor único (`SessionRegistry.append_message`, que agora recebe o `tenant_id`), e por isso
+  vale também para o texto do atendente nessa lista — metade pequena da MSK-07.
+- `probe_detect_validator_parity.sh`: o runner Python roda as DUAS redes Python (py-contextstore
+  e a cópia do quality-ingest) e marca `DIVERGE` se discordarem, contra a do engine.
+
+**Medido ao vivo** (bridge e channel-gateway rebuildados, âncoras nos containers; sessão
+`61b1f31f`, portabilidade pelo webchat, telefone e e-mail digitados):
+
+| destino | o que ficou |
+|---|---|
+| stream `content` | `***4321` · `…"contact_identifier":"j***@exemplo.com"…` |
+| stream `original_content` | o telefone e o e-mail inteiros, `masked: true`, `["phone"]` / `["email_addr"]` |
+| histórico do Console | `***4321` · `j***@exemplo.com` |
+| ClickHouse | `***4321` · `j***@exemplo.com` |
+| log do bridge e do gateway | 0 ocorrências do telefone e do e-mail |
+| o fluxo | aceitou o número e registrou o pedido — recebeu o valor |
+
+Gates: `probe_masking_display_parity` OK · `probe_detect_validator_parity` OK (18 casos).
+Testes: bridge 239 (9 novos) · channel-gateway 1544 · py-contextstore 87. Mutação: 10 de 11
+mortas; a sobrevivente era equivalente (`s + ""` devolve o mesmo objeto no CPython) e mostrou uma
+promessa sem consumidor na docstring (*"o MESMO objeto"*), que saiu.
+
+⚠️ **Limite registrado:** `55 11 98765-4321` sai `55 ***4321` — o padrão de telefone (o mesmo
+do TS) só consome o `55` com `+`. O que sobra não é o número. Mitigação por FORMA, 4 tipos.
+
+Docs: `adr-message-masking.md` § Mensagem do CLIENTE (tabela dos seis destinos).
+
 ## 2026-09-25 (19) — MSK-05: o dado detectado em texto livre aparece como /config/masking manda para o papel
 
 **Decisão do dono** (ao abrir a ficha): *"a visualização deve seguir as regras definidas em

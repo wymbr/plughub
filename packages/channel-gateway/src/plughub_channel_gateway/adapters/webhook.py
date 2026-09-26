@@ -48,8 +48,7 @@ from plughub_contextstore import resolve_context_tag
 from plughub_contextstore.writer import write_context_tags
 from plughub_contextstore.loader import get_context_map, get_masking_catalog
 from plughub_contextstore.masking import (
-    apply_masking_type_to_value, detected_display, passes_detect_validator,
-    resolve_mask_for_audience,
+    apply_masking_type_to_value, mask_free_text, resolve_mask_for_audience,
 )
 import os
 import re
@@ -136,60 +135,11 @@ async def store_key_for_context_entry(tenant_id: str, key: str) -> str:
 # profundidade; o mecanismo primário é o `masked` field-level do DialogForm, que
 # nem chega ao servidor). Nunca gravar PII crua na stream/log.
 #
-# ⚠️ ALINHADO em 2026-08-26 (fase V2 do arco ALLOWLIST). Esta tabela dizia em prosa
-# *"mesmos alvos das DEFAULT_MASKING_RULES"* e JÁ HAVIA DIVERGIDO — era o 6º de sete
-# inventários de categoria do repositório, e o único com produtor vivo divergente:
-#   · cartão casava `\b(?:\d[ -]?){13,16}\b` (13 a 16 dígitos, qualquer separador),
-#     enquanto o canônico casa `(?:\d{4}[\s-]?){3}\d{4}` — grupos de 4;
-#   · CPF devolvia `***.***.***-00`, o canônico devolve `*********00`;
-#   · cartão devolvia `**** 3456`, o canônico devolve `************3456`;
-#   · telefone devolvia `(***4321`, o canônico devolve `(*******4321`;
-#   · nenhuma linha carregava a CATEGORIA, então nada aqui podia ser auditado nem
-#     comparado com o resto.
-# A divergência não era teórica e nem era de duas portas: MEDIDAS as três
-# (`infra/test/q_masking_display_parity.sh`, 5 vetores), NENHUMA das cinco linhas era
-# unânime. A única coincidência — e-mail entre TS e esta porta — é acidente
-# aritmético: aqui era `"***"` fixo, lá é `ceil(len(prefixo)/4)`, e o prefixo do vetor
-# tinha 10 caracteres.
-#
-# Estrutura agora espelha `quality-ingest/masking.py` (que espelha
-# `DEFAULT_MASKING_RULES` em @plughub/schemas/audit.ts): tabela de dados + UMA função
-# de aplicação, em vez de lambdas por linha. Regexes, replacements e semântica de
-# preserve são os canônicos, e o gate `probe_masking_rule_parity.sh` compara as três
-# portas sobre os MESMOS vetores.
-#
-# Dívida declarada, não escondida: continua sendo CÓPIA. O fim dela é o catálogo
-# (`masking.types` no config-api) ser lido em runtime — o que exige recusar alto se a
-# config não vier, porque degradar em masking é vazar PII. Fase própria.
-_PII_RULES: list[dict[str, Any]] = [
-    {
-        "category":  "cpf",
-        # CTX-12: também os 11 dígitos CRUS, que só são CPF com DV válido (validator).
-        "pattern":   re.compile(r"\b(?:\d{3}\.\d{3}\.\d{3}-\d{2}|\d{11})\b"),
-        "validator": "cpf_dv",
-    },
-    {
-        "category":  "credit_card",
-        "pattern":   re.compile(r"\b(?:\d{4}[\s-]?){3}\d{4}\b"),
-    },
-    {
-        "category":  "phone",
-        # `(?<!\w)` e não `\b` — ver audit.ts: com `\b` o `\(?` é ramo morto e o
-        # parêntese de abertura ficava órfão (`(***4321`).
-        "pattern":   re.compile(r"(?<!\w)(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b"),
-    },
-    {
-        "category":  "email_addr",
-        "pattern":   re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b"),
-    },
-]
-
-# ⚠️ MSK-05 (2026-09-25): aqui morava `_mask_match`, cópia Python do `buildDisplay` do
-# mcp-server (`preserve_last_digits`/`preserve_pattern`), e cada regra carregava
-# `replacement` e `preserve_*`. Saíram os três: a exibição passou a ser a máscara do
-# `operator` no catálogo (`detected_display`, gêmeo de `detectedDisplay`), por decisão
-# do dono — "a visualização segue /config/masking, de acordo com o papel". O que resta
-# desta tabela é DETECÇÃO (padrão + validador), e é ela que continua sendo cópia.
+# Esta casa já teve cópia própria das regras (alinhada na V2 do ALLOWLIST, 2026-08-26,
+# depois de medir que nenhuma das portas concordava) e da exibição (`buildDisplay`).
+# A MSK-05 tirou a exibição e a MSK-06 as regras (2026-09-25): a rede Python é
+# `plughub_contextstore.masking.mask_free_text`, casa única também do bridge, com a
+# exibição do `by_role` do catálogo vivo. Histórico: `CHANGELOG.md` 2026-08-26 e 2026-09-25.
 
 
 # ── Fase F (D7) — resume terminal-uma-vez ─────────────────────────────────────
@@ -358,24 +308,12 @@ class ResumeAlreadyTerminalError(RuntimeError):
 def _mask_pii(value: Any, catalogo: Mapping[str, Mapping[str, Any]]) -> str | None:
     """Mascara PII formatada num valor (net-pass). None permanece None.
 
-    Ordem das regras é contrato — a mesma de `DEFAULT_MASKING_RULES`. A exibição é
-    `detected_display` sobre `catalogo` (`masking.types` indexado por id) — obrigatório,
-    e não por esquecimento: um default aqui seria política velha com cara de config.
+    É `mask_free_text` (py-contextstore) — detecção, validador e exibição do `by_role` numa
+    casa só. `catalogo` é obrigatório: um default aqui seria política velha com cara de config.
     """
     if value is None:
         return None
-    s = str(value)
-    rede = [r["pattern"] for r in _PII_RULES]
-    for rule in _PII_RULES:
-        # CTX-12: casamento que não passa no validador NÃO é deste tipo — fica intacto
-        # para a próxima regra (CPF cru com DV inválido segue para o telefone).
-        s = rule["pattern"].sub(
-            lambda m, r=rule: (detected_display(m.group(0), r["category"], catalogo, rede)
-                               if passes_detect_validator(r.get("validator"), m.group(0))
-                               else m.group(0)),
-            s,
-        )
-    return s
+    return mask_free_text(str(value), catalogo)[0]
 
 
 # Trigger types understood by the webhook adapter

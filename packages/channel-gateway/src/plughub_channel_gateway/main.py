@@ -210,6 +210,7 @@ async def lifespan(app: FastAPI):
         redis       = _redis,
         instance_id = instance_id,
         ttl         = settings.session_ttl_seconds,
+        tenant_id   = settings.tenant_id,
     )
     _context = ContextReader(redis=_redis)
 

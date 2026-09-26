@@ -18,6 +18,8 @@ from typing import Callable, Awaitable
 
 import redis.asyncio as aioredis
 from fastapi import WebSocket
+from plughub_contextstore.loader import get_masking_catalog
+from plughub_contextstore.masking import mask_free_text
 
 logger = logging.getLogger("plughub.channel-gateway.sessions")
 
@@ -30,8 +32,10 @@ class SessionRegistry:
     - Redis pub/sub: channel `chat:deliver:{contact_id}` for cross-instance delivery
     """
 
-    def __init__(self, redis: aioredis.Redis, instance_id: str, ttl: int) -> None:
+    def __init__(self, redis: aioredis.Redis, instance_id: str, ttl: int, *, tenant_id: str) -> None:
         self._redis = redis
+        # MSK-06: o tenant cujo `masking.types` dá a exibição da rede no histórico.
+        self._tenant_id = tenant_id
         self._instance_id = instance_id
         self._ttl = ttl
         self._connections: dict[str, WebSocket] = {}
@@ -134,7 +138,15 @@ class SessionRegistry:
           - OutboundConsumer._dispatch message.text branch      → outbound (agent_ai / agent_human)
 
         Read by: mcp-server GET /conversation_history/:sessionId (LRANGE 0 -1)
+
+        ⚠️ MSK-06 (2026-09-25): esta lista é a aba de HISTÓRICO do Console — destino de
+        PESSOA — e recebia o texto do cliente em claro. Todo texto passa pela rede de texto
+        livre (`mask_free_text`, exibição do `by_role` do catálogo do tenant) no ÚNICO
+        escritor, então vale para os dois autores. Catálogo indisponível: `{}`, que esconde
+        (o loader loga). Não há original aqui: o original durável mora no stream.
         """
+        catalogo = await get_masking_catalog(self._tenant_id)
+        text, _categorias = mask_free_text(text, catalogo)
         entry = json.dumps({
             "id":        message_id,
             "author":    author,

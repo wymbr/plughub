@@ -52,3 +52,34 @@ def test_exibicao_que_casaria_a_rede_e_recusada():
 def test_catalogo_indisponivel_esconde():
     # `{}` é o que `get_masking_catalog` devolve quando não carrega
     assert detected_display("529.982.247-25", "cpf", {}, REDE) == "***"
+
+
+# ─── MSK-06 — a rede Python inteira (`mask_free_text`), casa do bridge e do gateway ────
+from plughub_contextstore.masking import mask_free_text  # noqa: E402
+
+
+def test_rede_mascara_as_quatro_categorias_com_a_exibicao_do_catalogo():
+    texto = "cpf 529.982.247-25 fone (11) 98765-4321 cartao 4539 1488 0343 6467 email joao@exemplo.com"
+    saida, cats = mask_free_text(texto, SEMEADO)
+    assert saida == "cpf ***25 fone ***4321 cartao ***6467 email j***@exemplo.com"
+    assert cats == ["cpf", "credit_card", "phone", "email_addr"]
+
+
+def test_rede_devolve_o_texto_intacto_sem_deteccao():
+    texto = "quero trocar de plano"
+    saida, cats = mask_free_text(texto, SEMEADO)
+    assert saida == texto and cats == []
+
+
+def test_rede_separa_cpf_cru_de_celular_pelo_dv():
+    assert mask_free_text("cpf 52998224725", SEMEADO) == ("cpf ***25", ["cpf"])
+    assert mask_free_text("cel 11987654321", SEMEADO) == ("cel ***4321", ["phone"])
+
+
+def test_rede_e_idempotente():
+    uma, _ = mask_free_text("fone (11) 98765-4321 email joao@exemplo.com", SEMEADO)
+    assert mask_free_text(uma, SEMEADO) == (uma, [])
+
+
+def test_rede_sem_catalogo_esconde():
+    assert mask_free_text("email joao@exemplo.com", {}) == ("email ***", ["email_addr"])

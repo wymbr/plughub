@@ -6,7 +6,9 @@ Roda os DOIS motores Python sobre a mesma fixture:
   · a CÓPIA do quality-ingest (`passes_detect_validator` e `mask_text`), que não depende
     do py-contextstore.
 Se os dois Python discordarem num caso, a linha sai com `DIVERGE` — e aí nunca casa com a
-linha do TS, então o gate reprova. Categorias do texto vêm do `mask_text` do quality-ingest.
+linha do TS, então o gate reprova. Categorias do texto: as DUAS redes Python — o
+`mask_free_text` do py-contextstore (bridge e channel-gateway, MSK-06) e o `mask_text` do
+quality-ingest —, e `DIVERGE` se discordarem.
 """
 import io
 import json
@@ -20,7 +22,9 @@ _AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(os.path.dirname(_AQUI))
 sys.path.insert(0, os.path.join(RAIZ, "packages", "py-contextstore", "src"))
 sys.path.insert(0, os.path.join(RAIZ, "packages", "quality-ingest", "src"))
-from plughub_contextstore.masking import passes_detect_validator as pcs  # noqa: E402
+from plughub_contextstore.masking import (  # noqa: E402
+    mask_free_text, passes_detect_validator as pcs,
+)
 from plughub_quality_ingest.masking import (  # noqa: E402
     mask_text, passes_detect_validator as qi,
 )
@@ -39,8 +43,10 @@ def main() -> int:
         a, b = pcs(c["validator"], c["match"]), qi(c["validator"], c["match"])
         linha({"name": c["name"], "passa": a if a == b else "DIVERGE"})
     for c in fx["text_cases"]:
-        _, cats = mask_text(c["text"])
-        linha({"name": c["name"], "categorias": sorted(set(cats))})
+        _, a = mask_text(c["text"])
+        _, b = mask_free_text(c["text"], {})
+        ca, cb = sorted(set(a)), sorted(set(b))
+        linha({"name": c["name"], "categorias": ca if ca == cb else "DIVERGE"})
     return 0
 
 
