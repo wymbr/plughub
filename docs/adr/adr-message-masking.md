@@ -120,7 +120,8 @@ Texto de agente sai por dois caminhos, e cada um tem a sua casa, **uma só**:
 | caminho | quem escreve | onde se mascara | por quê ali |
 |---|---|---|---|
 | `notification_send` | steps do engine (`notify`, `menu`, `receive`, `resolve`, `suspend`) | **no engine**, na interpolação: máscara por tipo declarado (`by_role`) e rede de texto livre, com isenção de roteiro publicado | só o engine sabe a PROVENIÊNCIA; o tool não mascara, por decisão (comentário em `tools/bpm.ts`) |
-| `message_send` | atendente humano, especialista, qualquer papel | no tool, por `MaskingService` (token + `original_content`) | não há template nem proveniência; o texto chega pronto |
+| `message_send` | IA, especialista, qualquer papel que use a tool | no tool, por `maskMessageContent` (token + `original_content`) | não há template nem proveniência; o texto chega pronto |
+| WebSocket do Console (`server.ts`, `/agent/ws`) | o atendente humano, digitando | **a mesma `maskMessageContent`** (MSK-07): token + original no stream; token no `agent:events` e no ClickHouse; ao CLIENTE (`conversations.outbound`) a exibição sem envelope (`tokensToDisplay`), porque o canal não lê token; ao FLUXO (BLPOP do hook) o texto cru | até a MSK-07 este caminho não mascarava nada — a regra morava dentro da tool, e o Console não a usa |
 
 - **O `notification_send` não ganha rede própria.** Ela mascararia de novo o exemplo de
   formato do DialogForm (o dano da CTX-11). Medido antes de decidir: **0 dado real em

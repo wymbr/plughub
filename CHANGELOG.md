@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-25 (21) — MSK-07: o que o atendente digita no Console passa pela mesma máscara do message_send
+
+**O defeito.** A MSK-04 mascarou o texto de agente dentro da tool `message_send`, e o Console não
+a usa: o handler do WebSocket do agente (`server.ts`, `/agent/ws`) publicava o que o humano
+digitou CRU no stream, no ClickHouse, aos outros agentes e ao CLIENTE (`conversations.outbound`).
+Exposição medida na MSK-05: zero (290 mensagens humanas, nenhuma com PII) — o risco era o
+atendente copiar o dado do cliente para a resposta.
+
+**O que mudou.** O bloco de mascaramento saiu da tool para `lib/masking.ts`
+(`maskMessageContent`, com o catálogo do tenant da MSK-05 e a degradação LOGADA para a rede pura)
+e os dois caminhos o chamam — duas cópias da mesma regra é como este defeito nasceu. No WS, por
+destino:
+
+| destino | recebe |
+|---|---|
+| stream | token (`[phone:tk_…:***4321]`) + `original_content` / `masked` / `masked_categories` |
+| `agent:events` (outros agentes) e ClickHouse | token — o layout do `message_send` |
+| `conversations.outbound` (o CLIENTE) | a exibição sem envelope (`tokensToDisplay`): WhatsApp, SMS e e-mail não leem token |
+| BLPOP do agente de hook (o FLUXO) | o texto cru |
+| prosa de `@mention` | mascarada; os ARGS do comando seguem crus ao `routeMentions` (são instrução) |
+
+Não foi preciso decisão nova: o texto de agente já tinha contrato desde a MSK-04 (token +
+original), e o cliente recebe a mesma exibição que o `_strip_tokens` do webchat já dava.
+
+**Medido ao vivo** (`mcp-server-plughub` rebuildado, âncoras no container; o dono atendeu no
+Console um contato `retencao_humano`, sessão `1be492f0`, e digitou telefone e e-mail):
+
+| destino | o que ficou |
+|---|---|
+| navegador do cliente | `confirmo seu número ***4321 e o e-mail j***@exemplo.com` |
+| stream `content` | `[phone:tk_b2b1fe7a:***4321]` · `[email_addr:tk_c59ab1cc:j***@exemplo.com]` |
+| stream `original_content` | o texto inteiro, `masked: true`, `["phone","email_addr"]` |
+| histórico do Console | `***4321` · `j***@exemplo.com` (a rede da MSK-06 sobre a linha do outbound) |
+| ClickHouse | o texto com os tokens |
+| logs de mcp-server, channel-gateway e bridge | 0 ocorrências do telefone e do e-mail |
+
+Testes: mcp-server 518 em 47 arquivos (`agent-text-masking.test.ts` novo, 6). Mutação 4 de 4.
+Gate `probe_masking_display_parity` OK contra a imagem nova. O handler do WS não tem harness de
+unidade (vive no `server.ts`); a prova dele é o contato acima.
+
+Docs: `adr-message-masking.md` § Mensagem de AGENTE (linha do WS do Console).
+
 ## 2026-09-25 (20) — MSK-06: o que o cliente digita aparece mascarado para quem lê e para o que guarda, e cru só para o fluxo
 
 **O defeito (medido na MSK-05).** Um contato `demo_ia` pelo webchat gravou o telefone e o e-mail

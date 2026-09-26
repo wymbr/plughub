@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from "ws"
 import { McpServer }              from "@modelcontextprotocol/sdk/server/mcp.js"
 import { SSEServerTransport }     from "@modelcontextprotocol/sdk/server/sse.js"
 import { registerBpmTools }           from "./tools/bpm"
+import { maskMessageContent, tokensToDisplay } from "./lib/masking"
 import type { BpmDeps }               from "./tools/bpm"
 import { registerRuntimeTools }       from "./tools/runtime"
 import type { RuntimeDeps }           from "./tools/runtime"
@@ -4426,8 +4427,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
           //
           // A mesma decisão e o mesmo cálculo do `message_send` — e é de propósito que
           // o cálculo seja o do parser compartilhado, não uma segunda regra aqui.
-          const prosa     = mentionParsed.stripped_text
-          const soComando = prosa.length === 0
+          const soComando = mentionParsed.stripped_text.length === 0
+          // MSK-07: a prosa é TEXTO do atendente, com os mesmos destinos (stream e agentes).
+          // Os ARGS do comando seguem crus para o `routeMentions` — são instrução, não exibição.
+          const prosa = soComando ? "" : await (async () => {
+            const m = await maskMessageContent(
+              redis as any, agentTenantId || process.env["PLUGHUB_TENANT_ID"] || "tenant_demo",
+              { type: "text", text: mentionParsed.stripped_text, metadata: {} },
+              `session=${targetSessionId} role=${agentRole} via=agent-ws-mention`, "[agent-ws]")
+            return m.finalContent.type === "text" ? (m.finalContent.text ?? "") : ""
+          })()
 
           // 1. Write to session stream as agents_only — só quando há mensagem
           if (!soComando) try {
@@ -4583,6 +4592,25 @@ export async function startServer(config: ServerConfig): Promise<void> {
         } catch { /* assume normal message on error */ }
 
         const outMsgId = crypto.randomUUID()
+
+        // ── Máscara do texto do ATENDENTE (MSK-07, 2026-09-25) ────────────────
+        // Este caminho publicava o que o humano digitou CRU no stream, no ClickHouse e ao
+        // cliente — a MSK-04 mascarou a tool `message_send`, e o Console não a usa. A casa é
+        // a MESMA (`maskMessageContent`): token + original para os destinos de agente e de
+        // armazenamento; a exibição sem envelope para o CLIENTE, cujo canal não lê token; e o
+        // texto cru só para o FLUXO (BLPOP do agente de hook), que consome o que pediu.
+        const tenantDaMascara = agentTenantId || process.env["PLUGHUB_TENANT_ID"] || "tenant_demo"
+        const mascaraAtendente = await maskMessageContent(
+          redis as any, tenantDaMascara, { type: "text", text: msgText, metadata: {} },
+          `session=${targetSessionId} role=${agentRole} via=agent-ws`, "[agent-ws]")
+        const textoSeguro  = mascaraAtendente.finalContent.type === "text"
+          ? (mascaraAtendente.finalContent.text ?? "") : msgText
+        const textoCliente = tokensToDisplay(textoSeguro)
+        const extraMascara = mascaraAtendente.masked
+          ? { original_content:  mascaraAtendente.originalContent,
+              masked:            true,
+              masked_categories: mascaraAtendente.maskedCategories }
+          : {}
         const outAuthor = { type: "agent_human", id: agentInstanceId || poolId || "human_agent", instance_id: agentInstanceId || poolId }
 
         if (targetAgentKey) {
@@ -4604,8 +4632,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
               timestamp:   msgTs,
               payload:     {
                 message_id: outMsgId,
-                content:    { type: "text", text: msgText },
-                text:       msgText,
+                content:    { type: "text", text: textoSeguro },
+                text:       textoSeguro,
+                ...extraMascara,
               },
             })
             await redis.expire(`session:${targetSessionId}:stream`, 14400)
@@ -4617,7 +4646,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
               type:       "message.text",
               message_id: outMsgId,
               author:     { type: "agent_human", id: agentInstanceId || poolId },
-              text:       msgText,
+              text:       textoSeguro,
               timestamp:  msgTs,
               visibility: streamVis,
             }))
@@ -4641,7 +4670,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
               author_id:    agentInstanceId || poolId || "human_agent",
               author_role:  agentRole,
               content_type: "text",
-              content:      msgText,
+              content:      textoSeguro,
               visibility:   typeof streamVis === "string" ? streamVis : JSON.stringify(streamVis),
               timestamp:    msgTs,
             })
@@ -4656,8 +4685,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
             channel:    msgChannel,
             direction:  "outbound",
             author:     outAuthor,
-            content:    { type: "text", text: msgText },
-            text:       msgText,   // kept for channel-gateway backward compat
+            content:    { type: "text", text: textoCliente },
+            text:       textoCliente,   // kept for channel-gateway backward compat
             timestamp:  msgTs,
           })
 
@@ -4673,7 +4702,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
               type:       "message.text",
               message_id: outMsgId,
               author:     { type: "agent_human", id: agentInstanceId || poolId, instance_id: agentInstanceId || poolId },
-              text:       msgText,
+              text:       textoSeguro,
               timestamp:  msgTs,
               // session_id é OBRIGATÓRIO: o handler message.text do Console dropa o
               // evento sem ele (`if (!sid) return`). contact_id por paridade com o
@@ -4696,8 +4725,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
               timestamp:   msgTs,
               payload:     {
                 message_id: outMsgId,
-                content:    { type: "text", text: msgText },
-                text:       msgText,
+                content:    { type: "text", text: textoSeguro },
+                text:       textoSeguro,
+                ...extraMascara,
               },
             })
             await redis.expire(`session:${targetSessionId}:stream`, 14400)
@@ -4719,7 +4749,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
               author_id:    agentInstanceId || poolId || "human_agent",
               author_role:  agentRole,
               content_type: "text",
-              content:      msgText,
+              content:      textoSeguro,
               visibility:   "all",
               timestamp:    msgTs,
             })

@@ -21,10 +21,10 @@
 import type { MessageContent, MaskingConfig, MaskingRule, DataCategory, MaskingAccessPolicy, ContextMaskingConfig, DataTypeCatalog } from "@plughub/schemas"
 import {
   DEFAULT_MASKING_RULES, DEFAULT_CONTEXT_MASKING_CONFIG, DEFAULT_DATA_TYPE_CATALOG,
-  ContextMaskingConfigSchema, passesDetectValidator, detectedDisplay,
+  ContextMaskingConfigSchema, passesDetectValidator, detectedDisplay, maskFreeText,
 } from "@plughub/schemas"
 import type { ParticipantRole } from "@plughub/schemas"
-import type { TokenVault }       from "./token-vault"
+import { TokenVault }            from "./token-vault"
 
 // ─────────────────────────────────────────────
 // Resultado do mascaramento
@@ -354,4 +354,77 @@ export class MaskingService {
     } catch { /* fall through to default */ }
     return DEFAULT_CONTEXT_MASKING_CONFIG
   }
+}
+
+
+// ─────────────────────────────────────────────
+// Texto de AGENTE — uma casa para os dois caminhos (MSK-07)
+// ─────────────────────────────────────────────
+
+/** TTL dos tokens de texto de agente: o da sessão (4 h). */
+const AGENT_TEXT_TOKEN_TTL_S = 14400
+
+export interface AgentTextMasking {
+  /** O que vai ao stream, ao ClickHouse e aos agentes — com token quando houve detecção. */
+  finalContent:     MessageContent
+  /** O original, para o `original_content` do stream (sob `authorized_roles`). */
+  originalContent?: MessageContent
+  masked:           boolean
+  maskedCategories: string[]
+}
+
+/**
+ * maskMessageContent — o mascaramento de TEXTO DE AGENTE, com token (MSK-04) e a exibição do
+ * `by_role` do catálogo do tenant (MSK-05).
+ *
+ * ⚠️ **Mora aqui desde a MSK-07 (2026-09-25)** porque o texto de agente tinha DOIS caminhos e
+ * a máscara estava em um só: a tool `message_send` (IA, especialista) mascarava; o WebSocket
+ * do Console (`server.ts`, o que o atendente humano DIGITA) publicava o texto cru no stream,
+ * no ClickHouse e ao cliente. Uma casa, dois chamadores.
+ *
+ * Falha nunca entrega o original: cofre caído num trecho vira display sem token (dentro do
+ * `applyMasking`); qualquer outra falha degrada para a rede pura (`maskFreeText`, sem I/O),
+ * irreversível e LOGADA.
+ */
+export async function maskMessageContent(
+  redis:    { get(key: string): Promise<string | null> } & Record<string, any>,
+  tenantId: string,
+  content:  MessageContent,
+  logCtx:   string,
+  logTag:   string = "[message_send]",
+): Promise<AgentTextMasking> {
+  const catalogo = await MaskingService.loadTypeCatalog(
+    process.env["CONFIG_API_URL"] ?? "http://localhost:3600", tenantId)
+  try {
+    const vault = new TokenVault({ redis: redis as never })
+    const config = await MaskingService.loadConfig(redis, tenantId)
+    const r = await MaskingService.applyMasking(
+      content, config, vault, tenantId, AGENT_TEXT_TOKEN_TTL_S, logCtx, catalogo)
+    return r.masked
+      ? { finalContent: r.tokenized_content, originalContent: r.original_content,
+          masked: true, maskedCategories: r.categories_detected }
+      : { finalContent: content, masked: false, maskedCategories: [] }
+  } catch (maskErr) {
+    const rede = maskFreeText(content, "", catalogo)
+    console.error(
+      `${logTag} mascaramento FALHOU ${logCtx} ` +
+      `(${maskErr instanceof Error ? maskErr.message : String(maskErr)}) — ` +
+      `degradado para a rede pura: categorias=[${[...new Set(rede.categories)].join(",")}] ` +
+      `mascaradas SEM token (irreversível); o original NÃO é gravado`)
+    return rede.categories.length > 0
+      ? { finalContent: rede.value as MessageContent, masked: true,
+          maskedCategories: [...new Set(rede.categories)] }
+      : { finalContent: content, masked: false, maskedCategories: [] }
+  }
+}
+
+/**
+ * Tira o envelope do token e deixa a exibição: `[phone:tk_ab12:***4321]` → `***4321`.
+ *
+ * Para destinos que NÃO sabem ler token — o canal do cliente (`conversations.outbound`). É a
+ * mesma regra do `_strip_tokens` do webchat (`stream_subscriber.py`), aplicada na ORIGEM,
+ * porque WhatsApp, SMS e e-mail não têm leitor de token nenhum.
+ */
+export function tokensToDisplay(text: string): string {
+  return text.replace(/\[[\w_]+:tk_[a-f0-9]+:([^\]]+)\]/g, "$1")
 }

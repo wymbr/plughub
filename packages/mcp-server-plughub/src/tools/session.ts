@@ -26,7 +26,6 @@ import {
   MessageVisibilitySchema,
   ChannelSchema,
   StreamEventTypeSchema,
-  maskFreeText,
 } from "@plughub/schemas"
 import type { RedisClient }   from "../infra/redis"
 import type { KafkaProducer } from "../infra/kafka"
@@ -34,8 +33,7 @@ import {
   verifySessionToken,
   InvalidTokenError,
 } from "../infra/jwt"
-import { MaskingService }     from "../lib/masking"
-import { TokenVault }         from "../lib/token-vault"
+import { MaskingService, maskMessageContent } from "../lib/masking"
 import { emitMessageSent }    from "../lib/usage-emitter"
 import { parseMentions }      from "../lib/mention-parser"
 import { routeMentions }      from "../lib/mention-routing"
@@ -492,48 +490,12 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         // não é critério: quem escreve o dado não muda o que o dado é. E a falha era um
         // `catch {}` que entregava o ORIGINAL; hoje ela é logada e degrada para a rede
         // pura (`maskFreeText`, sem cofre e sem I/O), que mascara de forma irreversível.
-        const SESSION_TTL = 14400  // 4h — TTL padrão de sessão
+        // A casa é `maskMessageContent` (lib/masking.ts) desde a MSK-07: o WS do Console usa a
+        // mesma, e duas cópias desta regra é como o texto do atendente ficou sem máscara.
         const logCtx = `session=${session_id} role=${role}`
-        let finalContent   = conteudoEntregue
-        let originalContent: typeof content | undefined
-        let masked          = false
-        let maskedCategories: string[] = []
-        // MSK-05: a exibição do trecho detectado é o `by_role` do catálogo do tenant.
-        // O carregador nunca lança — degrada para o semeado e diz.
-        const catalogoTipos = await MaskingService.loadTypeCatalog(
-          process.env["CONFIG_API_URL"] ?? "http://localhost:3600", tenant_id)
-
-        try {
-          const vault = new TokenVault({ redis })
-          const maskingConfig = await MaskingService.loadConfig(redis, tenant_id)
-          const maskResult = await MaskingService.applyMasking(
-            conteudoEntregue,
-            maskingConfig,
-            vault,
-            tenant_id,
-            SESSION_TTL,
-            logCtx,
-            catalogoTipos,
-          )
-          if (maskResult.masked) {
-            finalContent    = maskResult.tokenized_content
-            originalContent = maskResult.original_content
-            masked          = true
-            maskedCategories = maskResult.categories_detected
-          }
-        } catch (maskErr) {
-          const rede = maskFreeText(conteudoEntregue, "", catalogoTipos)
-          console.error(
-            `[message_send] mascaramento FALHOU ${logCtx} ` +
-            `(${maskErr instanceof Error ? maskErr.message : String(maskErr)}) — ` +
-            `degradado para a rede pura: categorias=[${[...new Set(rede.categories)].join(",")}] ` +
-            `mascaradas SEM token (irreversível); o original NÃO é gravado`)
-          if (rede.categories.length > 0) {
-            finalContent     = rede.value as typeof conteudoEntregue
-            masked           = true
-            maskedCategories = [...new Set(rede.categories)]
-          }
-        }
+        const {
+          finalContent, originalContent, masked, maskedCategories,
+        } = await maskMessageContent(redis, tenant_id, conteudoEntregue, logCtx)
 
         const payload = {
           content:          finalContent,

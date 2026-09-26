@@ -641,7 +641,6 @@ linha são de 2026-09-16; confira de novo antes de mexer.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| MSK-07 | **O texto que o ATENDENTE HUMANO digita no Console não passa por máscara nenhuma.** O handler do WS do agente (`mcp-server-plughub/src/server.ts:4388`, `msgText`) publica o texto cru no stream, no `conversations.events` (→ ClickHouse) e no `conversations.outbound` — a MSK-04 mascarou a tool `message_send`, e o Console não a usa. **Exposição medida em 2026-09-25: zero** — 290 mensagens de `author_id` `human-*` no ClickHouse, nenhuma com padrão de CPF, telefone ou e-mail. Dano é, portanto, hipotético hoje; o risco é o operador copiar o dado do cliente para a resposta. O conserto provável é o handler chamar o mesmo `MaskingService.applyMasking` (com `loadTypeCatalog`), e o `outbound` sair com o display — o canal do cliente não sabe ler token (ver `adr-message-masking.md` § Pendente). **Gatilho:** a primeira mensagem de humano com dado detectável no ClickHouse, ou a MSK-06, que mexe no mesmo desenho ⚠️ Corpo corrigido em 2026-09-25 (MSK-06): a aba de HISTÓRICO do Console (`session:{sid}:messages`) passou a mascarar TODO texto no escritor único (`SessionRegistry.append_message`), inclusive o do atendente — o que falta aqui é o resto do caminho do WS: stream, `conversations.events` e `conversations.outbound`. | `aberto` | `CHANGELOG.md` § 2026-09-25 (19); `server.ts:4388` |
 
 ---
 
