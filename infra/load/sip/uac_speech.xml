@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<!--
+  uac_speech.xml — chamada telefônica sintética para o teste de carga (PRD-02).
+
+  INVITE com digest (o tronco do livekit-sip exige usuário e senha: `-au`/`-ap`), PCMU,
+  fala gravada em loop pelo tempo da chamada, uma tecla RFC 4733 no meio (a coleta por
+  teclado da VOZ-31) e BYE ao fim. Por chamada mede o que interessa ao teto de voz:
+  tempo até o 200 OK (rtd "setup": o SFU criou a sala e o gateway adotou) e se a chamada
+  ficou de pé até o fim ou caiu antes (BYE vindo do servidor conta como FALHA).
+
+  Parâmetros na linha de comando (ver run_sipp.sh):
+    -s +551140000000     número DISCADO (é o endereço do ChannelEndpoint voice)
+    -au / -ap            credencial do tronco
+    -set talk_ms 90000   duração da conversa depois da tecla
+  Áudio: audio/fala_ptbr_8k_ulaw.wav (8 kHz, mono, G.711 µ-law) — ver README.
+-->
+<scenario name="plughub uac speech">
+
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "carga" <sip:carga[call_number]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 1 INVITE
+      Contact: sip:carga[call_number]@[local_ip]:[local_port]
+      Max-Forwards: 70
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=user1 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=-
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+      a=sendrecv
+    ]]>
+  </send>
+
+  <recv response="100" optional="true"/>
+  <recv response="401" auth="true" optional="true" next="auth"/>
+  <recv response="407" auth="true" next="auth"/>
+
+  <label id="auth"/>
+  <send>
+    <![CDATA[
+      ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "carga" <sip:carga[call_number]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 1 ACK
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <send retrans="500" start_rtd="setup">
+    <![CDATA[
+      INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "carga" <sip:carga[call_number]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>
+      Call-ID: [call_id]
+      CSeq: 2 INVITE
+      Contact: sip:carga[call_number]@[local_ip]:[local_port]
+      [authentication]
+      Max-Forwards: 70
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=user1 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=-
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+      a=sendrecv
+    ]]>
+  </send>
+
+  <recv response="100" optional="true"/>
+  <recv response="180" optional="true"/>
+  <recv response="183" optional="true"/>
+  <!-- Sem 200 em 30 s = o servidor não atendeu: falha de estabelecimento. -->
+  <recv response="200" rtd="setup" timeout="30000"/>
+
+  <send>
+    <![CDATA[
+      ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "carga" <sip:carga[call_number]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 2 ACK
+      Contact: sip:carga[call_number]@[local_ip]:[local_port]
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- Fala do cliente em loop enquanto a chamada durar (-1 = loop, payload 0 = PCMU). -->
+  <nop>
+    <action>
+      <exec rtp_stream="audio/fala_ptbr_8k_ulaw.wav,-1,0"/>
+    </action>
+  </nop>
+
+  <!-- Depois da saudação: tecla "1" em RFC 4733 (pcap que acompanha o SIPp). -->
+  <pause milliseconds="15000"/>
+  <nop>
+    <action>
+      <exec play_pcap_audio="pcap/dtmf_2833_1.pcap"/>
+    </action>
+  </nop>
+
+  <!-- Resto da conversa. Se o servidor desligar antes (BYE), a chamada conta como caída. -->
+  <recv request="BYE" optional="true" timeout="[$talk_ms]" ontimeout="hangup" next="server_bye"/>
+
+  <label id="hangup"/>
+  <nop><action><exec rtp_stream="pause"/></action></nop>
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "carga" <sip:carga[call_number]@[local_ip]:[local_port]>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@[remote_ip]:[remote_port]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 3 BYE
+      Contact: sip:carga[call_number]@[local_ip]:[local_port]
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="200" crlf="true" next="end"/>
+
+  <label id="server_bye"/>
+  <send>
+    <![CDATA[
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Content-Length: 0
+    ]]>
+  </send>
+  <!-- Queda antes do fim: encerra a chamada como FALHA (aparece em "Failed" no SIPp). -->
+  <nop><action><exec int_cmd="stop_call"/></action></nop>
+
+  <label id="end"/>
+
+  <ResponseTimeRepartition value="100, 200, 500, 1000, 2000, 5000, 10000"/>
+  <CallLengthRepartition value="10000, 30000, 60000, 90000, 120000"/>
+</scenario>

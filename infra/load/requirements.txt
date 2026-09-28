@@ -1,0 +1,5 @@
+# Harness de carga (PRD-02). SIPp é binário à parte (ver README); o resto é stdlib.
+aiohttp>=3.9
+websockets>=12
+# só para conferir o llm_mock com o SDK real (opcional):
+anthropic>=0.40
