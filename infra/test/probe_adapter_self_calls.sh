@@ -28,11 +28,9 @@
 #      de nomes validos e a uniao de metodos da classe, das bases resolvidas no
 #      pacote, e de todo `self.NOME = ...`. Medido: 217 chamadas, 3 orfas -- zero
 #      falso positivo em seis adapters.
-#      ⚠️ As 3 restantes sao DIVIDA DECLARADA com dono (VOZ-03, metade restante):
-#      o ciclo de vida de SESSAO do voice foi escrito contra uma API de
-#      classe-base que nunca existiu, e consertar e decidir como uma chamada PSTN
-#      abre sessao, roteia e fecha -- nao e "definir tres metodos". A tabela nao
-#      envelhece: nome que sai do fonte e continua na divida tambem REPROVA.
+#      As 3 restantes foram DIVIDA DECLARADA (VOZ-03) ate 2026-09-28, quando o
+#      `voice.py` (Twilio) que as chamava foi APOSENTADO: a tabela de divida esta
+#      vazia. Ela nao envelhece: nome que sai do fonte e continua na divida REPROVA.
 #   B  MUTACAO — injeta uma chamada a metodo inexistente e exige que o censo acuse.
 #   C  CONTRATO DO STORE — AST sobre o pacote inteiro (fora testes): toda chamada
 #      ao `AttachmentStore` bate com o Protocol em NOME e em KWARGS (aceitos e

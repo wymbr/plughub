@@ -18,6 +18,9 @@ concorda com o produto enquanto ninguem mexe no Protocol. Este liga cada chamada
 em `inspect.signature` do PROPRIO `AttachmentStore`: se o contrato mudar, o fake
 muda junto, e o escritor que ficou para tras reprova aqui.
 
+O escritor de voz (`voice.py`, gravacao do Twilio) saiu com a VOZ-03 (2026-09-28); a
+gravacao de chamada hoje e a do egress (VOZ-06), pelo adapter WebRTC.
+
 Censo irmao, sobre a populacao inteira: `infra/test/probe_adapter_self_calls.sh`
 ramos C/D.
 """
@@ -41,7 +44,6 @@ from plughub_channel_gateway.adapters.whatsapp import WhatsAppAdapter
 from plughub_channel_gateway.adapters.whatsapp_provider import MockWhatsAppProvider
 from plughub_channel_gateway.attachment_store import AttachmentMeta, AttachmentStore
 from plughub_channel_gateway.config import Settings
-from plughub_channel_gateway.tests.test_voice_adapter import _fake_settings, _make_adapter
 
 TENANT_ID = "tenant_test"
 SESSION_ID = "sid-voz06-001"
@@ -195,49 +197,3 @@ class TestEmailArmazenaAnexo:
         assert store.chamadas[1][1]["tenant_id"] == TENANT_ID
         assert len(refs) == 1, "o anexo foi descartado — o commit falhou dentro do except"
         assert refs[0]["file_id"] == store.chamadas[1][1]["file_id"]
-
-
-# ── Voz ───────────────────────────────────────────────────────────────────────
-
-class TestVozArmazenaGravacao:
-    async def test_gravacao_usa_reserve_commit_e_publica_a_url_do_store(self):
-        settings = _fake_settings()
-        settings.attachment_expiry_days = 30
-        adapter = _make_adapter(settings=settings)
-        store = ProtocolBoundStore()
-        adapter._store = store
-
-        resp = MagicMock()
-        resp.content = b"ID3\x03fake-mp3"
-        resp.raise_for_status = MagicMock()
-        cliente = AsyncMock()
-        cliente.get = AsyncMock(return_value=resp)
-        ctx = AsyncMock()
-        ctx.__aenter__.return_value = cliente
-        ctx.__aexit__.return_value = False
-
-        antes = datetime.now(timezone.utc)
-        with patch("httpx.AsyncClient", return_value=ctx):
-            await adapter._download_and_store_recording(
-                session_id=SESSION_ID,
-                segment_id="seg-1",
-                recording_url="https://api.twilio.com/rec/RE1",
-                recording_sid="RE1",
-                duration_s=12,
-            )
-
-        assert store.metodos() == ["reserve", "commit"], (
-            "a gravacao nao chegou ao store — o erro foi engolido pelo except do escritor"
-        )
-        reserve = store.chamadas[0][1]
-        assert reserve["mime_type"] == "audio/mpeg"
-        assert reserve["tenant_id"] == settings.tenant_id
-        assert reserve["size_bytes"] == len(resp.content)
-        # a expiracao vem da politica resolvida (default 30 aqui), nunca de constante
-        dias = (reserve["expires_at"] - antes).days
-        assert 29 <= dias <= 30
-
-        publicado = adapter._normalize_text.call_args.kwargs["text"]
-        evento = json.loads(publicado)
-        assert evento["type"] == "recording.completed"
-        assert evento["url"] == f"{SERVING}/{store.chamadas[1][1]['file_id']}"

@@ -35,7 +35,7 @@ O canal WebRTC eleva o PlugHub de uma plataforma de mensageria para uma **plataf
 
 | Canal | Transporte | Uso típico | Infraestrutura de mídia |
 |---|---|---|---|
-| `voice` | Tronco SIP → serviço SIP do SFU (VOZ-02, §19) · legado: Twilio TwiML | Clientes no telefone, URA | **a mesma sala LiveKit** (SIP) · Twilio conference bridge (legado) |
+| `voice` | Tronco SIP → serviço SIP do SFU (VOZ-02, §19); o legado Twilio TwiML foi aposentado na VOZ-03 (2026-09-28) | Clientes no telefone, URA | **a mesma sala LiveKit** |
 | `webrtc` | Browser-to-SFU | Clientes na webapp/widget, atendimento enriquecido | LiveKit SFU |
 
 Agentes podem ter ambos em `channel_types` e atender os dois em paralelo. Pools podem ser configurados com qualquer combinação.
@@ -384,7 +384,7 @@ ElevenLabsTTSProvider → MP3 bytes
   → customer ouve diretamente pelo LiveKit room
 ```
 
-**Nota:** O pipeline STT/TTS é idêntico ao canal voice — mesmos `FallbackSTTProvider`/`FallbackTTSProvider`. A diferença está no transporte de áudio: Twilio Media Streams μ-law WS (voice) vs LiveKit server SDK PCM frames (webrtc).
+**Nota (histórica — o canal voice Twilio e os `Fallback*Provider` saíram na VOZ-03, 2026-09-28):** O pipeline STT/TTS era idêntico ao canal voice — mesmos `FallbackSTTProvider`/`FallbackTTSProvider`. A diferença está no transporte de áudio: Twilio Media Streams μ-law WS (voice) vs LiveKit server SDK PCM frames (webrtc).
 
 ---
 
@@ -475,7 +475,7 @@ Sussurro ao agente: DataChannel message (visibility: ["part_agente_xyz"])
 Take-over (promote): supervisor.can_publish → true (endpoint dedicado)
 ```
 
-**Diferença vs canal voice:** No voice, a supervisão é via `coaching_mode` do Twilio (complexo, requer leg extra). No WebRTC, é nativo do LiveKit — participante hidden subscribe-only.
+**Diferença vs canal voice (histórico — legado Twilio aposentado na VOZ-03):** No voice, a supervisão era via `coaching_mode` do Twilio (complexo, requer leg extra). No WebRTC, é nativo do LiveKit — participante hidden subscribe-only.
 
 ---
 
@@ -937,7 +937,7 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
 | Conferência de cobertura | `sip_trunk_watch.py` (task de boot `sip-trunk-watch`, 5 min): todo `identifier` de endpoint `voice` ATIVO tem de estar em `numbers` de algum tronco de entrada no SFU (tronco sem `numbers` aceita todos). DESCOBERTO → ERROR nomeando os números, repetido de hora em hora; SFU ou registro fora → WARNING *"NÃO conferida"*; volta → INFO *restaurado*. Existe porque o Redis do SFU não persiste (`--save ""`) e, sem tronco, o `livekit-sip` descarta a chamada como `flood` sem 4xx e sem linha no gateway (VOZ-41) |
 | Leitura do participante SIP | `adapters/sip_leg.py` (`parse_sip_participant`: kind SIP, `sip.trunkPhoneNumber` = DNIS, `sip.phoneNumber` = ANI) |
 | Nascimento, desligar, recusa | `adapters/webrtc.py`: `on_livekit_event` · `_sip_arrived` · `_sip_hangup` · `_sip_platform_close` · `_sip_refuse` |
-| Saída de fala | `adapters/voice_router.py` — o canal `voice` tem dois donos; a sessão SIP vai ao adapter WebRTC, o resto ao Twilio |
+| Saída de fala | `adapters/voice_router.py` — a sessão SIP vai ao adapter WebRTC; desde a VOZ-03 o resto não tem destino e é dito (WARNING; `session_closed` em INFO) |
 | Política de mídia | `voice` passa a EXIGIR `media_policy` no pool (registry) e o bridge a leva no `routing.assigned` |
 
 **Regras que a fatia fixou:**
@@ -984,7 +984,7 @@ tronco SIP ──INVITE (digest)──► livekit-sip ──JOIN──► sala p
   no meio desfaz a coleta (`aborted` → `on_failure`), e pausa que falha desfaz sem prompt.
   `masked` + fala é recusado (NIV-08), a transcrição é descartada no bloco, o histórico recebe a linha
   redigida, e eco `plain` vira bipe até a NIV-06. Sem `telephone-event` a coleta expira, e nada vaza.
-  A perna Twilio **recusa** menu mascarado. Risco residual: tecla adiantada antes do menu, com o
+  A perna Twilio, que recusava menu mascarado, foi aposentada na VOZ-03. Risco residual: tecla adiantada antes do menu, com o
   humano ainda na sala, chega a ele.
 - **O evento é do CANAL DA SESSÃO**: transcrição, fala do atendente e desfecho de coleta de uma
   chamada SIP saem com `channel: voice` (até a VOZ-31 saíam `webrtc`, o nome do adapter).
@@ -1149,7 +1149,7 @@ Por isso a chamada tem **dona** (`call_relay.py`):
 |---|---|
 | posse | `channel:call:{sid}:owner = instance_id` — gravada antes do pedido de roteamento (`_open_session`) e ao anexar a chamada do chat; renovada nos keepalives; apagada só se ainda for desta réplica (Lua) |
 | canal | `call:deliver:{instance_id}` — cada réplica ouve só o seu |
-| saída | `OutboundConsumer`: `holds_call` (memória, síncrono) → local como sempre; senão `send_later` à dona; sem dona → local (o `voice` legado Twilio segue igual). No `webchat` o chat é entregue por quem consumiu e só a FALA vai à dona |
+| saída | `OutboundConsumer`: `holds_call` (memória, síncrono) → local como sempre; senão `send_later` à dona; sem dona → local (no `voice`, desde a VOZ-03, o roteador a recusa dito). No `webchat` o chat é entregue por quem consumiu e só a FALA vai à dona |
 | webhook | sala SIP que não é daqui → sessão por `channel:sip:room:{room}` → dona; `abrindo` espera até 5 s |
 
 - **Ordem:** perguntar a dona é `await`, então o envio é encadeado **por sessão**. A dona abre as

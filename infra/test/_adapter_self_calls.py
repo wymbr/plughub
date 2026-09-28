@@ -52,17 +52,12 @@ ADAPTERS = BASE + "/adapters"
 # faria a divida herdar a tranquilidade da decisao. Aqui so ha divida, e ela e
 # CONTADA no placar toda vez que o gate roda.
 #
-# As tres sao o ciclo de vida de SESSAO do canal de voz, e foram escritas contra
-# uma API de classe-base que **nunca existiu** — nao ha `_open_session` nem
-# `_route_inbound` em adapter nenhum do pacote (`webrtc.py` tem um
-# `_close_session` proprio, e so). Consertar nao e "definir tres metodos": e
-# decidir como uma chamada PSTN abre sessao na plataforma, roteia a um pool e
-# fecha com a taxonomia de `contact_closed`. E metade da VOZ-03, e tem ficha.
-DIVIDA = {
-    ("voice.py", "VoiceAdapter", "_open_session"):  "VOZ-03 (metade restante)",
-    ("voice.py", "VoiceAdapter", "_route_inbound"): "VOZ-03 (metade restante)",
-    ("voice.py", "VoiceAdapter", "_close_session"): "VOZ-03 (metade restante)",
-}
+# Vazia desde 2026-09-28 (VOZ-03). As tres que havia eram o ciclo de vida de SESSAO do
+# canal de voz no `voice.py` (Twilio) — `_open_session`, `_route_inbound`, `_close_session`,
+# escritas contra uma API de classe-base que nunca existiu. A divida nao foi paga: o adapter
+# foi APOSENTADO, porque a chamada de operadora ja abre, roteia e fecha sessao pela perna SIP
+# (adapter WebRTC). Definir os tres teria criado um segundo ciclo de vida de chamada.
+DIVIDA: dict[tuple[str, str, str], str] = {}
 
 MUTANTE = """
 
@@ -151,7 +146,7 @@ def censo(mutar=False):
 
     fontes = {f: io.open(f, encoding="utf-8").read() for f in arquivos}
     if mutar:
-        alvo = [f for f in fontes if f.endswith("voice.py")] or [arquivos[0]]
+        alvo = [f for f in fontes if f.endswith("webrtc.py")] or [arquivos[0]]
         fontes[alvo[0]] += MUTANTE
 
     # universo de nomes, a partir dos fontes (possivelmente mutados)
@@ -183,6 +178,18 @@ def censo(mutar=False):
             continue
         for c in _classes(arv):
             oferece = resolve(c.name)
+            # MIXIN (2026-09-28): classe que outra do pacote HERDA chama metodos que so a
+            # herdeira define (`CallAttachMixin` -> `WebRTCAdapter`, WCH-01). O nome vale se
+            # existir em TODAS as herdeiras — a intersecao, nunca a uniao: faltar numa so e o
+            # mesmo `AttributeError` em runtime. Sem isto o ramo A reprovava 26 chamadas
+            # legitimas desde a WCH-01, e um gate sempre vermelho nao acusa mais nada.
+            herdeiras = [k for k, bs in bases.items() if c.name in bs]
+            if herdeiras:
+                comum = None
+                for h in herdeiras:
+                    rh = resolve(h)
+                    comum = rh if comum is None else (comum & rh)
+                oferece = oferece | (comum or set())
             # `__getattr__` faz qualquer nome resolver em runtime — nao ha orfa.
             if "__getattr__" in oferece:
                 continue
@@ -384,7 +391,7 @@ def censo_store(mutar=False):
                 arquivos.append(os.path.join(raiz, f))
     fontes = {f: io.open(f, encoding="utf-8").read() for f in sorted(arquivos)}
     if mutar:
-        alvo = [f for f in fontes if f.endswith("voice.py")] or sorted(fontes)[:1]
+        alvo = [f for f in fontes if f.endswith("webrtc.py")] or sorted(fontes)[:1]
         fontes[alvo[0]] += MUTANTE_STORE
 
     arvores = {}

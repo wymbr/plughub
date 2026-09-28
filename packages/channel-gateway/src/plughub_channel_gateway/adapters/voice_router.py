@@ -1,17 +1,21 @@
 """
-voice_router.py — a saída do canal `voice` vai para quem ABRIU a sessão (VOZ-02).
+voice_router.py — a saída do canal `voice` vai para a perna SIP, e só para ela (VOZ-02/VOZ-03).
 
-O canal `voice` significa *o cliente chegou por telefonia* (ADR `adr-voice-media-plane.md` V2), e
-hoje ele tem duas pernas com donos diferentes:
+O canal `voice` significa *o cliente chegou por telefonia* (ADR `adr-voice-media-plane.md` V2). Ele
+tem UMA perna: o serviço SIP do SFU põe o chamador numa SALA, e quem tem a sala, o bot leg e a fala
+é o adapter WebRTC — a mídia é a mesma da chamada de browser (V3).
 
-  * a perna SIP (serviço SIP do SFU): o chamador está numa SALA, e quem tem a sala, o bot leg e a
-    fala é o adapter WebRTC — a mídia é a mesma da chamada de browser (V3);
-  * o legado Twilio (TwiML + Media Streams), que o ADR rebaixa a UM provedor entre outros.
+Até 2026-09-28 havia uma segunda, o legado Twilio (TwiML + Media Streams), e este roteador escolhia
+entre as duas pela SESSÃO. A VOZ-03 aposentou o legado: o Twilio continua só como operadora do
+tronco SIP. Sobrou o que o roteador tinha de não óbvio — o `OutboundConsumer` escolhe adapter pelo
+CANAL do payload, e o adapter WebRTC também atende `webrtc`; aqui a saída de `voice` chega a ele.
 
-O `OutboundConsumer` escolhe adapter pelo CANAL do payload, e os dois são `voice`. Sem este
-roteador, a fala do agente de IA numa chamada SIP iria para o adapter Twilio — que não conhece a
-sessão — e ninguém ouviria nada, sem erro. O discriminador é a SESSÃO, nunca um palpite: é do
-SIP a sessão que o adapter WebRTC diz ter aberto; o resto segue para o legado como antes.
+O que NÃO é sessão SIP não tem destino e é DITO, nunca entregue a um palpite:
+  * texto, menu e digitação → WARNING nomeando a sessão (conteúdo perdido);
+  * `session_closed` → INFO: é o caso normal de a chamada já ter desligado antes do aviso chegar.
+
+Não há `handle_collect_event`: ligação ativa pela perna SIP é a VOZ-33, e o consumidor de
+`collect.events` recusa `voice` nomeando.
 """
 from __future__ import annotations
 
@@ -24,40 +28,39 @@ logger = logging.getLogger("plughub.channel-gateway.voice_router")
 class VoiceChannelRouter:
     channel = "voice"
 
-    def __init__(self, sip_owner: Any | None, legacy: Any) -> None:
+    def __init__(self, sip_owner: Any | None) -> None:
         self._sip = sip_owner       # WebRTCAdapter (tem `is_sip_session`), ou None com o canal desligado
-        self._legacy = legacy       # VoiceAdapter (Twilio)
 
-    def _alvo(self, payload: dict) -> Any:
+    def _alvo(self, payload: dict, o_que: str) -> Any | None:
         sid = str(payload.get("session_id") or "")
         if self._sip is not None and sid and self._sip.is_sip_session(sid):
             return self._sip
-        return self._legacy
+        motivo = "canal WebRTC desligado" if self._sip is None else "sessao nao e da perna SIP"
+        if o_que == "session_closed":
+            logger.info("voice: session_closed sem chamada SIP viva (%s) session=%s", motivo, sid)
+        else:
+            logger.warning(
+                "voice: %s NAO entregue — %s; o legado Twilio foi aposentado (VOZ-03) session=%s",
+                o_que, motivo, sid,
+            )
+        return None
 
     async def deliver_text(self, payload: dict) -> None:
-        await self._alvo(payload).deliver_text(payload)
+        alvo = self._alvo(payload, "texto")
+        if alvo is not None:
+            await alvo.deliver_text(payload)
 
     async def deliver_menu(self, payload: dict) -> None:
-        alvo = self._alvo(payload)
-        if alvo is self._legacy and (payload.get("masked") or payload.get("masked_fields")):
-            # NIV-07: `voice` declara `masked_input` pela perna SIP (pausa de mídia, tecla fora de
-            # banda). O legado Twilio não tem controle nenhum disso — e nem renderiza menu (NIV-16):
-            # entregar seria prometer uma coleta protegida que ele não faz. O menu sai pelo prazo.
-            logger.error(
-                "voice: menu MASCARADO %s RECUSADO na perna Twilio (sem pausa de midia nem garantia de "
-                "tecla fora de banda — so a perna SIP coleta dado protegido) session=%s",
-                payload.get("menu_id"), payload.get("session_id"),
-            )
-            return
-        await alvo.deliver_menu(payload)
+        alvo = self._alvo(payload, "menu")
+        if alvo is not None:
+            await alvo.deliver_menu(payload)
 
     async def deliver_typing(self, payload: dict) -> None:
-        await self._alvo(payload).deliver_typing(payload)
+        alvo = self._alvo(payload, "digitacao")
+        if alvo is not None:
+            await alvo.deliver_typing(payload)
 
     async def deliver_session_closed(self, payload: dict) -> None:
-        await self._alvo(payload).deliver_session_closed(payload)
-
-    def __getattr__(self, nome: str) -> Any:
-        # Tudo que não é entrega de saída (ex.: `handle_collect_event`, procurado por `hasattr`) segue
-        # sendo do legado, exatamente como antes deste roteador existir.
-        return getattr(self._legacy, nome)
+        alvo = self._alvo(payload, "session_closed")
+        if alvo is not None:
+            await alvo.deliver_session_closed(payload)

@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (8) — VOZ-03: o legado Twilio (TwiML) sai, e o canal `voice` fica só com a perna SIP
+
+**Decisão do dono.** A VOZ-03 pedia os três métodos de ciclo de vida de sessão que o `voice.py`
+chamava e que nunca existiram (`_open_session`, `_route_inbound`, `_close_session`). Desde a VOZ-02,
+a chamada de operadora abre, roteia e fecha sessão pela perna SIP. Definir os três teria criado um
+segundo ciclo de vida de chamada, e por isso o legado foi aposentado. O Twilio **continua** como
+operadora do tronco SIP (VOZ-32, `infra/sip/twilio_inbound.json`): o TwiML `<Dial><Sip>` fica
+hospedado do lado dele e não passa por rota nossa.
+
+**O que saiu.**
+
+- `adapters/voice.py` (1 218 linhas) e o teste dele.
+- Em `voice_provider.py` (993 → ~400 linhas): `IVoiceProvider`, `TwilioVoiceProvider`, os TTS
+  `<Say>` e Aura e os `Fallback*Provider`, que só o legado usava. Ficam os tipos de fala, o par
+  Deepgram/ElevenLabs e os mocks que o bot leg do WebRTC usa.
+- As rotas `/webhooks/voice/{inbound,status,recording}`, `/voice/tts*` e `/voice/media`: a borda
+  publicável cai de **sete para seis** prefixos (`CLAUDE.md`, `probe_edge_surface.sh`,
+  `webhook-patterns.md`).
+- As configs de TwiML e Programmable Voice. `voice_stt_language` e o par Deepgram/ElevenLabs ficam
+  como camada de env do bot leg, com o mesmo nome, para nenhum deploy mudar de env.
+
+**O que mudou de comportamento, e é dito.**
+
+- **`VoiceChannelRouter` entrega só à perna SIP.** Saída de `voice` para outra sessão não tem
+  destino e vira WARNING com a sessão. A exceção é o `session_closed` que chega depois de o
+  chamador desligar: é o caso normal e fica em INFO. Medido ao vivo, só apareceram esses dois INFO.
+- **`collect` com `channel: voice`** ia ao Twilio, que discava. Agora nenhum adapter atende, e o
+  consumidor de `collect.events` loga ERROR nomeando o canal. Antes, canal sem adapter era
+  descartado em `debug`, calado. Ligação ativa por voz passa a ser só a `VOZ-33`.
+
+**Defeito antigo achado no caminho.** O censo `probe_adapter_self_calls` (ramo A) reprovava desde a
+WCH-01: 26 "órfãs" em `CallAttachMixin`, métodos que só a herdeira `WebRTCAdapter` define. O censo
+resolvia a classe e as bases dela, nunca quem a herda. Agora, em classe herdada, o nome vale se
+existir em **todas** as herdeiras (a interseção, nunca a união). Controle: uma chamada plantada no
+mixin para um nome que ninguém define continua acusada. A tabela `DIVIDA` ficou vazia: os três nomes
+que ela carregava saíram com o `voice.py`, e nome que some do fonte e fica na dívida reprova.
+
+**Medido ao vivo** (gateway rebuildado):
+
+- `POST /webhooks/voice/inbound` e `GET /voice/tts/x` respondem 404.
+- `probe_edge_surface.sh`: 6 externos, 2 internos, tudo classificado.
+- `probe_voz02_sip_inbound.sh` **VERDE** de ponta a ponta:
+  - chamada atendida, IA ouvida em G.711 e fala do chamador no fluxo;
+  - 5 teclas RFC 4733;
+  - PIN mascarado sob pausa de mídia, sem aparecer em log;
+  - BYE pela plataforma e desligamento pelo chamador (`customer_hangup`);
+  - 486 para número sem endpoint.
+
+**Instrumentos:**
+- Suíte do gateway: 1 445 testes passaram.
+- Ramo E do `probe_channel_capability_single_house`: passou a exigir que o roteador não tenha
+  legado. Antes exigia a recusa da perna Twilio como mecanismo.
+- Testes novos do roteador: recusa dita, `session_closed` em INFO, sem `handle_collect_event`.
+- Controle do relay: sessão sem dona fica local e é recusada dita.
+
+**Caem com ela:** `NIV-16` (o menu vazio era do `voice.py`) e `VOZ-30` (a língua e a voz em env eram
+da perna Twilio; a SIP já lê pelas camadas da VOZ-17).
+
 ## 2026-09-28 (7) — DUR-01 F4: estacionar é o modo, não uma opção do pool — e a ficha fecha
 
 **O que mudou.**

@@ -819,13 +819,15 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
 - Never call `redis.xadd()` directly in mcp-server-plughub — use `writeStreamEntry()`
 - **Never leave deferred phases undocumented** — every unimplemented phase MUST be registered in `## Pending`
 - Never create a new `packages/my-ui/` standalone frontend app — add a module to platform-ui
-- **A borda do channel-gateway é uma ALLOWLIST de sete prefixos — nunca uma proibição.** *(reescrito
+- **A borda do channel-gateway é uma ALLOWLIST de seis prefixos — nunca uma proibição.** *(reescrito
   2026-08-10 após medição; a v1 dizia só "never expose `/v1/*`", e proibição é meia regra: um deploy que
   publique tudo menos `/v1` cumpre a letra e expõe `/docs`.)* Publicável: **`/channel` · `/survey` ·
-  `/webhooks` · `/voice` · `/webrtc` · `/ws` · `/webchat`**. Interno: **`/v1` · `/health`**, mais os
+  `/webhooks` · `/webrtc` · `/ws` · `/webchat`**. *(`/voice` saiu em 2026-09-28 com o legado Twilio,
+  VOZ-03: a chamada telefônica entra pelo tronco SIP na sala do SFU, fora do gateway.)* Interno:
+  **`/v1` · `/health`**, mais os
   implícitos do FastAPI **`/openapi.json` · `/docs` · `/redoc`**, os três respondendo `200` hoje —
   publicá-los publica o MAPA das rotas internas. Metade da lista externa não é produto, é infraestrutura
-  de canal (callback de Meta/Twilio, áudio buscado pelo provedor, WebSocket e upload do browser); nenhuma
+  de canal (callback de provedor, WebSocket e upload do browser); nenhuma
   entrada é opcional.
   **Por que `/v1` é exigência e não gosto:** dentro dele vive `POST /v1/channels/webhook/pool/{pool_id}`,
   **anônima por construção** — não passa pelo registro (ADR §7.6.1) e por isso **não tem onde pendurar
@@ -1459,7 +1461,7 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   obrigatória em pool de contato com `webrtc` **ou `voice`** (VOZ-02), lida fresca pelo bridge e levada no `routing.assigned`
   com a procedência. **Ausência nunca vira permissão** — pool sem política ou registry fora oferece nada.
 
-Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (cliente no telefone: tronco SIP → a mesma sala desde a VOZ-02; Twilio/TwiML é legado); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform pelos tetos). Texto é sempre possível; `media_capabilities` do agente não existe mais (sem produtor desde a aposentadoria do AgentType). A ponte PSTN→sala existe desde a VOZ-02 (fatia 1, entrante); a tecla do telefone (RFC 4733), desde a VOZ-31; toda chamada SIP é atendida no nascimento pela *linha* (trilha muda), desde a VOZ-35; o que falta da perna SIP está em `VOZ-33`, `VOZ-34` e `NIV-06` no `pending.md`.
+Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (cliente no telefone: tronco SIP → a mesma sala desde a VOZ-02; o legado Twilio/TwiML foi APOSENTADO na VOZ-03, e o Twilio segue só como operadora do tronco); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS do bot leg: `speaches` auto-hospedado, com o par Deepgram/ElevenLabs de `voice_provider.py` como alternativa (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform pelos tetos). Texto é sempre possível; `media_capabilities` do agente não existe mais (sem produtor desde a aposentadoria do AgentType). A ponte PSTN→sala existe desde a VOZ-02 (fatia 1, entrante); a tecla do telefone (RFC 4733), desde a VOZ-31; toda chamada SIP é atendida no nascimento pela *linha* (trilha muda), desde a VOZ-35; o que falta da perna SIP está em `VOZ-33`, `VOZ-34` e `NIV-06` no `pending.md`.
 
 → See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
 

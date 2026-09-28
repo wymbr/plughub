@@ -30,14 +30,17 @@ echo "   gw=$GW"
 # Prefixo → classe|motivo. Editar isto é uma DECISÃO, e é o ponto do probe:
 # prefixo novo sem linha aqui reprova, em vez de entrar calado.
 #
+# `/voice` (TTS buscado pelo Twilio + Media Streams) SAIU em 2026-09-28 com a VOZ-03: o legado
+# TwiML foi aposentado, e a chamada telefônica entra pelo tronco SIP na sala do SFU, que não
+# passa pelo gateway. Os callbacks `/webhooks/voice/*` saíram junto.
+#
 # ⚠️ "externo" NÃO significa "sem auth" — significa "tem de ser alcançável de fora
 #    para a função existir". Metade desta lista é callback de provedor ou tráfego de
 #    browser, e nenhuma delas é opcional.
 declare -A CLASS=(
   [channel]="externo|trigger de webhook por identificador opaco; a porta que a Fase 1 espelha"
   [survey]="externo|página pública de pesquisa, autenticada pela posse do token (survey_web.py:563)"
-  [webhooks]="externo|callback de PROVEDOR (whatsapp/email/sms/voice) — Meta e Twilio batem aqui"
-  [voice]="externo|áudio TTS buscado pelo provedor + stream de mídia (main.py:680,697,714)"
+  [webhooks]="externo|callback de PROVEDOR (whatsapp/email/sms) — Meta, Mailgun e o SMS da Twilio batem aqui"
   [webrtc]="externo|emissão de token LiveKit para o cliente na webapp (main.py:754)"
   [ws]="externo|WebSocket do webchat e do webrtc, aberto pelo BROWSER (main.py:478,729)"
   [webchat]="externo|upload/download de anexo pelo browser (upload_router.py:41)"

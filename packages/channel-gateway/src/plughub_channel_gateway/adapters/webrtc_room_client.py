@@ -58,7 +58,7 @@ def resample_pcm_48_to_8(pcm_48: bytes, num_channels: int = 1) -> bytes:
     Downsample 48kHz 16-bit PCM to 8kHz μ-law.
 
     Input:  raw 16-bit signed PCM at 48kHz, interleaved if stereo.
-    Output: 8kHz μ-law bytes — format expected by Deepgram / FallbackSTTProvider.
+    Output: 8kHz μ-law bytes — format expected by Deepgram.
 
     Uses audioop when available (Python ≤ 3.12).  Falls back to
     struct-based decimation on Python 3.13+ where audioop was removed.

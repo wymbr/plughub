@@ -63,12 +63,12 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     "sms":       frozenset({"text"}),
     "email":     frozenset({"text", "file_upload"}),
     # `voice` DECLARA `masked_input` desde 2026-09-18 (NIV-07, decisão do dono), pela GARANTIA da
-    # NIV-05, na perna SIP (a única viva): o valor entra só por TECLA fora de banda (RFC 4733 —
+    # NIV-05, na perna SIP (a ÚNICA desde a VOZ-03): o valor entra só por TECLA fora de banda (RFC 4733 —
     # fala nunca coleta dado protegido, NIV-08); a fala transcrita é descartada no bloco; o
     # histórico recebe a linha REDIGIDA; e a sala fica só com o cliente e os bots durante o
     # bloco (PAUSA DE MÍDIA), porque a tecla SIP chega a TODOS os participantes (medido). Quem
-    # não sai da sala desfaz a coleta (`aborted` → `on_failure`). A perna Twilio (legado) NÃO
-    # tem nada disso e RECUSA menu mascarado no `VoiceChannelRouter`, dito.
+    # não sai da sala desfaz a coleta (`aborted` → `on_failure`). A perna Twilio (legado), que não
+    # tinha nada disso e recusava menu mascarado, foi APOSENTADA na VOZ-03 (2026-09-28).
     # ⚠️ Sem `telephone-event` negociado a tecla não chega (medido, VOZ-31): a coleta expira,
     # nada vaza — e o tom dentro do áudio não passa porque ninguém além dos bots está na sala.
     #

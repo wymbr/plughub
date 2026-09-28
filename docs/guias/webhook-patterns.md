@@ -34,8 +34,7 @@ Existem dois padrões distintos de uso de webhook na plataforma. Cada um serve a
 |---|---|---|---|
 | `/channel/webhook/{identifier}` | sistemas de terceiros do tenant | **Sim** | porta externa; serve só `origin=external` (ADR §7.6.3) |
 | `/survey/{token}` | cliente final | **Sim** | página pública, autenticada pela posse do token |
-| `/webhooks/*` | Meta, Twilio | **Sim** | callback de PROVEDOR (whatsapp/email/sms/voice) |
-| `/voice/*` | Twilio | **Sim** | áudio TTS que o provedor busca + stream de mídia |
+| `/webhooks/*` | Meta, Mailgun, Twilio (SMS) | **Sim** | callback de PROVEDOR (whatsapp/email/sms) |
 | `/webrtc/*` | browser do cliente | **Sim** | emissão de token LiveKit para a webapp |
 | `/ws/*` | browser do cliente | **Sim** | WebSocket do webchat e do webrtc |
 | `/webchat/v1/*` | browser do cliente | **Sim** | upload/download de anexo |

@@ -39,8 +39,9 @@
 #        defeito que a NIV-01 removeu.
 #      — é a testemunha de segurança. A lista abaixo é o HISTÓRICO de impedimentos que a
 #        NIV-07 (2026-09-18) fechou; o ramo agora exige, no código, a pausa de mídia, a rota
-#        de token fechada durante ela, a coleta desfeita quando alguém entra, a recusa da
-#        perna Twilio e a recusa de `masked` + fala (NIV-08). O comportamento é provado ao
+#        de token fechada durante ela, a coleta desfeita quando alguém entra, o roteador de
+#        `voice` sem destino fora da perna SIP (a perna Twilio, que recusava, saiu na VOZ-03)
+#        e a recusa de `masked` + fala (NIV-08). O comportamento é provado ao
 #        vivo pelo `probe_voz02_sip_inbound.sh` (K3/K4). As duas primeiras redações deste
 #        probe erraram a lista:
 #          (a) o canal não está provisionado (Arc 15) — resolve-se por DEPLOY;
@@ -152,8 +153,9 @@ if "masked_input" in tabela.get("voice", set()):
         ("coleta desfeita quando alguem entra (_media_hold_intrusion)", "_media_hold_intrusion" in gw),
         ("rota de token fechada na pausa (get_token levanta MaskedCollectInProgress)",
          _levanta(GW_WEBRTC, "get_token", "MaskedCollectInProgress")),
-        ("recusa da perna Twilio (VoiceChannelRouter.deliver_menu)",
-         "RECUSADO na perna Twilio" in io.open(GW_ROUTER, encoding="utf-8").read()),
+        ("roteador de voice so entrega a perna SIP (VoiceChannelRouter sem legado)",
+         "_legacy" not in io.open(GW_ROUTER, encoding="utf-8").read()
+         and "NAO entregue" in io.open(GW_ROUTER, encoding="utf-8").read()),
         ("NIV-08 no schema (masked + input voice recusado)",
          "menu mascarado não aceita input voice" in io.open(SKILL, encoding="utf-8").read()),
     ) if not ok]
@@ -161,7 +163,7 @@ if "masked_input" in tabela.get("voice", set()):
         print("ERRO|E|`voice` declara masked_input SEM: %s — declaracao sem mecanismo" % "; ".join(falta))
     else:
         print("OK|E|voice declara masked_input COM os 6 mecanismos (pausa, liberacao, intrusao, "
-              "token fechado, recusa Twilio, NIV-08) — comportamento: probe_voz02_sip_inbound K3/K4")
+              "token fechado, so perna SIP, NIV-08) — comportamento: probe_voz02_sip_inbound K3/K4")
 else:
     quem = sorted(ch for ch, cs in tabela.items() if "masked_input" in cs)
     print("OK|E|masked_input so em %s; voice fora" % quem)

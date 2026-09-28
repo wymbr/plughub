@@ -90,7 +90,7 @@ com `option_tree.note_dropped_descriptions` (uma linha INFO por menu, só quando
 | webchat / WebRTC no browser | segunda linha no botão/checkbox (o widget desenha) |
 | WhatsApp lista (4–10) | `description` da linha, cortada em 72 (teto do provider = do autor) |
 | WhatsApp botões (≤3), texto (>10) | descarte nomeado |
-| SMS · e-mail · voz Twilio · telefone SIP | descarte nomeado |
+| SMS · e-mail · telefone SIP | descarte nomeado |
 
 ⚠️ `examples` nunca chega aqui: é do classificador. O Zod do `notification_send` já o remove.
 Gate: `infra/test/probe_orq15_option_description.sh`.

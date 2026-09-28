@@ -4,9 +4,9 @@ test_call_relay.py — WCH-12: com DUAS réplicas, a chamada é atendida por que
 As proposições, cada uma com o controle ao lado:
 
   * SAÍDA — mensagem de uma chamada consumida pela réplica que NÃO a segura chega à dona, e só a
-    ela (a réplica que consumiu não fala, e o legado Twilio não recebe); a ordem do Kafka é a
-    ordem na dona mesmo com o Redis respondendo fora de ordem. Controle: sessão sem dona é
-    entregue localmente, como antes (o `voice` legado segue funcionando).
+    ela (a réplica que consumiu não fala); a ordem do Kafka é a
+    ordem na dona mesmo com o Redis respondendo fora de ordem. Controle: sessão sem dona fica
+    na réplica que consumiu, e o roteador de `voice` a recusa DITO (VOZ-03 aposentou o legado).
   * CHAT — no contato de chat, o chat é entregue por quem consumiu e só a FALA vai à dona da
     chamada presa a ele.
   * WEBHOOK — o `participant_left` de uma sala SIP que chega à outra réplica desliga a chamada na
@@ -95,12 +95,10 @@ class _Replica:
         self.falas: list[str] = []
         assert hasattr(WebRTCAdapter, "_speak")
         self.ad._speak = lambda s, t, played=None: self.falas.append(t)
-        self.legado = MagicMock()
-        self.legado.deliver_text = AsyncMock()
         self.chat = MagicMock()
         self.chat.deliver_text = AsyncMock()
         self.consumer = OutboundConsumer(
-            adapters={"voice": VoiceChannelRouter(self.ad, self.legado), "webrtc": self.ad,
+            adapters={"voice": VoiceChannelRouter(self.ad), "webrtc": self.ad,
                       "webchat": self.chat},
             settings=MagicMock(tenant_id="t"), relay=self.relay)
         self.escuta: asyncio.Task | None = None
@@ -142,7 +140,7 @@ class TestSaida:
         await b.consumer._dispatch(_texto(sid, "Ola, em que posso ajudar?"))
         await _ate(lambda: a.falas)
         assert a.falas == ["Ola, em que posso ajudar?"]
-        assert b.falas == [] and b.legado.deliver_text.await_count == 0
+        assert b.falas == []
 
     async def test_ordem_do_kafka_e_a_ordem_na_dona(self, duas):
         hub, a, b = duas
@@ -155,11 +153,13 @@ class TestSaida:
         await _ate(lambda: len(a.falas) == len(frases))
         assert a.falas == frases
 
-    async def test_sem_dona_entrega_local_como_antes(self, duas):
+    async def test_sem_dona_fica_local_e_e_recusada_dita(self, duas, caplog):
         hub, a, b = duas
-        await b.consumer._dispatch(_texto("sessao-twilio", "oi"))
-        await _ate(lambda: b.legado.deliver_text.await_count == 1)
-        assert a.falas == [] and a.legado.deliver_text.await_count == 0
+        caplog.set_level(logging.WARNING)
+        await b.consumer._dispatch(_texto("sessao-sem-sala", "oi"))
+        await _ate(lambda: "NAO entregue" in caplog.text)     # a entrega corre numa task
+        assert "sessao-sem-sala" in caplog.text
+        assert a.falas == [] and b.falas == []
 
     async def test_dona_local_nao_passa_pelo_redis(self, duas):
         hub, a, b = duas

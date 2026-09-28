@@ -6,7 +6,7 @@ As proposições, cada uma com o controle ao lado:
   * CHEGADA — participante SIP na sala do nosso prefixo vira contato `voice`, endereçado pelo número
     DISCADO; o que não é chamada nossa (bot, agente, sala alheia) não vira nada. Número sem endpoint
     é RECUSADO (a sala cai), nunca roteado para um pool default. Webhook repetido não abre dois.
-  * SAÍDA — o canal `voice` entrega à sessão SIP pelo adapter WebRTC e o resto ao legado Twilio; o
+  * SAÍDA — o canal `voice` entrega à sessão SIP pelo adapter WebRTC e recusa o resto, dito (VOZ-03); o
     texto da IA é FALADO e o texto que o telefone não pode ouvir é DITO no log.
   * FIM — o chamador desligando fecha como `customer_hangup`; a plataforma encerrando derruba a
     chamada. Os dois publicam `contact_closed` com canal `voice`.
@@ -191,17 +191,27 @@ class TestSaida:
         await ad.on_livekit_event("participant_joined", SALA, PARTICIPANTE)
         return ad, producer, next(iter(ad._sip))
 
-    async def test_roteador_manda_a_sessao_sip_ao_adapter_webrtc_e_o_resto_ao_legado(self, monkeypatch):
+    async def test_roteador_manda_a_sessao_sip_ao_adapter_webrtc_e_recusa_o_resto_dito(self, monkeypatch, caplog):
+        """VOZ-03: sem legado Twilio, a saída de `voice` fora da perna SIP não tem destino — e é dita."""
         ad, _, sid = await self._sessao(monkeypatch)
         assert hasattr(WebRTCAdapter, "deliver_text")
         ad.deliver_text = AsyncMock()
-        legado = AsyncMock()
-        legado.handle_collect_event = "do-legado"
-        r = VoiceChannelRouter(ad, legado)
+        r = VoiceChannelRouter(ad)
         await r.deliver_text({"session_id": sid})
-        await r.deliver_text({"session_id": "sessao-twilio"})
-        assert ad.deliver_text.await_count == 1 and legado.deliver_text.await_count == 1
-        assert r.handle_collect_event == "do-legado"       # o resto segue sendo do legado
+        with caplog.at_level(logging.WARNING):
+            await r.deliver_text({"session_id": "sessao-sem-sala"})
+        assert ad.deliver_text.await_count == 1
+        assert "NAO entregue" in caplog.text and "sessao-sem-sala" in caplog.text
+        # `voice` não faz coleta ativa: o consumidor de collect.events o recusa nomeando (VOZ-33)
+        assert not hasattr(r, "handle_collect_event")
+
+    async def test_session_closed_depois_da_chamada_nao_e_alarme(self, monkeypatch, caplog):
+        ad, _, _ = await self._sessao(monkeypatch)
+        r = VoiceChannelRouter(ad)
+        with caplog.at_level(logging.INFO):
+            await r.deliver_session_closed({"session_id": "ja-desligou"})
+        linhas = [x for x in caplog.records if "ja-desligou" in x.getMessage()]
+        assert linhas and all(x.levelno == logging.INFO for x in linhas)
 
     async def test_fala_da_ia_e_falada_e_texto_humano_e_dito(self, monkeypatch, caplog):
         ad, _, sid = await self._sessao(monkeypatch)
@@ -654,13 +664,14 @@ class TestColetaMascaradaNoTelefone:
         assert sid not in ad._collects and "NIV-08" in caplog.text
         assert ad._provider.participants_removed == []           # nada de pausa para o que não coleta
 
-    async def test_perna_twilio_recusa_menu_mascarado(self, caplog):
-        legado = AsyncMock()
+    async def test_menu_fora_da_perna_sip_nao_vai_a_lugar_nenhum(self, caplog):
+        """VOZ-03: sem legado, menu (mascarado ou não) de sessão que não é SIP não é entregue a ninguém."""
         sip = AsyncMock()
         sip.is_sip_session = lambda sid: False
-        r = VoiceChannelRouter(sip, legado)
-        with caplog.at_level(logging.ERROR):
+        r = VoiceChannelRouter(sip)
+        with caplog.at_level(logging.WARNING):
             await r.deliver_menu({"session_id": "tw1", "menu_id": "m", "masked": True, "masked_fields": ["pin"]})
-        assert legado.deliver_menu.await_count == 0 and "RECUSADO na perna Twilio" in caplog.text
-        await r.deliver_menu({"session_id": "tw1", "menu_id": "m"})   # controle: menu comum segue
-        assert legado.deliver_menu.await_count == 1
+        assert sip.deliver_menu.await_count == 0 and "NAO entregue" in caplog.text
+        sip.is_sip_session = lambda sid: True                        # controle: sessão SIP recebe
+        await r.deliver_menu({"session_id": "tw1", "menu_id": "m"})
+        assert sip.deliver_menu.await_count == 1

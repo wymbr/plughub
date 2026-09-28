@@ -72,7 +72,7 @@ backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · `A
 
 ### Fase 2 — canais confiáveis
 
-- **Voz:** `VOZ-45` · `VOZ-20` · `VOZ-03` (recomendação: aposentar o legado Twilio; o SIP já funciona) ·
+- **Voz:** `VOZ-45` · `VOZ-20` · ~~`VOZ-03`~~ (legado Twilio aposentado em 2026-09-28) ·
   `VOZ-46` (bot em workers) · `VOZ-47` (STT/TTS dimensionado e transbordo) · `VOZ-48` (transcrição
   offline) · `VOZ-49` (LiveKit, egress, coturn) · `VOZ-34` (P1).
 - **WhatsApp:** `PID-22` · `WHA-01` · `USG-03` (P1).
@@ -102,7 +102,7 @@ do Redis, broker) sem perder conversa — e o piloto.
 
 ## 5. Prioridade das fichas existentes
 
-**P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, `VOZ-03`, `VOZ-20`, `PID-22`, `WCH-03`, `ALW-18`, ~~`DUR-01`~~ (fechada 2026-09-28),
+**P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, `ALW-18`, ~~`DUR-01`~~ (fechada 2026-09-28),
 `SFS-01`, `PRM-04`, `CAP-10`, `CAP-15`, `AUT-20`, `AUT-58`, `AUD-03`.
 
 **P1 — necessário nos primeiros meses:** `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,
@@ -123,5 +123,5 @@ já no piloto — com a meta de 80% de IA na voz, provavelmente será.
 (`QIN-*`, `QSI-01`, `EVM-02`); higiene e docs (`DOC-*`, `PUI-01`, `AUT-09/28/29`, `SCH-02`).
 
 **Fora de escopo com instância dedicada:** `CNS-14`, `CNS-16`, `AUT-22`, `AUT-32` (multi-inquilino) — a
-reabrir se o modelo SaaS voltar à mesa; `PRC-01` a revisar no modelo dedicado. Caem se a `VOZ-03`
-aposentar o Twilio: `NIV-16`, `VOZ-30`.
+reabrir se o modelo SaaS voltar à mesa; `PRC-01` a revisar no modelo dedicado. Caíram com a `VOZ-03`
+(Twilio aposentado em 2026-09-28): `NIV-16`, `VOZ-30`.

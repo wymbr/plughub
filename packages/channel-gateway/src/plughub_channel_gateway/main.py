@@ -32,7 +32,6 @@ from pydantic import BaseModel
 
 from .adapters.email import EmailAdapter
 from .adapters.sms import SMSAdapter
-from .adapters.voice import VoiceAdapter
 from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
 from .adapters.webhook import ResumeAlreadyTerminalError, WebhookAdapter
@@ -120,7 +119,6 @@ _attachment_store:   FilesystemAttachmentStore | S3AttachmentStore | None = None
 _whatsapp_adapter:   WhatsAppAdapter                      | None = None
 _sms_adapter:        SMSAdapter                           | None = None
 _email_adapter:      EmailAdapter                         | None = None
-_voice_adapter:      VoiceAdapter                         | None = None
 _webrtc_adapter:     WebRTCAdapter                        | None = None
 _webhook_adapter:    WebhookAdapter                       | None = None
 # APR-10: a rota de encerramento por parque durável consulta o Postgres. O pool
@@ -167,7 +165,7 @@ def _create_attachment_store(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter, _sms_adapter, _email_adapter, _voice_adapter, _webrtc_adapter, _webhook_adapter
+    global _producer, _registry, _context, _redis, _attachment_store, _whatsapp_adapter, _sms_adapter, _email_adapter, _webrtc_adapter, _webhook_adapter
 
     settings    = get_settings()
     instance_id = str(uuid.uuid4())
@@ -264,12 +262,6 @@ async def lifespan(app: FastAPI):
         settings         = settings,
         attachment_store = _attachment_store,
     )
-    _voice_adapter = VoiceAdapter(
-        producer         = _producer,
-        redis            = _redis,
-        settings         = settings,
-        attachment_store = _attachment_store,
-    )
     _webrtc_adapter = WebRTCAdapter(
         producer         = _producer,
         redis            = _redis,
@@ -306,9 +298,9 @@ async def lifespan(app: FastAPI):
         "whatsapp": _whatsapp_adapter,
         "sms":      _sms_adapter,
         "email":    _email_adapter,
-        # VOZ-02: `voice` tem duas pernas — a SIP (sessão do adapter WebRTC, a sala) e o legado
-        # Twilio. A saída vai para quem ABRIU a sessão; ver `adapters/voice_router.py`.
-        "voice":    VoiceChannelRouter(_webrtc_adapter, _voice_adapter),
+        # VOZ-02/VOZ-03: `voice` é a perna SIP — a sessão é do adapter WebRTC (a sala). O legado
+        # Twilio (TwiML) foi aposentado; ver `adapters/voice_router.py`.
+        "voice":    VoiceChannelRouter(_webrtc_adapter),
         "webrtc":   _webrtc_adapter,
         "webhook":  _webhook_adapter,
     }
@@ -404,9 +396,9 @@ async def lifespan(app: FastAPI):
             event's `requires[]` list against all registered adapter channels,
             then dispatches to the selected adapter.
 
-        For voice: VoiceAdapter.handle_collect_event() initiates an outbound call.
-        For other channels: the adapter's handle_collect_event() sends the collect
-        prompt as a message via the channel's native API.
+        The adapter's handle_collect_event() sends the collect prompt as a message via the
+        channel's native API. `voice` has none: the outbound call was the retired Twilio leg,
+        and the SIP one does not exist yet (VOZ-33).
 
         Note: Only collect.requested events require dispatch; collect.sent /
         collect.responded / collect.timed_out are purely for analytics and are
@@ -468,9 +460,13 @@ async def lifespan(app: FastAPI):
         if channel:
             adapter = adapters.get(channel)
             if adapter is None:
-                logger.debug(
-                    "collect.requested: no handle_collect_event for channel=%s — skipping",
-                    channel,
+                # Nunca em silêncio: quem pediu a coleta fica suspenso até o timeout do `collect`,
+                # e este log é o único lugar que diz por quê (ex.: `voice` desde a VOZ-03 —
+                # ligação ativa é a VOZ-33).
+                logger.error(
+                    "collect.requested: canal %s NÃO faz coleta ativa — nenhum adapter com "
+                    "handle_collect_event; a instância %s só sai pelo timeout do collect",
+                    channel, event.get("instance_id"),
                 )
                 return
             logger.info(
@@ -799,110 +795,6 @@ async def sms_inbound(request: Request) -> str:
     )
     # Twilio requires a TwiML response; empty <Response/> suppresses any callback action
     return "<Response/>"
-
-
-# ── Voice webhooks ────────────────────────────────────────────────────────────
-
-@app.post("/webhooks/voice/inbound", status_code=200)
-async def voice_inbound(request: Request):
-    """
-    Twilio voice inbound webhook.
-    Called on every new inbound (or answered outbound) call.
-    Returns TwiML XML that opens Media Streams + places customer in conference.
-    """
-    from fastapi.responses import Response as _Response
-    params    = dict(await request.form())
-    signature = request.headers.get("X-Twilio-Signature", "")
-    url       = str(request.url)
-
-    if _voice_adapter is None:
-        logger.error("voice_adapter not initialised")
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    twiml = await _voice_adapter.handle_inbound(
-        params=params, signature=signature, url=url
-    )
-    return _Response(content=twiml, media_type="text/xml")
-
-
-@app.post("/webhooks/voice/status", status_code=200)
-async def voice_status(request: Request) -> dict:
-    """
-    Twilio conference status callback.
-    Called on participant join / leave / end events.
-    Used to detect customer hangup and close the PlugHub session.
-    """
-    params = dict(await request.form())
-
-    if _voice_adapter is None:
-        logger.error("voice_adapter not initialised")
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    await _voice_adapter.handle_status(params)
-    return {"status": "ok"}
-
-
-@app.post("/webhooks/voice/recording", status_code=200)
-async def voice_recording(request: Request) -> dict:
-    """
-    Twilio recording status callback.
-    Called when a conference recording is complete and ready for download.
-    """
-    params = dict(await request.form())
-
-    if _voice_adapter is None:
-        logger.error("voice_adapter not initialised")
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    await _voice_adapter.handle_recording_complete(params)
-    return {"status": "ok"}
-
-
-@app.get("/voice/tts/{tts_id}")
-async def voice_tts(tts_id: str):
-    """
-    TTS snippet endpoint — called by Twilio to fetch <Say> TwiML.
-    Twilio hits this URL via conference.announce_url.
-    Returns TwiML <Response><Say>...</Say></Response> or 404.
-    """
-    from fastapi.responses import Response as _Response
-    if _voice_adapter is None:
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    twiml = await _voice_adapter.get_tts_twiml(tts_id)
-    if twiml is None:
-        raise HTTPException(status_code=404, detail="TTS snippet not found or expired")
-    return _Response(content=twiml, media_type="text/xml")
-
-
-@app.get("/voice/tts-audio/{tts_id}")
-async def voice_tts_audio(tts_id: str):
-    """
-    Deepgram Aura TTS audio endpoint.
-    Served when PLUGHUB_VOICE_TTS_PROVIDER=deepgram_aura.
-    Returns audio/mpeg bytes or 404.
-    """
-    from fastapi.responses import Response as _Response
-    if _voice_adapter is None:
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    audio = await _voice_adapter.get_tts_audio(tts_id)
-    if audio is None:
-        raise HTTPException(status_code=404, detail="TTS audio not found or expired")
-    return _Response(content=audio, media_type="audio/mpeg")
-
-
-@app.websocket("/voice/media")
-async def voice_media_ws(ws: WebSocket) -> None:
-    """
-    Twilio Media Streams WebSocket endpoint.
-    Twilio opens this connection after receiving the TwiML <Start><Stream> instruction.
-    Handles: audio STT, DTMF collect, segment recording via stream watcher.
-    """
-    if _voice_adapter is None:
-        await ws.close(code=1011)
-        return
-    await _voice_adapter.handle_media_ws(ws)
 
 
 # ── WebRTC signaling ──────────────────────────────────────────────────────────

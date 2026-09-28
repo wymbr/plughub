@@ -110,6 +110,19 @@ passa a ser **um `IVoiceProvider` entre outros — um tronco CPaaS**, para o cli
 central nem tronco SIP de operadora. É exatamente o papel para o qual a interface foi desenhada;
 o que estava errado era a implementação carregar o plano de mídia junto.
 
+> **Decidido pelo dono em 2026-09-28 (VOZ-03): o `IVoiceProvider` não sobreviveu — o legado
+> TwiML foi APOSENTADO.** O papel de *tronco CPaaS* que o parágrafo acima reservava ao Twilio já
+> é cumprido pela perna SIP: desde a VOZ-32 o Twilio entrega a chamada como **tronco SIP**
+> (`infra/sip/twilio_inbound.json`) na mesma sala, e nenhum código de Programmable Voice é
+> necessário para isso. Manter o `voice.py` exigiria dar a ele um ciclo de vida de sessão
+> próprio (os três métodos que ele chamava nunca existiram), ou seja, um **segundo** ciclo de
+> vida de chamada ao lado do da perna SIP. Saíram `voice.py`, `IVoiceProvider`/
+> `TwilioVoiceProvider`, o TTS `<Say>`/Aura, as rotas `/webhooks/voice/*` e `/voice/*` (a borda
+> publicável cai para seis prefixos) e as configs de TwiML; o `VoiceChannelRouter` entrega só à
+> perna SIP e diz o que não tem destino. **O que se perdeu:** ligação ativa pelo canal `voice`
+> (o `collect` de voz ia ao Twilio) — ela passa a ser só a `VOZ-33`, pela perna SIP; hoje um
+> `collect` com `channel: voice` é recusado com ERROR nomeando o canal.
+
 ### V3 — **Um único plano de mídia: a SALA.** Entrada por SIP ou por navegador; internamente, sempre a sala
 
 Uma sala por sessão (`plughub-{session_id}`), invariante herdado do Arc 15. A perna SIP entra na
