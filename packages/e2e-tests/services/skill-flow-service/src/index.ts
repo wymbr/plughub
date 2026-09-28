@@ -339,7 +339,14 @@ app.post("/execute", async (req: Request, res: Response) => {
     resume_context,
     session_token,
     deploy_version,
+    menu_wait,
   } = req.body as {
+    /**
+     * DUR-01 — como o `menu` espera o cliente. Ausente ou `block`: BLPOP dentro desta
+     * requisição (como sempre foi). `park`: o engine devolve `outcome: "awaiting_input"`
+     * e o bridge o acorda com a resposta. Quem decide é o bridge, pool a pool.
+     */
+    menu_wait?:      "block" | "park"
     /**
      * SFE-03 — `set_at` do slot `current` que o bridge resolveu AGORA. O engine o fixa
      * no nascimento; na retomada executa a versão fixada e devolve, em
@@ -396,6 +403,15 @@ app.post("/execute", async (req: Request, res: Response) => {
     res.status(400).json({
       error: "BAD_REQUEST",
       message: "tenant_id, session_id, customer_id, skill_id, and flow are required",
+    })
+    return
+  }
+  // Valor desconhecido é recusa nomeada, nunca "trata como block": um erro de digitação
+  // no bridge faria o pool que pediu `park` voltar a bloquear sem ninguém saber.
+  if (menu_wait !== undefined && menu_wait !== "block" && menu_wait !== "park") {
+    res.status(400).json({
+      error: "BAD_REQUEST",
+      message: `menu_wait must be "block" or "park", got ${JSON.stringify(menu_wait)}`,
     })
     return
   }
@@ -715,6 +731,7 @@ app.post("/execute", async (req: Request, res: Response) => {
       pipelineSessionId: pipeline_session_id,
       // Arc 19: resume context — when set, the suspended step follows its on_resume path
       ...(resume_context ? { resumeContext: resume_context as ResumeContext } : {}),
+      ...(menu_wait ? { menuWait: menu_wait } : {}),
     })
 
     if ("error" in result && result.error === "PRECONDITION_FAILED") {

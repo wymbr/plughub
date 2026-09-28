@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (4) — DUR-01 F1: o `menu` sabe estacionar em vez de bloquear
+
+**Por quê.** Cada conversa esperando o cliente num `menu` segurava, dentro do executor, uma
+requisição HTTP aberta, uma conexão Redis dedicada (`redis.duplicate()` por `/execute`), o lock
+renovado por até 4 h e um timer — ~3.000 recursos ociosos no alvo da v1. Desenho e decisões em
+`docs/adr/adr-menu-durable-park.md`.
+
+**O que mudou** (`packages/skill-flow-engine`, e `/execute` no skill-flow-service).
+
+- `run({ menuWait: "park" })` / corpo `menu_wait: "park"`: o menu manda o prompt, grava o
+  registro de espera (`{step}:__menu_wait__`: tentativas, reenvios fora da opção, prazo) e
+  devolve `outcome: "awaiting_input"`, com status `in_progress` e o `current_step_id` no menu.
+  Acordar é a retomada que já existia: o menu acha o registro, não reenvia o prompt e lê as
+  listas sem bloquear. Valor desconhecido em `menu_wait` é **400 nomeado**, nunca "trata como
+  block".
+- **Estacionar é atômico** (`PipelineStateManager.park`, um Lua): solta o lock e grava
+  `{t}:pipeline:{psid}:parked` + o prazo em `{t}:menu:deadlines` **só com todas as listas
+  vazias**. Sem isso, a resposta que chegasse entre a leitura e a soltura ficaria órfã: o
+  acordador bateria no lock (412) e desistiria.
+- `menu:waiting` fica de pé enquanto estacionado (o bridge e a voz dependem dele); `run()` não
+  solta o lock de novo depois de estacionar (com afinidade, apagaria o de quem acordou).
+- Dentro de `begin_transaction`, ou com escopo mascarado vivo, o menu **bloqueia** e loga —
+  esses valores só existem em memória.
+- `__menu_wait__` entrou nas sentinelas limpas pelo `addTransition`: revisitar o menu num ciclo
+  manda o prompt de novo.
+- A D3 do ADR (caixa por conversa) caiu antes de ser feita: com afinidade, a chave de hoje já é
+  estável.
+
+**Padrão `block`: nada em produção estaciona** até o bridge pedir (F2). Imagem do
+skill-flow-service reconstruída e no ar; `menu_wait: "parq"` responde 400; 15/15 sessões de
+webchat do harness em `flow_complete`.
+
+**Instrumento.** `src/__tests__/menu-park.test.ts`, contra **Redis real** (Lua atômico não se
+testa com mock sem Lua): estaciona · acorda sem reenviar · a corrida resposta × estacionamento ·
+prazo e fechamento · contadores entre execuções · ciclo · transação bloqueia · o Lua isolado
+(13 casos). Seis mutações, todas reprovam: Lua sem conferir a caixa (2), contador não
+persistido (1), sentinela fora da lista (1), `HDEL` mesmo estacionado (1), estacionar em
+transação (1), reenviar o prompt ao acordar (6). A M5 sobreviveu na primeira versão do teste —
+a resposta já estava na lista, e os dois modos a liam na hora; corrigido para a resposta chegar
+depois. Suíte do engine: 343/343. Roda com `packages/skill-flow-engine/scripts/test-with-redis.sh`;
+sem `REDIS_URL` a suíte aparece pulada.
+
 ## 2026-09-28 (3) — PRD-03: o `/execute` do bridge não tem mais teto escondido de 100 conversas
 
 **O defeito.** O bridge chama `POST {SKILL_FLOW_URL}/execute` com `ClientTimeout(total=None)`,

@@ -429,6 +429,8 @@ export class SkillFlowEngine {
      * Redis hash {tenant}:ctx:journey:{journeyId}. Overrides config.journeyId.
      */
     journeyId?:        string
+    /** DUR-01 — como o `menu` espera o cliente; ausente = `block` (BLPOP no processo). */
+    menuWait?:         "block" | "park"
   }): Promise<RunResult> {
     const { tenantId, sessionId, customerId, skillId, flow, sessionContext } = params
     const config            = params.config
@@ -454,6 +456,9 @@ export class SkillFlowEngine {
       return { error: "PRECONDITION_FAILED", active_job_id: activeJobId ?? "unknown" }
     }
 
+    // DUR-01 — o estacionamento já soltou o lock; soltá-lo de novo no `finally` apagaria
+    // o de quem acordou a conversa nesse meio-tempo, que tem o MESMO instance_id (afinidade).
+    let parked = false
     try {
       // SFE-03 — QUAL versão executa: a recebida (nascimento) ou a fixada (retomada).
       const run = await this._pinnedVersion({
@@ -470,13 +475,15 @@ export class SkillFlowEngine {
         ...(resumeContext ? { resumeContext } : {}),
         ...(segmentId ? { segmentId } : {}),
         ...(journeyId ? { journeyId } : {}),
+        ...(params.menuWait ? { menuWait: params.menuWait } : {}),
       })
+      parked = "outcome" in result && result.outcome === "awaiting_input"
       // A versão EXECUTADA sobe ao lançador: é ela que o segmento tem de carimbar,
       // não o `current` do pool, que numa retomada já pode ser outro.
       return "outcome" in result ? { ...result, deploy_version: run.deployVersion } : result
     } finally {
       // Libera apenas se ainda somos o titular do lock
-      await this.stateManager.releaseLock(tenantId, pipelineSessionId, instanceId)
+      if (!parked) await this.stateManager.releaseLock(tenantId, pipelineSessionId, instanceId)
     }
   }
 
@@ -594,8 +601,10 @@ export class SkillFlowEngine {
     journeyId?:        string
     /** SFE-03 — gravado no estado ao NASCER; ver `_pinnedVersion`. */
     pinnedVersion?:    string
+    menuWait?:         "block" | "park"
   }): Promise<RunResult> {
     const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, config, instanceId, resumeContext, segmentId } = params
+    const menuWait = params.menuWait ?? "block"
     // Arc 16 — `let`, não `const`: um step `invoke journey_merge` muda a raiz canônica
     // NO MEIO desta mesma execução (ex.: unificar_journey → retomar_resultado, dois
     // steps consecutivos do mesmo run). `_buildContext` roda de novo a CADA iteração
@@ -680,6 +689,7 @@ export class SkillFlowEngine {
         tenantId, sessionId, pipelineSessionId, customerId, sessionContext, state, stepMap, instanceId,
         maskedScope, transactionOnFailure ?? null, resumeContext, segmentId, journeyId, config,
       )
+      ctx.menuWait = menuWait
 
       // Executar step
       const result = await executeStep(currentStep, ctx)
@@ -799,6 +809,26 @@ export class SkillFlowEngine {
         return { outcome: "escalated_human", pipeline_state: escalatedState }
       }
 
+      // DUR-01 — o menu mandou o prompt e a caixa está vazia: estacionar e devolver.
+      // O `current_step_id` continua sendo o menu e o status continua `in_progress`,
+      // então acordar é a MESMA retomada que já existe para queda — o menu acha o
+      // próprio registro de espera e lê a caixa em vez de reenviar o prompt.
+      if (result.next_step_id === "__awaiting_input__" && result.park) {
+        const outcome = await this.stateManager.park(tenantId, pipelineSessionId, instanceId, result.park)
+        if (outcome === "input_pending") {
+          // Chegou resposta entre a olhada do menu e o estacionamento: roda o mesmo step.
+          continue
+        }
+        if (outcome === "lock_lost") {
+          // Outra execução tomou o pipeline (recuperação de queda): ela é a dona agora.
+          console.warn(
+            `[engine] DUR-01 session=${sessionId} step=${currentStep.id}: lock de outra ` +
+            `execução ao estacionar — esta sai sem estacionar`,
+          )
+        }
+        return { outcome: "awaiting_input", pipeline_state: state }
+      }
+
       // Arc 4: fluxo suspenso aguardando sinal externo
       if (result.next_step_id === "__suspended__") {
         const suspendedState = { ...state, status: "suspended" as const }
@@ -869,6 +899,8 @@ export class SkillFlowEngine {
         // state persisted under pipelineSessionId (may differ from sessionId in assist mode)
         await self.stateManager.save(tenantId, pipelineSessionId, s)
       },
+
+      unpark: () => self.stateManager.unpark(tenantId, pipelineSessionId),
 
       retryStep: async (stepId) => {
         const step = stepMap.get(stepId)

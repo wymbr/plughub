@@ -34,6 +34,29 @@ const JOB_KEY = (tenantId: string, sessionId: string, stepId: string) =>
 const PIN_KEY = (tenantId: string, sessionId: string) =>
   `${tenantId}:pipeline:${sessionId}:pinned`
 
+/**
+ * DUR-01 — o pipeline está ESTACIONADO num `menu`: nenhum processo o executa, e a
+ * resposta do cliente o acorda. Valor: `{step_id, instance_id, deadline_ms, parked_at}`.
+ * É o que o CrashDetector lê para NÃO confundir estacionado com caído (sem lock e sem
+ * flag de atividade, as duas coisas têm a mesma cara).
+ */
+const PARKED_KEY = (tenantId: string, sessionId: string) =>
+  `${tenantId}:pipeline:${sessionId}:parked`
+
+/** DUR-01 — prazos dos menus estacionados (score = deadline_ms, membro = pipeline_session_id). */
+export const MENU_DEADLINES_KEY = (tenantId: string) => `${tenantId}:menu:deadlines`
+
+export interface ParkRequest {
+  step_id:     string
+  /** Listas que acordam o menu; se alguma já tem item, NÃO estaciona. */
+  watch_keys:  string[]
+  /** null = espera sem prazo (`timeout_s` 0/-1) — não entra no ZSET. */
+  deadline_ms: number | null
+}
+
+/** Resultado de `park`: estacionou · chegou algo antes (roda de novo) · o lock era de outro. */
+export type ParkOutcome = "parked" | "input_pending" | "lock_lost"
+
 export interface PinnedVersion {
   skill_id:       string
   flow:           unknown
@@ -193,6 +216,68 @@ export class PipelineStateManager {
     )
   }
 
+  // ── DUR-01: estacionar a espera do menu ─────────────────────────────────────
+
+  /**
+   * Estaciona o pipeline: solta o lock e marca `parked` — **só se nenhuma lista
+   * observada tiver item**, num Lua só.
+   *
+   * O defeito que o Lua fecha: o menu olha a caixa vazia, a resposta chega, o
+   * acordador bate no lock ainda preso (412) e desiste, e então o lock é solto — a
+   * resposta fica na lista sem ninguém para lê-la, e o cliente espera para sempre.
+   * Com o teste e a soltura atômicos, ou o acordador acha o lock livre (e roda), ou
+   * quem segura o lock acha a resposta (e não estaciona). Não há terceira ordem.
+   */
+  async park(
+    tenantId:   string,
+    sessionId:  string,
+    instanceId: string,
+    req:        ParkRequest,
+  ): Promise<ParkOutcome> {
+    const lua = `
+      for i = 4, #KEYS do
+        if redis.call("llen", KEYS[i]) > 0 then return 0 end
+      end
+      if redis.call("get", KEYS[1]) ~= ARGV[1] then return -1 end
+      redis.call("del", KEYS[1])
+      redis.call("set", KEYS[2], ARGV[2], "EX", ARGV[5])
+      if ARGV[4] ~= "" then
+        redis.call("zadd", KEYS[3], ARGV[4], ARGV[3])
+      else
+        redis.call("zrem", KEYS[3], ARGV[3])
+      end
+      return 1
+    `
+    const parked = JSON.stringify({
+      step_id:     req.step_id,
+      instance_id: instanceId,
+      deadline_ms: req.deadline_ms,
+      parked_at:   new Date().toISOString(),
+    })
+    const r = await this.redis.eval(
+      lua, 3 + req.watch_keys.length,
+      LOCK_KEY(tenantId, sessionId), PARKED_KEY(tenantId, sessionId), MENU_DEADLINES_KEY(tenantId),
+      ...req.watch_keys,
+      instanceId, parked, sessionId,
+      req.deadline_ms === null ? "" : String(req.deadline_ms),
+      String(PIPELINE_TTL_SECONDS),
+    ) as number
+    return r === 1 ? "parked" : r === 0 ? "input_pending" : "lock_lost"
+  }
+
+  /** Acordou: sai do estacionamento e do ZSET de prazos (chamado com o lock na mão). */
+  async unpark(tenantId: string, sessionId: string): Promise<void> {
+    await this.redis.del(PARKED_KEY(tenantId, sessionId))
+    await this.redis.zrem(MENU_DEADLINES_KEY(tenantId), sessionId)
+  }
+
+  /** O registro de estacionamento, ou null. */
+  async getParked(tenantId: string, sessionId: string): Promise<Record<string, unknown> | null> {
+    const raw = await this.redis.get(PARKED_KEY(tenantId, sessionId))
+    if (!raw) return null
+    try { return JSON.parse(raw) as Record<string, unknown> } catch { return null }
+  }
+
   // ── job_id por step (idempotência do agent_delegate) ──────────────────────
 
   /** Retorna o job_id ativo para um step, ou null se não existe. */
@@ -275,6 +360,9 @@ export class PipelineStateManager {
     "__collect_response__", "__child_session_id__",
     // suspend
     "__send_at__",
+    // menu estacionado (DUR-01): sem esta limpeza, um menu revisitado num ciclo
+    // acharia o registro da visita anterior e NÃO mandaria o prompt de novo
+    "__menu_wait__",
   ] as const
 
   /**

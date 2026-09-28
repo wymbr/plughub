@@ -125,6 +125,35 @@ and the engine follows it instead of rewinding to the block's `on_failure`. Eith
 ends and the masked scope is discarded. A fallback to the menu's own `on_failure`, and a channel
 `aborted`, still rewind. Tests: `engine-transaction.test.ts` § NIV-19 (mutation-checked).
 
+### Park mode — `menuWait: "park"` (DUR-01 F1, 2026-09-28)
+
+With `run({ menuWait: "park" })` (body `menu_wait: "park"` on `/execute`), the menu does NOT
+block. It sends the prompt, finds the lists empty, saves a **wait record** in
+`results["{step}:__menu_wait__"]` (`attempt`, `fora`, `deadline_ms`) and returns
+`__awaiting_input__`. The engine then **parks** atomically (`PipelineStateManager.park`, one
+Lua): *only if every watched list is empty*, it deletes the lock, writes
+`{t}:pipeline:{psid}:parked` and adds the deadline to `{t}:menu:deadlines`; the run returns
+`outcome: "awaiting_input"` with status still `in_progress` and `current_step_id` on the menu.
+
+Waking is the resumption that already exists: `/execute` again → the menu finds its wait
+record → `unpark` → reads the lists **without blocking** (same priority as the BLPOP) → an
+answer is judged exactly as before; nothing → parks again; deadline passed → `on_timeout`.
+
+| Rule | Why |
+|---|---|
+| The Lua refuses to park if any list has an item (`input_pending` → the same step runs again) | otherwise an answer arriving between the read and the lock release would be orphaned: the waker gets 412 and nobody reads the list |
+| `menu:waiting` is NOT deleted while parked | the bridge routes replies and the voice leg decides collection from it |
+| Retry counters live in the wait record | an empty wake must not spend an attempt; three off-option answers across three runs still exhaust `OPTION_RESENDS` |
+| `__menu_wait__` is a sentinel cleared by `addTransition` | a menu revisited in a cycle must send its prompt again |
+| Inside `begin_transaction`, or with a live masked scope, the menu BLOCKS (logged) | `@masked.*` and the rewind target exist only in memory |
+| `run()` does not release the lock after parking | the park already did; with instance affinity the waker has the SAME `instance_id`, and a second release would delete its lock |
+| No activity flag / lock renewal while parked | no process is waiting; the CrashDetector must read `:parked` instead (F2) |
+
+Default is `block`; nothing sends `park` until the bridge does (F2). Tests against a REAL Redis:
+`src/__tests__/menu-park.test.ts` (13 cases, 6 mutations killed), run with
+`bash packages/skill-flow-engine/scripts/test-with-redis.sh` from inside WSL — without
+`REDIS_URL` that suite shows as SKIPPED. ADR: `docs/adr/adr-menu-durable-park.md`.
+
 ### Why multi-key BLPOP on both result and closed
 
 Without the `session:closed` key, a disconnect mid-wait would cause the BLPOP to run

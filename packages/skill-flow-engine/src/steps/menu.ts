@@ -37,6 +37,7 @@ import { interpolate, resolveVisibility, resolveInputValue } from "../interpolat
 import { resolveMaskedFields, isFieldMasked, isStepMasked } from "../masking-policy"
 import { redisKeys } from "../redis-keys"
 import { parseSignal } from "./signals"
+import { PipelineStateManager } from "../state"
 
 // ── Dialog primitive §17.3-2 — dynamic options/fields ─────────────────────────
 // options/fields may be a static array OR a string reference (e.g.
@@ -256,6 +257,26 @@ export function coerceMultiAnswer(raw: string, interaction: string): string | st
   return [raw]
 }
 
+/**
+ * DUR-01 — o que o menu estacionado precisa lembrar entre uma execução e a próxima.
+ * Mora em `pipeline_state.results`, como as sentinelas, e é limpo ao ENTRAR no step
+ * por transição (`addTransition`), nunca na retomada: a presença dele é o que diz
+ * "o prompt já foi, só leia a caixa".
+ */
+interface WaitRecord { attempt: number; fora: number; deadline_ms: number | null }
+
+export function waitRecordKey(stepId: string): string {
+  return `${stepId}:__menu_wait__`
+}
+
+function readWaitRecord(raw: unknown): WaitRecord | null {
+  if (!raw || typeof raw !== "object") return null
+  const r = raw as Record<string, unknown>
+  if (typeof r["attempt"] !== "number" || typeof r["fora"] !== "number") return null
+  const d = r["deadline_ms"]
+  return { attempt: r["attempt"], fora: r["fora"], deadline_ms: typeof d === "number" ? d : null }
+}
+
 export async function executeMenu(
   step: MenuStep,
   ctx:  StepContext
@@ -314,7 +335,30 @@ export async function executeMenu(
   const masked          = resolveMaskedFields(step.masked, resolvedFields, implicitFieldId)
   const maskedFieldIds  = masked.ids
 
-  try {
+  // ── DUR-01 — estacionar em vez de bloquear ─────────────────────────────────
+  // Com `park`, o menu não espera dentro do processo: grava o registro de espera e
+  // devolve a requisição; a resposta acorda o pipeline, que re-executa ESTE step. O
+  // registro diz que o prompt já foi, e carrega o que antes vivia só em memória
+  // (tentativas, reenvios fora da opção, prazo).
+  //
+  // Dentro de transação, ou com escopo mascarado vivo, continua bloqueando: `@masked.*`
+  // e o alvo de rebobinagem só existem em memória, e o invariante proíbe persisti-los.
+  const querEstacionar = ctx.menuWait === "park"
+  const escopoMascarado = Object.keys(ctx.maskedScope ?? {}).length > 0
+  const podeEstacionar = querEstacionar && ctx.transactionOnFailure == null && !escopoMascarado
+  if (querEstacionar && !podeEstacionar) {
+    console.info(
+      `[menu] DUR-01 ${step.id} BLOQUEIA em vez de estacionar: ` +
+      `${ctx.transactionOnFailure != null ? "dentro de begin_transaction" : "escopo mascarado vivo"} ` +
+      `(sessão ${ctx.sessionId})`,
+    )
+  }
+  const registro = podeEstacionar ? readWaitRecord(ctx.state.results[waitRecordKey(step.id)]) : null
+  // Acordou (resposta, prazo ou fechamento): sai do estacionamento antes de ler a caixa.
+  // Se a caixa estiver vazia, o `park` do engine marca de novo, atomicamente.
+  if (registro && ctx.unpark) await ctx.unpark()
+
+  if (!registro) try {
     // Sempre inclui o objeto menu para todas as interações.
     // bpm.ts (mcp-server-plughub) decide o tipo de evento Kafka:
     //   - interaction !== "text" → sempre menu.payload → interaction.request no webchat
@@ -433,7 +477,8 @@ export async function executeMenu(
   //    uma janela de crash recovery — abortar graciosamente evita que duas instâncias
   //    avancem o pipeline_state simultaneamente.
   // renewLock é opcional na interface — se não fornecido, assume que o lock está válido
-  const lockStillHeld = ctx.renewLock ? await ctx.renewLock(timeoutSec + 60) : true
+  // DUR-01: estacionando, ninguém espera com o lock na mão — nada a renovar.
+  const lockStillHeld = !podeEstacionar && ctx.renewLock ? await ctx.renewLock(timeoutSec + 60) : true
   if (!lockStillHeld) {
     // Outra instância assumiu o lock (crash recovery) — abortar sem erros
     return {
@@ -452,7 +497,9 @@ export async function executeMenu(
   let activityKey: string | null = null
   let activityRenewTimer: ReturnType<typeof setInterval> | null = null
 
-  if (ctx.instanceId) {
+  // DUR-01: estacionado não há processo vivo para sinalizar — o CrashDetector lê o
+  // `{t}:pipeline:{psid}:parked` (F2), não este flag.
+  if (ctx.instanceId && !podeEstacionar) {
     activityKey = redisKeys.activeInstance(ctx.tenantId, ctx.sessionId, ctx.instanceId)
     try {
       await ctx.redis.set(activityKey, "1", "EX", ACTIVITY_TTL_S)
@@ -477,11 +524,43 @@ export async function executeMenu(
   //      session:closed:{sessionId} — bridge faz LPUSH quando contact_closed chega
   //    timeout 0 no BLPOP = bloqueio indefinido (suporte nativo do Redis).
   //    Para menus infinitos, on_disconnect é a saída natural quando a sessão expira.
+  let estacionou = false
   try {
     const blpopTimeout = isInfinite ? 0 : timeoutSec
     let value: string
-    let attempt = 0
-    let foraDaOpcao = 0
+    // `attempt` = qual espera é esta (1 = a do prompt original). Só sobe depois de uma
+    // reoferta — no modo `park`, um acordar sem nada na caixa não pode gastar tentativa.
+    let attempt     = registro?.attempt ?? 1
+    let foraDaOpcao = registro?.fora ?? 0
+    let deadlineMs: number | null = registro
+      ? registro.deadline_ms
+      : (isInfinite ? null : Date.now() + timeoutSec * 1000)
+    const watchKeys = [resultKey, closedKey, signalKey]
+
+    // A próxima coisa que chegou para este menu. Bloqueando: BLPOP (null = prazo).
+    // Estacionando: leitura SEM bloqueio, na mesma ordem de prioridade do BLPOP; caixa
+    // vazia com prazo vencido é timeout, sem prazo vencido é "estacionar".
+    const proximo = async (): Promise<[string, string] | null | "park"> => {
+      if (!podeEstacionar) return ctx.redis.blpop(watchKeys, blpopTimeout)
+      for (const k of watchKeys) {
+        const v = await ctx.redis.lpop(k)
+        if (v !== null) return [k, v]
+      }
+      if (deadlineMs !== null && Date.now() >= deadlineMs) return null
+      return "park"
+    }
+
+    // Depois de reofertar: nova espera, com prazo inteiro, como o BLPOP faria.
+    const novaEspera = async (): Promise<boolean> => {
+      attempt++
+      if (podeEstacionar) {
+        deadlineMs = isInfinite ? null : Date.now() + timeoutSec * 1000
+        try { await ctx.redis.expire(waitingKey, timeoutSec + 10) } catch { /* não fatal */ }
+        return true
+      }
+      // Renova o lock antes de re-esperar (retries podem somar mais que timeout_s).
+      return ctx.renewLock ? ctx.renewLock(timeoutSec + 60) : true
+    }
     // Reofertar o MESMO menu (opções, campos, máscara e coleta iguais); só a mensagem pode mudar
     // (o `reprompt` do autor). Uma casa para os dois motivos de reoferta: formato e opção.
     const reofertar = async (message: string): Promise<boolean> => {
@@ -514,16 +593,18 @@ export async function executeMenu(
     // mesma superfície). Timeout, desconexão e interrupts de @mention saem direto.
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      attempt++
-      // Renova o lock antes de re-esperar (retries podem somar mais que timeout_s).
-      if (attempt > 1 && ctx.renewLock) {
-        const stillHeld = await ctx.renewLock(timeoutSec + 60)
-        if (!stillHeld) {
-          return { next_step_id: step.on_failure, transition_reason: "on_failure" }
+      const result = await proximo()
+
+      if (result === "park") {
+        const rec: WaitRecord = { attempt, fora: foraDaOpcao, deadline_ms: deadlineMs }
+        await ctx.saveState(PipelineStateManager.setResult(ctx.state, waitRecordKey(step.id), rec))
+        estacionou = true
+        return {
+          next_step_id:      "__awaiting_input__",
+          transition_reason: "on_success",
+          park:              { step_id: step.id, watch_keys: watchKeys, deadline_ms: deadlineMs },
         }
       }
-
-      const result = await ctx.redis.blpop([resultKey, closedKey, signalKey], blpopTimeout)
 
       if (result === null) {
         // Timeout — nenhuma resposta e nenhuma desconexão dentro de timeout_s
@@ -591,7 +672,7 @@ export async function executeMenu(
           return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
         // Reprompt na mesma superfície e espera de novo.
-        if (!(await reofertar(resolvedRetry!.reprompt))) {
+        if (!(await reofertar(resolvedRetry!.reprompt)) || !(await novaEspera())) {
           return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
         continue
@@ -623,7 +704,7 @@ export async function executeMenu(
           `[menu] resposta fora das opções em ${step.id} — reenviando o menu ` +
           `(${foraDaOpcao}/${limite}, ${fora.length} valor(es) recusado(s), sessão ${ctx.sessionId})`
         )
-        if (!(await reofertar(podeRetentar ? resolvedRetry!.reprompt : resolvedPrompt))) {
+        if (!(await reofertar(podeRetentar ? resolvedRetry!.reprompt : resolvedPrompt)) || !(await novaEspera())) {
           return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
         continue
@@ -724,17 +805,22 @@ export async function executeMenu(
 
 
   } finally {
-    // Remover este agente do hash de espera — HDEL em vez de DEL para não
-    // apagar entradas de outros agentes bloqueados na mesma sessão (cenário
+    // DUR-01: estacionado, o menu CONTINUA esperando — o bridge roteia a resposta e o
+    // gateway de voz decide a coleta pelo `menu:waiting`. Apagá-lo aqui deixaria a
+    // resposta sem destino (bridge: "(dropped)").
+    // Fora isso: remover este agente do hash de espera — HDEL em vez de DEL para
+    // não apagar entradas de outros agentes bloqueados na mesma sessão (cenário
     // de conferência com NPS + wrap-up paralelos).
-    try {
-      await ctx.redis.hdel(waitingKey, waitingField)
-    } catch {
-      // Non-fatal
+    if (!estacionou) {
+      try {
+        await ctx.redis.hdel(waitingKey, waitingField)
+      } catch {
+        // Non-fatal
+      }
     }
     // Remover flag de menu mascarado — o bridge usa essa flag para suprimir
     // o encaminhamento do valor ao agente humano; pode ser apagada agora.
-    if (step.masked) {
+    if (step.masked && !estacionou) {
       try {
         await ctx.redis.del(maskedKey)
       } catch {

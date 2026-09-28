@@ -11,6 +11,7 @@ import type {
   CatchStrategy,
 } from "@plughub/schemas"
 import type { IContextStore } from "./context-types"
+import type { ParkRequest } from "./state"
 
 import { executeTask }             from "./steps/task"
 import { executeChoice }           from "./steps/choice"
@@ -61,6 +62,21 @@ export interface StepContext {
 
   /** Redis client — used by menu step for BLPOP (awaiting customer reply) */
   redis:          Redis
+
+  /**
+   * DUR-01 — como o `menu` espera o cliente. `block` (padrão): BLPOP dentro do processo.
+   * `park`: devolve a requisição e é acordado pela resposta. Quem pede é o lançador
+   * (pool a pool); o step ainda BLOQUEIA dentro de transação ou com escopo mascarado
+   * vivo, porque esses valores só existem em memória.
+   */
+  menuWait?:      "block" | "park"
+
+  /**
+   * DUR-01 — o menu acordou de um estacionamento: apaga o `{t}:pipeline:{psid}:parked`
+   * e tira o pipeline do ZSET de prazos. Chamado pelo menu que achou o próprio registro
+   * de espera (todo acordar re-executa o menu, porque ele é o `current_step_id`).
+   */
+  unpark?():      Promise<void>
 
   /**
    * ContextStore unificado — acesso a @ctx.namespace.campo.
@@ -326,6 +342,11 @@ export interface StepResult {
    * Ausente ⇒ `false`: o rewind do bloco é o default, e isentar-se dele é algo que se AFIRMA.
    */
   declared_branch?:  boolean
+  /**
+   * DUR-01: com `next_step_id: "__awaiting_input__"`, o que o engine precisa para
+   * estacionar atomicamente — as listas que acordam o step e o prazo.
+   */
+  park?:             ParkRequest
   /** Outcome final — apenas steps complete */
   outcome?:          string
 }

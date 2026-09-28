@@ -77,6 +77,12 @@ transação o step bloqueia, e isso é logado, nunca escolhido em silêncio.
 
 ### D3 — A caixa de entrada é da CONVERSA, não da instância
 
+> ⚠️ **Dispensada pela P2 (2026-09-28), antes de ser implementada.** O defeito que ela fechava — a
+> resposta presa numa chave com o `instance_id` morto — nasce de a retomada vir por OUTRA instância.
+> Com afinidade, a retomada usa o MESMO `instance_id`, e `menu:result:{sid}:{iid}` já é estável: a
+> F1 manteve a chave de hoje e nenhum escritor precisou mudar. Vale reabrir só se a instância
+> deixar de ser fixa na conversa.
+
 Hoje a resposta vai para `menu:result:{sid}:{iid}` e se perde quando a instância morre. Estacionado,
 o destino é `menu:inbox:{psid}` (`psid` = `pipeline_session_id`, que já isola agentes de conferência,
 `main.py` `--seg--`). Todo escritor atual (bridge, mcp-server, routing-engine) continua fazendo
@@ -166,6 +172,11 @@ construção lógica do bootstrap, não CPU. (b) só faria sentido junto com a a
 ---
 
 ## Fases
+
+> **F1 entregue em 2026-09-28** (engine + `menu_wait` no `/execute`), com o padrão `block`: nada em
+> produção estaciona até a F2. Chaves como construídas: `{t}:pipeline:{psid}:parked` (o que a D8
+> lê) e `{t}:menu:deadlines` (o que a D6 varre). Detalhe em `packages/skill-flow-engine/CLAUDE.md`
+> § *Park mode*. A F0 (medir a linha de base) ficou para a rodada do `PRD-02` nas VMs.
 
 | fase | entrega | prova |
 |---|---|---|
