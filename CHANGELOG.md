@@ -1,5 +1,29 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (1) — CTX-14: cada tenant lê o próprio catálogo de mascaramento no engine
+
+**O defeito (achado lendo o código na MSK-05).** `skill-flow-engine/src/ctx-audit.ts` guardava
+`context_map` e `masking.types` em UMA variável de processo: o primeiro tenant a carregar definia,
+por 5 min, a política de todos — na leitura de contexto por plateia e, desde a MSK-05, na
+exibição da rede de texto livre. A carga em andamento e o aviso de catálogo indisponível também
+eram de processo: a falha do segundo tenant ficava calada depois da do primeiro. Com um tenant só
+no demo, nada ficava vermelho — o modo de falha era aplicar a política de um cliente ao dado de
+outro, sem erro em lugar nenhum.
+
+**O que mudou.**
+- `caches` e `carregando` são `Map` por tenant; o aviso de catálogo indisponível é por tenant
+  (e nomeia o tenant); o de `CONFIG_API_URL` ausente continua de processo, porque é fato do processo.
+- A entrada síncrona (`filtrarTextoLivre`, a rede sobre `$.pipeline_state.*`) recebe o `tenantId`
+  — o `interpolate` já o tinha em `ctx.tenantId` — e usa o catálogo DAQUELE tenant em cache,
+  mesmo vencido (é a política dele; a alternativa é a semeada). Sem nenhum, usa o semeado,
+  dispara a carga para as próximas leituras, e o log da rede diz qual catálogo valeu.
+
+**Testes** (`ctx-audit.test.ts`, 3 novos, cada um reprova contra o cache de processo): a mesma tag
+na mesma plateia sai `***4444` no tenant A e `***` no B; a rede síncrona começa pelo semeado no B
+e passa ao catálogo dele depois da carga, sem contaminar o A; o aviso de indisponível sai uma vez
+POR tenant, nomeando cada um. Suíte do engine: 325 em 24 arquivos. Mutação: 4 de 4 mortas (cache
+de processo, rede síncrona sem o tenant, sem disparo da carga, aviso de processo).
+
 ## 2026-09-25 (21) — MSK-07: o que o atendente digita no Console passa pela mesma máscara do message_send
 
 **O defeito.** A MSK-04 mascarou o texto de agente dentro da tool `message_send`, e o Console não

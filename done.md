@@ -388,6 +388,7 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | CTX-12 | A detecção separa CPF cru de telefone pelo dígito verificador (`detect_validator: cpf_dv` no catálogo), nos quatro motores, com gate de paridade | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (8) |
 | CTX-09 | O `invoke` sai cru e **não é gateado** — a última casa que citava o gate inexistente (`ctx-audience.ts`) passou a dizer isso | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (11) |
 | CTX-13 | O catálogo vivo passa a descrever a detecção que roda: `cpf` com o padrão de 11 dígitos crus e `detect_validator: cpf_dv` | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (16) |
+| CTX-14 | O cache de catálogos do engine (`ctx-audit.ts`) é por tenant — `context_map`, `masking.types` e o aviso de indisponível —, e a rede síncrona usa o catálogo do tenant da execução | 2026-09-28 | `CHANGELOG.md` § 2026-09-28 (1) |
 
 ## `docs/adr/adr-dialog-input-format-catalog.md` — catalogo de formatos de entrada
 

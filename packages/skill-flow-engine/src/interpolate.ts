@@ -73,7 +73,7 @@ export async function resolveRef(
   const bruto = resolveJsonPathRef(ref, ctx)
   if (!sitio) return bruto
   return filtrarTextoLivre(
-    bruto, sitio, ref, PipelineStateManager.chavesDeclaradas(ctx.state),
+    bruto, sitio, ref, PipelineStateManager.chavesDeclaradas(ctx.state), ctx.tenantId,
   )
 }
 

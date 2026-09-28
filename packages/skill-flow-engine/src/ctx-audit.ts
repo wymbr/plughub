@@ -48,14 +48,20 @@ const CONFIG_URL = process.env.CONFIG_API_URL ?? ""
 const TTL_MS     = 5 * 60_000
 
 interface Catalogos { mapa: Map<string, string>; tipos: DataTypeCatalog; em: number }
-let cache: Catalogos | null = null
-let carregando: Promise<Catalogos | null> | null = null
-let avisouIndisponivel = false
+// ⚠️ POR TENANT (CTX-14, 2026-09-28). Eram três variáveis de processo: o primeiro tenant a
+// carregar definia, por 5 min, o `context_map` e o `masking.types` de TODOS — a leitura por
+// plateia e, desde a MSK-05, a exibição da rede aplicariam a política de um tenant ao dado
+// de outro, sem erro em lugar nenhum. E o aviso de catálogo indisponível, que também era
+// de processo, calava a falha do segundo tenant depois da do primeiro.
+const caches     = new Map<string, Catalogos>()
+const carregando = new Map<string, Promise<Catalogos | null>>()
+let   avisouSemUrl = false                       // fato do PROCESSO: não há URL para ninguém
+const avisouIndisponivel = new Set<string>()     // fato do TENANT: o catálogo DELE não veio
 
 async function buscar(tenantId: string): Promise<Catalogos | null> {
   if (!CONFIG_URL) {
-    if (!avisouIndisponivel) {
-      avisouIndisponivel = true
+    if (!avisouSemUrl) {
+      avisouSemUrl = true
       // ⚠️ NOMEIA o que deixa de valer. "using default values" é a frase que
       // ninguém leu por meses no bridge, segundo o próprio CLAUDE.md — um aviso
       // que não diz qual capacidade caiu é ruído com cara de diligência.
@@ -83,10 +89,10 @@ async function buscar(tenantId: string): Promise<Catalogos | null> {
       em:    Date.now(),
     }
   } catch (e) {
-    if (!avisouIndisponivel) {
-      avisouIndisponivel = true
+    if (!avisouIndisponivel.has(tenantId)) {
+      avisouIndisponivel.add(tenantId)
       console.warn(
-        `[ctx-audit] catálogos indisponíveis (${String(e)}) — a AUDITORIA DE PLATEIA ` +
+        `[ctx-audit] catálogos indisponíveis tenant=${tenantId} (${String(e)}) — a AUDITORIA DE PLATEIA ` +
         "não roda nesta instância. O censo de runtime sairá VAZIO, e vazio aqui " +
         "significa 'não medimos', nunca 'nada a corrigir'."
       )
@@ -96,11 +102,31 @@ async function buscar(tenantId: string): Promise<Catalogos | null> {
 }
 
 async function catalogos(tenantId: string): Promise<Catalogos | null> {
-  if (cache && Date.now() - cache.em < TTL_MS) return cache
-  if (!carregando) {
-    carregando = buscar(tenantId).then(c => { if (c) cache = c; carregando = null; return c })
+  const atual = caches.get(tenantId)
+  if (atual && Date.now() - atual.em < TTL_MS) return atual
+  let pendente = carregando.get(tenantId)
+  if (!pendente) {
+    pendente = buscar(tenantId).then(c => {
+      if (c) { caches.set(tenantId, c); avisouIndisponivel.delete(tenantId) }
+      carregando.delete(tenantId)
+      return c
+    })
+    carregando.set(tenantId, pendente)
   }
-  return carregando
+  return pendente
+}
+
+/**
+ * Catálogo de tipos do tenant para a entrada SÍNCRONA (`filtrarTextoLivre`). Devolve o que
+ * já está em cache — mesmo vencido: é a política DESTE tenant, e a alternativa seria a
+ * semeada — e dispara a carga quando falta ou venceu, para as próximas leituras.
+ * `undefined` = nada carregado ainda para ele; a rede usa o semeado e o log diz.
+ */
+function tiposEmCache(tenantId: string | undefined): DataTypeCatalog | undefined {
+  if (!tenantId) return undefined
+  const c = caches.get(tenantId)
+  if (!c || Date.now() - c.em >= TTL_MS) void catalogos(tenantId)
+  return c?.tipos
 }
 
 // Uma linha por combinação distinta, por processo. Sem isto um contato de dez
@@ -271,6 +297,11 @@ export function filtrarTextoLivre(
    * vence, porque o permissivo degrada mudo.
    */
   declaradas?: ReadonlySet<string>,
+  /**
+   * O tenant da execução — de quem é o `masking.types` que dá a exibição da rede (CTX-14).
+   * Ausente, a rede usa o catálogo semeado, e o log dela diz isso.
+   */
+  tenantId?: string,
 ): unknown {
   try {
     if (valor === undefined || valor === null || valor === "") return valor
@@ -289,10 +320,10 @@ export function filtrarTextoLivre(
       return valor
     }
 
-    // Síncrona: usa o catálogo que a leitura de contexto já carregou; sem ele, o
-    // semeado — e o log da rede nomeia qual dos dois valeu.
+    // Síncrona: usa o catálogo DESTE tenant que já está em cache; sem ele, o semeado —
+    // e o log da rede nomeia qual dos dois valeu (CTX-14).
     return redeParaTextoLivre(valor, plateia, `${sitio.stepId ?? "?"}:${sitio.stepType} ${ref}`,
-                              cache?.tipos)
+                              tiposEmCache(tenantId))
   } catch (e) {
     console.warn(
       `[ctx-audit] FALHA na rede para ${ref} step=${sitio.stepId ?? "?"} (${String(e)}) — ` +
@@ -307,7 +338,7 @@ export function estadoAuditoriaCtx(): {
 } {
   return {
     configurado: !!CONFIG_URL,
-    catalogos_carregados: !!cache,
+    catalogos_carregados: caches.size > 0,
     achados: jaLogado.size,
   }
 }

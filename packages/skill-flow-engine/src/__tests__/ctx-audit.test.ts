@@ -156,3 +156,72 @@ describe("degradação — o valor passa CRU, e isso nunca é silencioso", () =>
     expect(warn.mock.calls.flat().join(" ")).toContain("indisponíveis")
   })
 })
+
+// ─── CTX-14 — o catálogo é POR TENANT ────────────────────────────────────────────
+// Era uma variável de processo: o primeiro tenant a carregar definia, por 5 min, a política
+// de todos. Cada caso aqui reprova contra aquele cache — é o que o torna instrumento.
+describe("CTX-14 — catálogos por tenant", () => {
+  const tiposCom = (cartao: string, fone: string) => ({ value: { types: [
+    { id: "credit_card", formato: {}, lgpd: "financeiro", mascara: { by_role: { operator: cartao } } },
+    { id: "phone",       formato: {}, lgpd: "contato",    mascara: { by_role: { operator: fone } } },
+  ] } })
+  const POR_TENANT: Record<string, unknown> = {
+    tenant_a: tiposCom("last_4", "last_4"),
+    tenant_b: tiposCom("full",   "full"),
+  }
+  const chamadas: string[] = []
+
+  function stubPorTenant(): void {
+    chamadas.length = 0
+    vi.stubGlobal("fetch", vi.fn(async (u: string) => {
+      const url = String(u)
+      chamadas.push(url)
+      const t = new URL(url).searchParams.get("tenant_id") ?? ""
+      if (!(t in POR_TENANT)) return { ok: false, status: 404, json: async () => ({}) }
+      return { ok: true, json: async () => (url.includes("context_map") ? MAPA : POR_TENANT[t]) }
+    }))
+  }
+
+  beforeEach(() => { process.env.CONFIG_API_URL = "http://cfg"; espiaWarn(); espiaInfo(); stubPorTenant() })
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); delete process.env.CONFIG_API_URL })
+
+  it("a mesma tag, na mesma plateia, sai com a política de CADA tenant", async () => {
+    const { filtrarLeituraCtx } = await carrega()
+    expect(await filtrarLeituraCtx("1111 2222 3333 4444", "session.numero_cartao", CLIENTE, "tenant_a"))
+      .toBe("***4444")
+    // Com o cache de processo, o B receberia a política do A (`***4444`).
+    expect(await filtrarLeituraCtx("1111 2222 3333 4444", "session.numero_cartao", CLIENTE, "tenant_b"))
+      .toBe("***")
+    // e cada catálogo foi pedido com o tenant dele
+    expect(chamadas.some(u => u.includes("tenant_id=tenant_a"))).toBe(true)
+    expect(chamadas.some(u => u.includes("tenant_id=tenant_b"))).toBe(true)
+  })
+
+  it("a rede síncrona usa o catálogo do tenant — e sem ele, o semeado, carregando o dele", async () => {
+    const { filtrarLeituraCtx, filtrarTextoLivre } = await carrega()
+    await filtrarLeituraCtx("x", "session.numero_cartao", CLIENTE, "tenant_a")   // aquece só o A
+    const fone = "fone (11) 98765-4321"
+    expect(filtrarTextoLivre(fone, CLIENTE, "$.pipeline_state.x", undefined, "tenant_a"))
+      .toBe("fone ***4321")
+    // B ainda não carregado: o semeado (`phone` = last_4), e a carga do B é disparada
+    expect(filtrarTextoLivre(fone, CLIENTE, "$.pipeline_state.x", undefined, "tenant_b"))
+      .toBe("fone ***4321")
+    await vi.waitFor(() =>
+      expect(filtrarTextoLivre(fone, CLIENTE, "$.pipeline_state.x", undefined, "tenant_b"))
+        .toBe("fone ***"))
+    // e o A não foi contaminado pelo B
+    expect(filtrarTextoLivre(fone, CLIENTE, "$.pipeline_state.x", undefined, "tenant_a"))
+      .toBe("fone ***4321")
+  })
+
+  it("o aviso de catálogo indisponível sai para CADA tenant, nomeando-o", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const { filtrarLeituraCtx } = await carrega()
+    await filtrarLeituraCtx("v", "session.numero_cartao", CLIENTE, "tenant_x")
+    await filtrarLeituraCtx("v", "session.numero_cartao", CLIENTE, "tenant_y")
+    const log = warn.mock.calls.map(c => String(c[0])).filter(l => l.includes("indisponíveis"))
+    expect(log).toHaveLength(2)
+    expect(log[0]).toContain("tenant=tenant_x")
+    expect(log[1]).toContain("tenant=tenant_y")
+  })
+})
