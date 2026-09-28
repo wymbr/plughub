@@ -87,7 +87,6 @@ class TestTranscricao(_Setup):
         (ev,), _ = self.adapter._publish_inbound.await_args
         assert ev["channel"] == "webchat" and ev["content_type"] == "audio_transcript"
         assert ev["contact_id"] == CONTACT and ev["content"]["text"] == "quero cancelar"
-        self.adapter._registry.append_message.assert_not_called()      # não vira histórico de chat
 
 
 class TestFalaDoChat(_Setup):

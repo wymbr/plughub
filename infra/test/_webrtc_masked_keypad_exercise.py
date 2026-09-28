@@ -189,16 +189,33 @@ async def main() -> None:
             await asyncio.sleep(2)
             r = aioredis.from_url("redis://redis:6379", decode_responses=True)
             try:
-                hist = [json.loads(x) for x in await r.lrange(f"session:{sid}:messages", 0, -1)]
                 stream = await r.xrange(f"session:{sid}:stream")
             finally:
                 await r.aclose()
-            cli = [h.get("text", "") for h in hist if h.get("author") == "customer"]
+            # ALW-18: o histórico do Console é PROJEÇÃO do stream (`console-history.ts`): mensagens
+            # do cliente pelo `content`, sem a fala transcrita. A lista `session:{sid}:messages`,
+            # que este ramo lia, saiu.
+            hist = []
+            for _eid, f in stream:
+                if f.get("type") != "message" or f.get("author_role") != "customer":
+                    continue
+                content = (json.loads(f.get("payload") or "{}").get("content") or {})
+                if content.get("type") == "audio_transcript":
+                    continue
+                hist.append({"author": "customer", "text": content.get("text") or ""})
+            cli = [h.get("text", "") for h in hist]
             forms = [t for t in cli if t.startswith("[Formulário: ")]
-            redig = [t for t in forms if EMAIL in t and '"senha": "••••••"' in t and '"codigo_2fa": "••••••"' in t]
+            # "Remove-se o VALOR, nunca o CAMPO": os dois mascarados viram `••••••` e o e-mail, que
+            # não é campo mascarado do form, continua PRESENTE e não é trocado por `••••••`. Desde a
+            # ALW-18 o histórico vem do stream, onde a rede de texto livre (MSK) exibe o e-mail pela
+            # máscara do catálogo (`p***@exemplo.com`) — mais estrito que a lista, que o mostrava
+            # inteiro. O que se julga é o campo, não a grafia da máscara de exibição.
+            redig = [t for t in forms
+                     if '"senha": "••••••"' in t and '"codigo_2fa": "••••••"' in t
+                     and '"email": "' in t and '"email": "••••••"' not in t]
             emit("OK" if (len(forms) >= 2 and len(redig) == len(forms)) else "FALHA", "H1",
-                 f"historico: {len(forms)} submissao(oes), {len(redig)} redigida(s) com e-mail visivel "
-                 f"(esperado >=2, todas)")
+                 f"historico: {len(forms)} submissao(oes), {len(redig)} redigida(s) com o campo e-mail "
+                 f"presente (esperado >=2, todas)")
             outras = [t for t in cli if not t.startswith("[Formulário: ")]
             emit("OK" if not outras else "FALHA", "H1",
                  f"historico: linhas do cliente fora das submissoes = {len(outras)} (texto livre e fala fora)")

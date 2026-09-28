@@ -30,7 +30,7 @@ import type { OperationalDeps }      from "./tools/operational"
 import { registerWorkQueueTools }    from "./tools/work_queue"
 import { checkPoolRegistered } from "./lib/pool-registered"
 import { lastPresenceEvent } from "./lib/stream-presence"
-import { projectStreamForConsole, mergeByTimestamp } from "./lib/console-history"
+import { projectStreamForConsole } from "./lib/console-history"
 import type { RawStreamEntry } from "./lib/console-history"
 import { listQueue, claimTask, releaseTask, listPendingWorkTasks, workTaskHolder } from "./lib/work-queue"
 import type { WorkTaskState } from "./lib/work-queue"
@@ -2352,11 +2352,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
     })
   })
 
-  // GET /conversation_history/:sessionId
-  // Returns the full ordered message list for a session.
-  // Written by channel-gateway (inbound via WebchatAdapter, outbound via OutboundConsumer).
-  // Key: session:{sessionId}:messages — Redis List (RPUSH, LRANGE).
-  // Each entry is a JSON-serialised ChatMessage { id, author, text, timestamp }.
+  // GET /api/conversation_history/:sessionId — ver a rota abaixo e `lib/console-history.ts`
+  // (projeção do stream canônico desde a ALW-18).
   /**
    * DRY-RUN do editor de DialogForm (2026-09-04) — veredicto + `render`.
    *
@@ -2413,31 +2410,21 @@ export async function startServer(config: ServerConfig): Promise<void> {
   app.get("/api/conversation_history/:sessionId", async (req: Request, res: Response) => {
     if (!requireJwtGrant(req.headers.authorization, "agent_assist", "atender", "read_only", res)) return
     const { sessionId } = req.params
-    let messages: Array<Record<string, unknown>>
-    try {
-      const raw = await redis.lrange(`session:${sessionId}:messages`, 0, -1)
-      messages  = raw.map(s => JSON.parse(s) as Record<string, unknown>)
-    } catch {
-      res.status(500).json({ error: "history_unavailable" })
-      return
-    }
-    // WCH-02 (2026-09-22): a chamada presa ao contato e a nota do supervisor vivem SÓ no stream.
-    // Sem esta projeção, recarregar o Console escondia a chamada em curso e as notas recebidas.
-    // Falha aqui NÃO derruba o histórico (a lista é o essencial): responde sem os dois, e diz.
+    // ALW-18 (2026-09-28): a conversa inteira é PROJEÇÃO do stream canônico — a lista
+    // `session:{sid}:messages` (segunda casa, seis escritores, divergente nos dois sentidos) saiu.
+    // Stream ilegível é 500 NOMEADO, nunca histórico vazio: o Console separa "não se sabe" de
+    // "não há" (`agent-assist/api.ts`), e um `[]` aqui seria o valor plausível de novo.
     try {
       const entries = await redis.xrange(`session:${sessionId}:stream`, "-", "+") as RawStreamEntry[]
       const proj    = projectStreamForConsole(entries)
       res.json({
         session_id:  sessionId,
-        messages:    mergeByTimestamp(messages, proj.supervisorNotes as unknown as Array<Record<string, unknown>>),
+        messages:    proj.messages,
         call_active: proj.callActive,
       })
     } catch (err) {
-      console.warn(
-        `[conversation_history] stream ILEGIVEL session=${sessionId}: ${String(err)} — histórico ` +
-        `sem as notas do supervisor e sem o estado da chamada`,
-      )
-      res.json({ session_id: sessionId, messages, stream_unavailable: true })
+      console.error(`[conversation_history] stream ILEGIVEL session=${sessionId}: ${String(err)}`)
+      res.status(500).json({ error: "history_unavailable", reason: "stream_unreadable" })
     }
   })
 

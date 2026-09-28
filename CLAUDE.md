@@ -580,9 +580,11 @@ Context Enrichment, `context_tags`, rotas de escopo)
 
 ## Canonical Stream
 
-`session:{id}:stream` is the single source of truth for all session events. **All XADD calls MUST go through `writeStreamEntry()`** in `lib/write-stream-entry.ts` — never call `redis.xadd()` directly. Exceções fora do TypeScript: o **`session_closed`** é escrito pelo orchestrator-bridge (`write_session_closed`, em todo canal, uma vez por sessão, antes do `conversations.session_closed` — VOZ-40); **`session_opened` não tem produtor**. *(A frase anterior atribuía os dois a um "Core `server.ts`" que não escreve nenhum: medido em 2026-09-21, zero `session_closed` em 30 dias de registro durável.)* Guarantees: `event_id` always present, `segment_id` always flat, `author_id`/`author_role` flat fields, Zod validation before write.
+`session:{id}:stream` is the single source of truth for all session events. **All XADD calls MUST go through `writeStreamEntry()`** in `lib/write-stream-entry.ts` — never call `redis.xadd()` directly. Exceções fora do TypeScript: o **`session_closed`** é escrito pelo orchestrator-bridge (`write_session_closed`, em todo canal, uma vez por sessão, antes do `conversations.session_closed` — VOZ-40); **`session_opened` não tem produtor**. *(A frase anterior atribuía os dois a um "Core `server.ts`" que não escreve nenhum: medido em 2026-09-21, zero `session_closed` em 30 dias de registro durável.)* O **`system_notice`** (aviso da plataforma ao cliente, hoje o de espera em fila muda) é escrito pelo routing-engine (`system_notice.py`, ALW-18). Guarantees: `event_id` always present, `segment_id` always flat, `author_id`/`author_role` flat fields, Zod validation before write.
 
 Messages carry `content` (masked) and `original_content` (unmasked, authorized roles only for LGPD audit).
+
+**O histórico do Console é PROJEÇÃO deste stream** (ALW-18, 2026-09-28; `mcp-server-plughub/src/lib/console-history.ts`). A lista `session:{id}:messages`, que ele lia, era uma segunda casa da conversa com seis escritores no gateway e divergia nos dois sentidos — nunca teve a fala do agente fora do webchat. Não reviver: fato de conversa que o Console precisa mostrar vai ao stream.
 
 ## Sentiment Tracking
 

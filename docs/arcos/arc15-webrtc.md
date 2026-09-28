@@ -655,7 +655,7 @@ webrtc_stt_enabled:         bool = True
 > | Console do humano (`agent:events`) | **não** — ele ouviu | **não** |
 > | cliente (`conversations.outbound`) | — | **não** — ele ouviu |
 > | steps `receive` (copiloto) | como hoje | **sim**, pelo mesmo `message_sent` do texto digitado |
-> | histórico de chat (`session:{id}:messages`) | **não** | **não** |
+> | histórico do Console (projeção do stream, ALW-18; era a lista `session:{id}:messages`) | **não** | **não** |
 >
 > Gate ao vivo: `infra/test/probe_webrtc_human_transcript.sh`. Ver `CHANGELOG.md` 2026-09-16 (3).
 

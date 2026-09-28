@@ -18,8 +18,6 @@ from typing import Callable, Awaitable
 
 import redis.asyncio as aioredis
 from fastapi import WebSocket
-from plughub_contextstore.loader import get_masking_catalog
-from plughub_contextstore.masking import mask_free_text
 
 logger = logging.getLogger("plughub.channel-gateway.sessions")
 
@@ -40,11 +38,6 @@ class SessionRegistry:
         self._ttl = ttl
         self._connections: dict[str, WebSocket] = {}
         self._started_at: dict[str, str] = {}
-        # Two-level dict: contact_id → { menu_id → [masked_field_ids] }
-        # Written by OutboundConsumer when delivering menu.payload with masked_fields.
-        # Read+cleared by WebchatAdapter._handle_menu_submit to redact sensitive values
-        # before they are stored in the conversation history visible to agents.
-        self._menu_masked_fields: dict[str, dict[str, list[str]]] = {}
 
     # ── Registration ──────────────────────────────────────────────────────
 
@@ -115,90 +108,6 @@ class SessionRegistry:
             except Exception:
                 pass
         logger.info("contact_id=%s connection closed by platform", contact_id)
-
-    # ── Conversation history ──────────────────────────────────────────────────
-
-    async def append_message(
-        self,
-        session_id: str,
-        message_id: str,
-        author:     str,
-        text:       str,
-        timestamp:  str,
-    ) -> None:
-        """
-        Append a message to the conversation history list for this session.
-
-        Key:    session:{session_id}:messages  (Redis List, RPUSH)
-        TTL:    same as session TTL (renewed on every append)
-        Format: { id, author, text, timestamp } — matches ChatMessage in agent-assist-ui.
-
-        Written by:
-          - WebchatAdapter._handle_text / _handle_menu_submit  → inbound (customer)
-          - OutboundConsumer._dispatch message.text branch      → outbound (agent_ai / agent_human)
-
-        Read by: mcp-server GET /conversation_history/:sessionId (LRANGE 0 -1)
-
-        ⚠️ MSK-06 (2026-09-25): esta lista é a aba de HISTÓRICO do Console — destino de
-        PESSOA — e recebia o texto do cliente em claro. Todo texto passa pela rede de texto
-        livre (`mask_free_text`, exibição do `by_role` do catálogo do tenant) no ÚNICO
-        escritor, então vale para os dois autores. Catálogo indisponível: `{}`, que esconde
-        (o loader loga). Não há original aqui: o original durável mora no stream.
-        """
-        catalogo = await get_masking_catalog(self._tenant_id)
-        text, _categorias = mask_free_text(text, catalogo)
-        entry = json.dumps({
-            "id":        message_id,
-            "author":    author,
-            "text":      text,
-            "timestamp": timestamp,
-        })
-        key = f"session:{session_id}:messages"
-        try:
-            await self._redis.rpush(key, entry)
-            await self._redis.expire(key, self._ttl)
-        except Exception as exc:
-            logger.warning(
-                "Failed to append message to history: session=%s — %s", session_id, exc
-            )
-
-    # ── Masked menu fields ────────────────────────────────────────────────────
-
-    def store_menu_masked_fields(
-        self,
-        contact_id:    str,
-        menu_id:       str,
-        masked_fields: list[str],
-    ) -> None:
-        """
-        Record which form fields are masked for a given menu interaction.
-        Called by OutboundConsumer when delivering a menu.payload that carries
-        masked_fields, so WebchatAdapter._handle_menu_submit can redact them
-        before writing to the agent-visible conversation history.
-        """
-        if contact_id not in self._menu_masked_fields:
-            self._menu_masked_fields[contact_id] = {}
-        self._menu_masked_fields[contact_id][menu_id] = list(masked_fields)
-        logger.debug(
-            "stored masked_fields for contact_id=%s menu_id=%s fields=%s",
-            contact_id, menu_id, masked_fields,
-        )
-
-    def pop_menu_masked_fields(self, contact_id: str, menu_id: str) -> list[str]:
-        """
-        Retrieve and remove the masked field list for a menu submission.
-        Returns an empty list if no masked fields were registered (non-masked menu
-        or if the key was already consumed by a previous submission).
-        One-shot: the entry is deleted after the first read.
-        """
-        contact_menus = self._menu_masked_fields.get(contact_id)
-        if not contact_menus:
-            return []
-        fields = contact_menus.pop(menu_id, [])
-        if not contact_menus:
-            # Clean up empty contact-level dict
-            self._menu_masked_fields.pop(contact_id, None)
-        return fields
 
     async def get_started_at(self, contact_id: str) -> str | None:
         return self._started_at.get(contact_id)

@@ -40,6 +40,7 @@ from .kafka_listener import run_listeners
 from .routing_config import routing_config, session_config
 from . import mute_queue
 from .menu_wake import publish_menu_wake
+from .system_notice import record_system_notice
 from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.routing")
@@ -994,22 +995,28 @@ async def _persist_queued_contact(
             f"session:{event.session_id}:contact_id"
         )
         contact_id = contact_id_raw or event.session_id
+        aviso      = routing_config.get("msg_queue_waiting")
+        aviso_id   = str(uuid.uuid4())
+        aviso_ts   = datetime.now(timezone.utc).isoformat()
+        # ALW-18: o histórico do Console é projeção do stream — o aviso vai a ele também, com o
+        # MESMO id, antes do canal. Falha é dita lá dentro e não impede o aviso ao cliente.
+        await record_system_notice(redis_client, event.session_id, aviso_id, aviso, aviso_ts)
         await producer.send(
             settings.kafka_topic_outbound,
             value={
                 "type":       "message.text",
                 "contact_id": contact_id,
                 "session_id": event.session_id,
-                "message_id": str(uuid.uuid4()),
+                "message_id": aviso_id,
                 "channel":    event.channel,
                 "direction":  "outbound",
                 "author":     {"type": "system", "id": "routing-engine"},
                 "content":    {
                     "type": "text",
-                    "text": routing_config.get("msg_queue_waiting"),
+                    "text": aviso,
                 },
-                "text":      routing_config.get("msg_queue_waiting"),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "text":      aviso,
+                "timestamp": aviso_ts,
             },
         )
     except Exception as exc:

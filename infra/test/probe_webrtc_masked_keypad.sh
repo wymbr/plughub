@@ -19,7 +19,7 @@
 #   A  a capacidade é declarada nas DUAS casas (TS canônico e gêmeo Python)
 #   M0 o deploy do skill mascarado num pool só-WebRTC é ACEITO (antes: 422)
 #   K1..K4, V1, V2 — exercício ao vivo (ver `_webrtc_masked_keypad_exercise.py`)
-#   H1 (no exercício, antes do fechamento) histórico (`session:{sid}:messages`): as duas submissões REDIGIDAS (e-mail visível,
+#   H1 (no exercício, antes do fechamento) histórico (projeção do stream, ALW-18): as duas submissões REDIGIDAS (e-mail visível,
 #      `••••••` nos mascarados) e NENHUMA outra linha do cliente (nem texto livre, nem fala)
 #   H2 stream canônico e H3 logs de cinco serviços sem nenhum dos valores
 #   V1 o gateway TRANSCREVEU a fala e a DESCARTOU — a linha prova que o bot ouviu; sem ela, a

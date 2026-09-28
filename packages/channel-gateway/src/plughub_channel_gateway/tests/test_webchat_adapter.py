@@ -528,7 +528,7 @@ class TestInboundTextMessages:
 
 class TestMenuSubmit:
     async def test_button_submit_published(
-        self, mock_producer, registry, context_reader, settings, mock_redis
+        self, mock_producer, registry, context_reader, settings, mock_redis, caplog
     ):
         msg = json.dumps({
             "type": "menu.submit", "menu_id": "menu-001",
@@ -536,7 +536,12 @@ class TestMenuSubmit:
         })
         ws = make_ws_mock([msg])
         adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
-        await adapter.handle()
+        with caplog.at_level("ERROR"):
+            await adapter.handle()
+        # ALW-18: o `except` largo do laço de recepção engole o erro do handler DEPOIS de publicar
+        # — um NameError no log de debug derrubava a conexão do cliente a cada resposta de menu e
+        # este teste seguia verde, porque o evento já tinha saído. O laço não pode registrar erro.
+        assert "unexpected error" not in caplog.text, caplog.text
 
         inbound_calls = [
             json.loads(c.kwargs["value"].decode())

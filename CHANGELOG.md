@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (9) — ALW-18: o histórico do Console é projeção do stream, e a lista paralela sai
+
+**Medido antes de consertar**, como a ficha pedia, nas 326 sessões vivas do demo. A lista
+`session:{sid}:messages`, que `GET /api/conversation_history` servia, divergia do stream canônico
+nos **dois** sentidos:
+- **tinha a mais:** duplicatas (a mesma resposta e o mesmo aviso duas vezes) e os avisos de sistema
+  da fila muda, que não iam ao stream;
+- **tinha a menos:** a fala da IA nas chamadas SIP e, ao olhar os escritores, muito mais que a ficha
+  dizia. Eram seis, espalhados por três adapters, e o **único** do lado da saída era o
+  `webchat_channel`. WhatsApp, SMS, e-mail e voz **nunca** mostraram no histórico o que o agente
+  disse. Nada disso ficava vermelho: a tela mostra menos conversa, e menos parece plausível.
+
+**Decisão do dono: uma casa só.**
+
+- **`console-history.ts` projeta a conversa inteira do stream**, na ordem dele:
+  - entram cliente, agente (humano pela instância `human-*`, a convenção da plataforma; nunca por
+    consulta ao Redis, porque no histórico a instância pode já não existir), supervisor e o aviso
+    de sistema;
+  - o texto é sempre o `content` mascarado, **nunca** o `original_content`;
+  - ficam de fora a fala transcrita (VOZ-05 fatia 4), o prompt de menu (a lista também nunca teve)
+    e a mensagem dirigida que não inclui o cliente, porque o histórico não sabe quem lê;
+  - a dirigida AO cliente (NPS) entra;
+  - stream ilegível responde **500 nomeado**, nunca `[]`.
+- **O aviso da plataforma vai ao stream como `system_notice`** (routing-engine, `system_notice.py`),
+  com o mesmo `message_id` do aviso ao canal. É tipo próprio, e não `message`, por dois motivos:
+  - o widget o recebe direto pelo WebSocket (render v2), e o `stream_subscriber` não entrega tipo
+    que não conhece, então não duplica;
+  - métrica que conta `message` não passa a contar aviso.
+  Falha ao gravar é dita e não impede o aviso ao cliente.
+- **Saíram**, porque só serviam à lista:
+  - os seis escritores e o `SessionRegistry.append_message`;
+  - o registro de campos mascarados por menu (`store`/`pop_menu_masked_fields`,
+    `_pending_masked_fields`);
+  - a gêmea `masked_field_echo`/`menu_result_history_text` do gateway;
+  - o `delete` da lista no bridge.
+
+  O `probe_masked_field_echo_parity` passou de três casas para **duas** (bridge, que grava no stream
+  o que o F5 mostra, e o eco otimista do Console). Os fallbacks de `session.ts` e dos e2e 09/10, que
+  leem a lista só quando o Redis não tem Streams, ficaram.
+
+**Dois defeitos meus que a medição pegou antes do fechamento**, ambos do mesmo tipo (variável que a
+remoção deixou órfã, e um `except` que engolia o `NameError`):
+- **toda resposta de menu no webchat derrubava a conexão.** O `masked_set` sobrou num log de debug
+  depois da publicação, e o `except` largo do laço de recepção engolia o erro. O evento já tinha
+  saído, e por isso os três testes de envio de menu seguiam verdes. Agora eles afirmam que o laço
+  **não registrou erro**, e reprovam com o defeito de volta (mutação conferida);
+- **o aviso de sistema no webchat era entregue e logado como falha** (`session_id` removido,
+  `NameError` no log de sucesso, `except` dizendo "could not deliver"). Teste novo.
+
+Os dois só apareceram porque rodei o fluxo ao vivo e varri os arquivos tocados em busca de nomes
+indefinidos; `compile()` não pega nenhum dos dois.
+
+**Medido ao vivo:**
+- **Conversa de webchat:** o histórico traz as respostas de menu e as duas falas da IA, e o texto
+  livre com telefone e CPF sai mascarado (`***4321`, `***25`), sem vazamento na resposta; sem
+  credencial, 401.
+- **Chamada SIP:** agora com a fala da IA, sem a fala transcrita do chamador, e com o PIN como
+  `[entrada mascarada]` (só agentes). A lista antiga não existe mais nas sessões novas.
+- **Aviso de sistema:** gravado pelo routing-engine e visto no histórico com autor `system`. O
+  acionamento pela fila muda não foi exercido ao vivo, porque nenhum probe monta esse cenário.
+- **Gates:**
+  - `probe_voz02_sip_inbound`, `probe_webrtc_masked_keypad` (H1 mudou de fonte, e o e-mail agora
+    aparece pela máscara do catálogo, mais estrito que a lista), `probe_masked_field_echo_parity`,
+    `probe_channel_capability_single_house` e `probe_adapter_self_calls`: verdes;
+  - `probe_mcp_rest_surface`: INCONCLUSIVO, porque pede `node`, que o WSL não tem.
+
+**Instrumentos:**
+- `console-history.test.ts`: 10 casos; as mutações "sem exclusão da fala transcrita" e "sem a
+  distinção humano × IA" reprovam.
+- `test_system_notice.py`: 3 casos.
+- Suítes: gateway 1 436, mcp-server 521 (tsc limpo), routing 156.
+
 ## 2026-09-28 (8) — VOZ-03: o legado Twilio (TwiML) sai, e o canal `voice` fica só com a perna SIP
 
 **Decisão do dono.** A VOZ-03 pedia os três métodos de ciclo de vida de sessão que o `voice.py`

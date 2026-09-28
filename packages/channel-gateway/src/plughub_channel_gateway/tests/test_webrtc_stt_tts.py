@@ -384,8 +384,8 @@ class TestSttpipeline:
         assert humano["author"] == {"type": "agent_human", "id": "human-sub-hum", "display_name": None}
         assert humano["content_type"] == cliente["content_type"] == "audio_transcript"
         assert humano["content"]["payload"]["confidence"] == 0.9
-        # nenhuma das duas falas entra no histórico de chat que o Console recarrega
-        adapter._registry.append_message.assert_not_called()
+        # as duas saem marcadas `audio_transcript` — é por essa marca que o histórico do Console
+        # (projeção do stream, ALW-18) as deixa de fora; a marca é o que se prova aqui
 
     @pytest.mark.asyncio
     async def test_voice_and_supervisor_tracks_are_not_transcribed(self):
@@ -1077,46 +1077,14 @@ def _inbound(producer) -> list[dict]:
             if c.args[0] == "conversations.inbound"]
 
 
-def _historico(adapter) -> list[str]:
-    return [c.kwargs["text"] for c in adapter._registry.append_message.call_args_list]
-
-
 def _waiting(masked_fields=None, masked=False) -> dict:
     return {"inst-1": json.dumps({"visibility": "all", "masked": masked,
                                   "masked_fields": masked_fields or [], "standby": False})}
 
 
-class TestMenuResultHistoryText:
-    """A casa única da linha de histórico — webchat e webrtc a consomem."""
-
-    def test_form_redacts_only_masked_fields(self):
-        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
-        t = menu_result_history_text("form", _FORM_RESULT, {"senha", "codigo_2fa"})
-        assert t == '[Formulário: {"email": "a@b.c", "senha": "••••••", "codigo_2fa": "••••••"}]'
-
-    def test_form_as_json_string_and_empty_masked_field(self):
-        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
-        t = menu_result_history_text("form", json.dumps({"email": "x", "senha": ""}), {"senha"})
-        assert t == '[Formulário: {"email": "x", "senha": ""}]'
-
-    def test_undecodable_form_never_falls_back_to_raw(self):
-        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
-        t = menu_result_history_text("form", "senha=135791", {"senha"})
-        assert "135791" not in t and t == "[Formulário: {}]"
-
-    def test_non_form_masked_redacts_everything(self):
-        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
-        assert menu_result_history_text("text", "135791", {"pin"}) == "[Entrada mascarada (pin): ••••••]"
-
-    def test_unmasked_passes(self):
-        from plughub_channel_gateway.adapters.webchat import menu_result_history_text
-        assert menu_result_history_text("button", "sim", set()) == "[Resposta: sim]"
-        assert menu_result_history_text("checklist", ["a", "b"], set()) == '[Resposta: ["a", "b"]]'
-
-
 class TestMaskedCapture:
     @pytest.mark.asyncio
-    async def test_menu_submit_publishes_real_value_and_redacted_history(self):
+    async def test_menu_submit_publishes_real_value_and_opens_masked_grace(self):
         adapter, redis, producer = _make_adapter()
         _abre(adapter)
         adapter._menu_masked[SESSION_ID] = {"m1": ["senha", "codigo_2fa"]}
@@ -1131,8 +1099,9 @@ class TestMaskedCapture:
         assert ev[0]["content"]["type"] == "menu_result"
         assert ev[0]["content"]["payload"] == {"menu_id": "m1", "interaction": "form", "result": _FORM_RESULT}
         assert ev[0]["author"]["type"] == "customer" and ev[0]["channel"] == "webrtc"
-        hist = _historico(adapter)
-        assert hist == ['[Formulário: {"email": "a@b.c", "senha": "••••••", "codigo_2fa": "••••••"}]']
+        # ALW-18: não há linha de histórico própria — quem grava a resposta REDIGIDA no stream
+        # (de onde o Console projeta o histórico) é o bridge, pelo `masked_field_echo`.
+        assert SESSION_ID in adapter._masked_grace_until       # a fala em voo não chega depois
         assert "m1" not in adapter._menu_masked[SESSION_ID]
 
     @pytest.mark.asyncio
@@ -1145,18 +1114,19 @@ class TestMaskedCapture:
                                         "interaction": "form", "result": _FORM_RESULT})])
         await adapter._receive_loop(ws, SESSION_ID)
 
-        assert "135791" not in _historico(adapter)[0] and "246802" not in _historico(adapter)[0]
-        assert '"email": "a@b.c"' in _historico(adapter)[0]
+        # a declaração do MOTOR diz que há campo mascarado, mesmo sem o registro do adapter
+        assert SESSION_ID in adapter._masked_grace_until
+        assert len(_inbound(producer)) == 1
 
     @pytest.mark.asyncio
-    async def test_menu_submit_with_nothing_known_redacts_whole_answer(self, caplog):
+    async def test_menu_submit_with_nothing_known_is_treated_as_masked(self, caplog):
         adapter, redis, producer = _make_adapter()
         _abre(adapter)
         with caplog.at_level("WARNING"):
             ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m-x",
                                             "interaction": "form", "result": _FORM_RESULT})])
             await adapter._receive_loop(ws, SESSION_ID)
-        assert "135791" not in _historico(adapter)[0] and "a@b.c" not in _historico(adapter)[0]
+        assert SESSION_ID in adapter._masked_grace_until       # restritivo, e dito
         assert "desconhecidos" in caplog.text
         assert len(_inbound(producer)) == 1
 
@@ -1169,8 +1139,8 @@ class TestMaskedCapture:
         ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m2",
                                         "interaction": "button", "result": "sim"})])
         await adapter._receive_loop(ws, SESSION_ID)
-        assert _historico(adapter) == ["[Resposta: sim]"]
         assert SESSION_ID not in adapter._masked_grace_until
+        assert _inbound(producer)[0]["content"]["payload"]["result"] == "sim"
 
     @pytest.mark.asyncio
     async def test_malformed_menu_submit_is_refused(self):
@@ -1178,7 +1148,7 @@ class TestMaskedCapture:
         _abre(adapter)
         ws = _ws_streaming([json.dumps({"type": "webrtc.menu_submit", "menu_id": "m1", "result": "x"})])
         await adapter._receive_loop(ws, SESSION_ID)
-        assert _inbound(producer) == [] and _historico(adapter) == []
+        assert _inbound(producer) == []
         erros = [c.args[0]["code"] for c in ws.send_json.call_args_list if c.args[0].get("type") == "conn.error"]
         assert erros == ["bad_message"]
 
@@ -1189,7 +1159,7 @@ class TestMaskedCapture:
         redis.hgetall = AsyncMock(return_value=_waiting(["senha"]))
         ws = _ws_streaming([json.dumps({"type": "webrtc.message", "text": "minha senha e 135791"})])
         await adapter._receive_loop(ws, SESSION_ID)
-        assert _inbound(producer) == [] and _historico(adapter) == []
+        assert _inbound(producer) == []
         erros = [c.args[0]["code"] for c in ws.send_json.call_args_list if c.args[0].get("type") == "conn.error"]
         assert erros == ["masked_capture_active"]
 
@@ -1227,7 +1197,7 @@ class TestMaskedCapture:
         redis.hgetall = AsyncMock(return_value=_waiting(["senha"]))
         with caplog.at_level("INFO"):
             await adapter._publish_transcript(SESSION_ID, "a senha e um tres cinco", 0.9, 0, 900)
-        assert _inbound(producer) == [] and _historico(adapter) == []
+        assert _inbound(producer) == []
         assert "tres cinco" not in caplog.text and "DESCARTADA" in caplog.text
         avisos = [c.args[0] for c in ws.send_json.call_args_list]
         assert avisos and avisos[0]["author"] == "system" and "protegido" in avisos[0]["text"]

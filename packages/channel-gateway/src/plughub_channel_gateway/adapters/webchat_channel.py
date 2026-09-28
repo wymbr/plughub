@@ -12,10 +12,12 @@ Note on the hybrid stream model
 ---------------------------------
 Webchat clients receive *text messages* and *interaction.request* events via
 their XREAD subscription on the canonical session stream — NOT from this
-class.  Therefore deliver_text() and deliver_menu() do NOT send to the
-WebSocket; they handle only the side-effects (history persistence and
-masked_fields bookkeeping respectively).  Typing indicators and session_closed
-DO use the WebSocket because they are not written to the stream.
+class.  Therefore deliver_text() and deliver_menu() do NOT send agent text or
+menus to the WebSocket (deliver_text sends only SYSTEM messages, which the
+widget's stream delivery does not map).  Typing indicators and session_closed DO
+use the WebSocket because they are not written to the stream.  The history list
+these methods used to maintain was retired in ALW-18 (2026-09-28): the Console
+history is a projection of the stream.
 """
 
 from __future__ import annotations
@@ -46,29 +48,20 @@ class WebchatChannelAdapter(ChannelAdapter):
 
     async def deliver_text(self, payload: dict) -> None:
         """
-        Persist the outbound text to conversation history.
-
         Webchat clients receive *agent* messages via their stream XREAD
         subscription (hybrid stream model), so no WebSocket send for those.
 
         Render v2 (queue-attended-model): SYSTEM messages (author.type ==
-        "system" — routing engine: aviso de espera em fila muda e afins) never
-        enter the canonical stream, so they are delivered directly via WS here.
-        No duplication risk: system messages have no stream counterpart.
+        "system" — routing engine: aviso de espera em fila muda e afins) are
+        delivered directly via WS here. Since ALW-18 the routing-engine also records
+        them in the stream as `system_notice` (for the Console history); the widget's
+        stream delivery does not map that type, so there is still no duplication.
         """
         session_id  = payload.get("session_id", "")
         text        = payload.get("text", "")
         message_id  = payload.get("message_id", "")
         author_type = payload.get("author", {}).get("type", "agent_ai")
         timestamp   = payload.get("timestamp", "")
-        if session_id and text:
-            await self._registry.append_message(
-                session_id = session_id,
-                message_id = message_id,
-                author     = author_type,
-                text       = text,
-                timestamp  = timestamp,
-            )
         if author_type == "system" and text:
             contact_id = payload.get("contact_id", "")
             try:
@@ -93,39 +86,16 @@ class WebchatChannelAdapter(ChannelAdapter):
 
     async def deliver_menu(self, payload: dict) -> None:
         """
-        Register masked_fields for the pending menu so WebchatAdapter can
-        redact sensitive values when the customer submits the form.
-
-        As with deliver_text, the actual interaction.request event reaches the
-        webchat client via the stream XREAD — no WebSocket send here.
+        Nothing to do: the interaction.request reaches the webchat client via the stream XREAD
+        (hybrid stream model). Until ALW-18 (2026-09-28) this recorded the menu's masked fields
+        so the history list could redact the answer; the list is gone — the Console history is a
+        projection of the stream, where the bridge already writes the answer redacted.
         """
-        contact_id    = payload.get("contact_id", "")
-        masked_fields: list[str] | None = payload.get("masked_fields") or None
-
-        if masked_fields and payload.get("channel", "webchat") != "webchat":
-            # Should not happen — OutboundConsumer routes by channel — but guard
-            # defensively.
-            logger.warning(
-                "deliver_menu called with masked_fields for non-webchat channel "
-                "contact_id=%s channel=%s",
-                contact_id, payload.get("channel"),
-            )
-            return
-
-        if masked_fields:
-            self._registry.store_menu_masked_fields(
-                contact_id, payload.get("menu_id", ""), masked_fields
-            )
-            logger.debug(
-                "stored masked_fields contact_id=%s menu_id=%s fields=%s",
-                contact_id, payload.get("menu_id"), masked_fields,
-            )
-        else:
-            logger.debug(
-                "menu.payload skipped registry.send for webchat (hybrid stream model) "
-                "contact_id=%s menu_id=%s",
-                contact_id, payload.get("menu_id"),
-            )
+        logger.debug(
+            "menu.payload skipped registry.send for webchat (hybrid stream model) "
+            "contact_id=%s menu_id=%s",
+            payload.get("contact_id", ""), payload.get("menu_id"),
+        )
 
     async def deliver_typing(self, payload: dict) -> None:
         """Send an agent.typing WebSocket frame to the customer."""

@@ -79,71 +79,6 @@ _CLAIM_SUB        = "sub"           # contact_id
 _CLAIM_SESSION    = "session_id"    # present on reconnect tokens
 _CLAIM_TENANT     = "tenant_id"
 
-_MASKED_FIELD_PLACEHOLDER = "••••••"
-_EMPTY_FIELD              = ""
-
-
-def masked_field_echo(value: object) -> str:
-    """O que aparece no lugar do valor de um campo mascarado.
-
-    **Remove-se o VALOR, nunca o CAMPO** (decisão do dono, 2026-09-10), e
-    preenchido difere de vazio:
-
-        preenchido → `••••••`   ·   vazio → `""`
-
-    ⚠️ **Gêmea deliberada** de `orchestrator_bridge.main.masked_field_echo`
-    e do ramo equivalente no `AgentAssistPage.tsx`. São três serviços — dois
-    Python que não se importam e um TypeScript —, então a concordância NÃO pode
-    ser por importação, e prometê-la em prosa é o defeito que este repositório
-    cataloga. Quem a impõe é `infra/test/probe_masked_field_echo_parity.sh`, que
-    roda as três contra a MESMA tabela de casos.
-
-    ⚠️ **`0` e `False` NÃO são vazios.** `if not x` marcaria um `0` digitado como
-    *"o cliente não preencheu"* — defeito de truthiness já catalogado.
-    """
-    if value is None:
-        return _EMPTY_FIELD
-    if isinstance(value, str):
-        return _EMPTY_FIELD if value.strip() == "" else _MASKED_FIELD_PLACEHOLDER
-    if isinstance(value, (list, dict, tuple, set)):
-        return _EMPTY_FIELD if len(value) == 0 else _MASKED_FIELD_PLACEHOLDER
-    return _MASKED_FIELD_PLACEHOLDER
-
-
-def menu_result_history_text(
-    interaction: str, result: object, masked_fields: set[str] | frozenset[str],
-) -> str:
-    """A linha de HISTÓRICO (`session:{sid}:messages`) de uma submissão de menu.
-
-    Uma casa para os canais que coletam por campo protegido — webchat e, desde a
-    VOZ-05, webrtc. Até ali o cálculo vivia dentro do `_handle_menu_submit` do webchat,
-    e um segundo canal teria de copiá-lo: duas redações da mesma submissão é como o
-    histórico passa a discordar do eco (o defeito que a `masked_field_echo` fechou).
-
-    Form com campo mascarado redige campo a campo; interação não-form com máscara
-    redige o resultado INTEIRO; sem máscara passa adiante. Resultado de form que não
-    se decodifica vira objeto vazio — nunca o texto cru, que é onde estaria o valor.
-    """
-    if interaction == "form" and masked_fields:
-        try:
-            result_dict: dict = (
-                json.loads(result)
-                if isinstance(result, str)
-                else dict(result) if isinstance(result, dict) else {}
-            )
-        except (json.JSONDecodeError, TypeError):
-            result_dict = {}
-        redacted = {
-            k: (masked_field_echo(v) if k in masked_fields else v)
-            for k, v in result_dict.items()
-        }
-        return f"[Formulário: {json.dumps(redacted, ensure_ascii=False)}]"
-    if masked_fields:
-        field_hint = sorted(masked_fields)[0]
-        return f"[Entrada mascarada ({field_hint}): {_MASKED_FIELD_PLACEHOLDER}]"
-    summary = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
-    return f"[Resposta: {summary}]"
-
 
 class AuthError(Exception):
     """Raised during the auth handshake with a structured code."""
@@ -204,10 +139,6 @@ class WebchatAdapter:
         # Participant ID do cliente — gerado no handshake, usado para visibility
         # baseada em array (ex: NPS visível apenas ao cliente, não ao agente humano)
         self._customer_participant_id: str = ""
-
-        # Cache masked_fields per menu_id so _handle_menu_submit can redact values.
-        # Populated when interaction.request with masked_fields is delivered to the client.
-        self._pending_masked_fields: dict[str, list[str]] = {}
 
         # Fase A (queue-attended-model): _close idempotency. close_from_platform
         # followed by the run-loop teardown used to publish contact_closed TWICE
@@ -630,15 +561,6 @@ class WebchatAdapter:
         )
         try:
             async for msg in subscriber.messages():
-                # Cache masked_fields so _handle_menu_submit can redact sensitive values
-                # before they are stored in the conversation history visible to agents.
-                if (
-                    msg.get("type") == "interaction.request"
-                    and msg.get("masked_fields")
-                    and msg.get("menu_id")
-                ):
-                    self._pending_masked_fields[msg["menu_id"]] = list(msg["masked_fields"])
-
                 try:
                     await self._ws.send_json(msg)
                 except Exception:
@@ -726,13 +648,6 @@ class WebchatAdapter:
             author           = MessageAuthor(type="customer"),
             content          = MessageContent(type="text", text=text),
             context_snapshot = snapshot,
-        )
-        await self._registry.append_message(
-            session_id = self._session_id,
-            message_id = event.message_id,
-            author     = "customer",
-            text       = text,
-            timestamp  = event.timestamp,
         )
         await self._publish_inbound(event.model_dump())
         logger.info(
@@ -875,43 +790,13 @@ class WebchatAdapter:
             context_snapshot = snapshot,
         )
 
-        # Build the agent-visible summary of the form submission.
-        # Masked fields (senha, PIN, OTP, etc.) must NEVER appear in the session stream
-        # or conversation history visible to agents — replace with "••••••".
-        #
-        # ⚠️ Esta lista é o que a TELA DE HISTÓRICO do Console relê: ela vai para
-        # `session:{sid}:messages`, servida por `GET /api/conversation_history`.
-        # O eco AO VIVO vem de outra casa (o bridge), e até 2026-09-10 as duas
-        # discordavam sobre a MESMA submissão — um F5 mudava o número de campos.
-        # A regra que as reconcilia é `masked_field_echo`: remove-se o VALOR,
-        # nunca o CAMPO, e preenchido difere de vazio.
-        #
-        # Primary source: SessionRegistry._menu_masked_fields, populated by
-        # OutboundConsumer when the menu.payload arrived from Kafka (correct path).
-        # Fallback: self._pending_masked_fields, populated by _stream_delivery_loop
-        # (legacy / edge-case path for menus that reach clients via stream).
-        masked_fields = (
-            self._registry.pop_menu_masked_fields(self._contact_id, msg.menu_id)
-            or self._pending_masked_fields.get(msg.menu_id, [])
-        )
-        masked_set    = set(masked_fields)
-
-        await self._registry.append_message(
-            session_id = self._session_id,
-            message_id = event.message_id,
-            author     = "customer",
-            text       = menu_result_history_text(msg.interaction, msg.result, masked_set),
-            timestamp  = event.timestamp,
-        )
+        # ALW-18: a submissão não vai mais a uma lista de histórico — o histórico do Console é
+        # projeção do stream, e quem grava a resposta de menu nele (já redigida por campo
+        # mascarado, `masked_field_echo`) é o bridge.
         await self._publish_inbound(event.model_dump())
 
-        # Evict fallback cache entry (if any) — pop_menu_masked_fields already
-        # cleared the primary SessionRegistry entry above.
-        self._pending_masked_fields.pop(msg.menu_id, None)
-
         logger.debug(
-            "menu_submit interaction=%s masked=%s contact_id=%s",
-            msg.interaction, list(masked_set), self._contact_id,
+            "menu_submit interaction=%s contact_id=%s", msg.interaction, self._contact_id,
         )
 
     # ── Close ──────────────────────────────────────────────────────────────────

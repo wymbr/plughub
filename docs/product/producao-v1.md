@@ -68,7 +68,7 @@ As fichas abertas cuidam da **correção** do core e dos canais. O que separa o 
 
 `PRD-03` (teto do bridge — paliativo feito em 2026-09-28) · `DUR-01` (espera do `menu` por suspender/retomar — promovida de `adiado`; **fechada em 2026-09-28**) ·
 `SFS-01` (executor sai de "harness de teste") · `PRD-04` (Redis) · `PRD-05` (Kafka, Postgres, ClickHouse,
-backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · `ALW-18` · `PRM-04`.
+backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · ~~`ALW-18`~~ (fechada 2026-09-28) · `PRM-04`.
 
 ### Fase 2 — canais confiáveis
 
@@ -77,7 +77,7 @@ backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · `A
   offline) · `VOZ-49` (LiveKit, egress, coturn) · `VOZ-34` (P1).
 - **WhatsApp:** `PID-22` · `WHA-01` · `USG-03` (P1).
 - **Webchat:** `WCH-03` (widget de produto; separar o widget só de chat, que não depende da `WCH-02`) ·
-  `WCH-14` · `ALW-18`.
+  `WCH-14` · ~~`ALW-18`~~ (fechada 2026-09-28).
 
 ### Fase 3 — instância dedicada segura e operável
 
@@ -102,7 +102,7 @@ do Redis, broker) sem perder conversa — e o piloto.
 
 ## 5. Prioridade das fichas existentes
 
-**P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, `ALW-18`, ~~`DUR-01`~~ (fechada 2026-09-28),
+**P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, ~~`ALW-18`~~ (fechada 2026-09-28), ~~`DUR-01`~~ (fechada 2026-09-28),
 `SFS-01`, `PRM-04`, `CAP-10`, `CAP-15`, `AUT-20`, `AUT-58`, `AUD-03`.
 
 **P1 — necessário nos primeiros meses:** `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,

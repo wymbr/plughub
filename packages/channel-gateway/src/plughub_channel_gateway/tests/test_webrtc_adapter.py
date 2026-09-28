@@ -98,10 +98,10 @@ def _fake_redis():
 
 
 def _fake_registry():
-    """SessionRegistry dublê — só `append_message` é usado pelo webrtc (VOZ-04)."""
-    reg = AsyncMock()
-    reg.append_message = AsyncMock()
-    return reg
+    """SessionRegistry dublê com `spec`: o webrtc não usa mais nada dele desde a ALW-18 (a lista
+    de histórico saiu), e chamar um método que o real não tem REPROVA em vez de criar o alvo."""
+    from ..session_registry import SessionRegistry
+    return AsyncMock(spec=SessionRegistry)
 
 
 def _fake_context():

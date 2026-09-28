@@ -131,7 +131,6 @@ from .webrtc_provider import (
 )
 from . import media_policy
 from .webrtc_recording import CallRecorder
-from .webchat import menu_result_history_text
 from .webrtc_call import CallAttachMixin
 from .sip_leg import SipCall, is_sip_room, parse_sip_participant
 from .webrtc_room_client import (
@@ -2476,8 +2475,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
     ) -> None:
         """A frase final do ATENDENTE HUMANO como mensagem dele, marcada como fala (VOZ-05 fatia
         4). Vai para o bridge, que a grava na sessão sem entregá-la ao cliente — ele a ouviu —
-        nem ao Console do próprio humano. Não entra no histórico de chat (`append_message`):
-        é o histórico que o Console recarrega."""
+        nem ao Console do próprio humano. Não aparece no histórico do Console: a projeção do
+        stream deixa de fora todo `audio_transcript` (ALW-18)."""
         info = self._sessions.get(session_id)
         if not info:
             logger.error("webrtc stt: fala do atendente em sessao sem registro de abertura "
@@ -3083,20 +3082,6 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             content          = content,
             context_snapshot = await self._context_reader.get_snapshot(session_id),
         )
-        if done.outcome == "value" and done.via == "dtmf":
-            # a tecla não deixa rastro de texto como a fala (que é registro) ou o clique (que o
-            # widget mostra): a linha de histórico é a da resposta pela tela — REDIGIDA pelos
-            # mesmos campos mascarados que ela usa (NIV-07: até aqui ia `set()`, e a tecla de um
-            # menu mascarado entraria no histórico em claro). `None` = não se sabe: redige tudo.
-            masked = await self._masked_fields_for(session_id, p.menu_id)
-            await self._registry.append_message(
-                session_id = session_id,
-                message_id = event.message_id,
-                author     = "customer",
-                text       = (menu_result_history_text("text", done.value, {"resposta"}) if masked is None
-                              else menu_result_history_text(p.interaction, done.value, masked)),
-                timestamp  = event.timestamp,
-            )
         if done.outcome == "timeout" and self.is_sip_session(session_id):
             ac = self._collects.get(session_id)
             if ac is not None and "dtmf" in p.inputs and not ac.session.counters().get("digit_inputs"):
@@ -3340,8 +3325,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         """
         Resposta de menu/formulário do cliente — o mesmo evento do webchat: `menu_result` com
         o valor REAL em `conversations.inbound` (o bridge o entrega ao menu que espera e o
-        redige para stream e analytics), e a linha de histórico REDIGIDA pela
-        `menu_result_history_text`, a mesma casa do webchat.
+        redige para stream e analytics). O histórico do Console é projeção do stream (ALW-18):
+        não há linha própria a escrever aqui.
         """
         menu_id     = msg.get("menu_id")
         interaction = msg.get("interaction")
@@ -3382,15 +3367,12 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
 
         masked = await self._masked_fields_for(session_id, menu_id)
         if masked is None:
-            # Nem o adapter nem o motor dizem o que é protegido: o histórico recebe só a
-            # existência da resposta. Restritivo, e dito.
+            # Nem o adapter nem o motor dizem o que é protegido: a carência da fala mascarada
+            # abaixo vale por precaução. Restritivo, e dito.
             logger.warning(
-                "webrtc: campos mascarados do menu %s desconhecidos (session=%s) — resposta "
-                "inteira redigida no historico", menu_id, session_id,
+                "webrtc: campos mascarados do menu %s desconhecidos (session=%s) — tratado como "
+                "mascarado", menu_id, session_id,
             )
-            history = menu_result_history_text("text", result, {"resposta"})
-        else:
-            history = menu_result_history_text(interaction, result, masked)
         # a fala que ainda está sendo transcrita não pode chegar depois do HDEL do motor
         if masked is None or masked:
             self._masked_grace_until[session_id] = time.monotonic() + _MASKED_SPEECH_GRACE_S
@@ -3406,13 +3388,6 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                 payload = {"menu_id": menu_id, "interaction": interaction, "result": result},
             ),
             context_snapshot = snapshot,
-        )
-        await self._registry.append_message(
-            session_id = session_id,
-            message_id = event.message_id,
-            author     = "customer",
-            text       = history,
-            timestamp  = event.timestamp,
         )
         await self._publish_inbound(event.model_dump())
         logger.info(
@@ -3448,17 +3423,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             content          = MessageContent(type="text", text=text, payload=payload),
             context_snapshot = snapshot,
         )
-        if content_type != "audio_transcript":
-            # A fala transcrita NÃO entra no histórico de chat (VOZ-05 fatia 4): é a lista que o
-            # Console recarrega, e o humano não deve ver como digitado o que acabou de ouvir. A
-            # fala vai à sessão pelo bridge, com a marca de origem.
-            await self._registry.append_message(
-                session_id = session_id,
-                message_id = event.message_id,
-                author     = "customer",
-                text       = text,
-                timestamp  = event.timestamp,
-            )
+        # A fala transcrita vai à sessão pelo bridge com a marca de origem (`audio_transcript`); o
+        # histórico do Console, projeção do stream, a deixa de fora (VOZ-05 fatia 4, ALW-18).
         await self._publish_inbound(event.model_dump())
         logger.debug("webrtc: texto do cliente publicado session=%s len=%d", session_id, len(text))
 

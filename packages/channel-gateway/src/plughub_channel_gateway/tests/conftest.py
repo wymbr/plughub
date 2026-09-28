@@ -197,13 +197,11 @@ def registry(mock_redis):
             setattr(reg, name, MagicMock())
 
     # Retornos que o chamador consome de fato (o resto pode ser MagicMock cru).
-    reg.pop_menu_masked_fields = MagicMock(return_value=[])   # nenhum campo mascarado
     reg.is_local               = MagicMock(return_value=True)
 
     reg.register   = AsyncMock()
     reg.unregister = AsyncMock(return_value="2024-01-01T10:00:00Z")
     reg.send       = AsyncMock(return_value=True)
-    reg.append_message = AsyncMock()
     reg._redis     = mock_redis
     return reg
 

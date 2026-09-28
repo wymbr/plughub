@@ -112,7 +112,8 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     # `masked_input` desde 2026-09-15 (VOZ-05, fatia A), pela GARANTIA da NIV-05 — o valor
     # não aparece em superfície de leitura controlada pela plataforma:
     #   · o valor entra por campo protegido do widget (`webrtc.menu_submit`), e o histórico
-    #     recebe a linha REDIGIDA pela mesma casa do webchat (`menu_result_history_text`);
+    #     do Console é projeção do stream, onde o bridge grava a resposta REDIGIDA
+    #     (`masked_field_echo`; ALW-18 — antes era uma lista própria do gateway);
     #   · durante a coleta, a fala transcrita e o texto livre NÃO são publicados — o bridge
     #     os entregaria ao menu como o valor, em claro (`WebRTCAdapter._masked_capture_active`);
     #   · gravação: a plataforma ainda não grava WebRTC (egress é a VOZ-06). O dia em que

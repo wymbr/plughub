@@ -77,8 +77,14 @@ Default port: 3100.
   e 401 são desfechos distintos de propósito: um se conserta no deploy, o outro no
   chamador
 - ⚠️ **`/api/*` exige CREDENCIAL e não recorta LINHA.** `conversation_history` lê
-  `session:{id}:messages`, chave **sem prefixo de tenant** — qualquer operador
+  `session:{id}:stream`, chave **sem prefixo de tenant** — qualquer operador
   autenticado alcança qualquer sessão. Dívida declarada: `pending.md` CAP-14
+- **O histórico do Console é PROJEÇÃO do stream canônico** (ALW-18, 2026-09-28,
+  `lib/console-history.ts`). A lista `session:{id}:messages` que ele lia — segunda casa,
+  seis escritores no gateway, sem a fala do agente em WhatsApp/SMS/e-mail/voz — saiu.
+  Entram cliente, agente (humano pela instância `human-*`), supervisor e `system_notice`;
+  ficam de fora fala transcrita, prompt de menu e mensagem dirigida sem o cliente. Nunca
+  o `original_content`. Stream ilegível responde 500 nomeado, nunca `[]`
 - ⚠️ **A porta 3100 publica em LOOPBACK, e isso é o que mantém o transporte anônimo
   fora de alcance.** Até 2026-09-01 os composes diziam `"3100:3100"` (= `0.0.0.0`), e
   medido nesta máquina o IP de LAN **aceitava conexão** — qualquer aparelho na mesma

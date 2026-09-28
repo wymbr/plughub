@@ -603,8 +603,8 @@ class TestColetaMascaradaNoTelefone:
         r = self._resultados(producer)
         assert r[0]["content"]["payload"]["result"] == "5566"      # o valor vai ao motor (maskedScope)
         assert not await ad._redis.exists(f"channel:webrtc:{sid}:media_hold")
-        historico = ad._registry.append_message.await_args.kwargs["text"]
-        assert "5566" not in historico and "mascarada" in historico
+        # ALW-18: não há linha de histórico no gateway — o bridge grava a resposta REDIGIDA no
+        # stream, e é de lá que o Console projeta o histórico (`probe_voz02_sip_inbound` K3g)
         assert "5566" not in caplog.text
 
     async def test_token_de_humano_e_recusado_durante_a_pausa(self, monkeypatch):

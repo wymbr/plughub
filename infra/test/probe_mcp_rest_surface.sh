@@ -27,9 +27,9 @@
 #    (2026-09-01)**: a linha delas migrou para `gateada` e o ramo D INVERTEU de sinal
 #    — ele agora reprova se alguma voltar a responder sem credencial.
 # 4. **Exposição ≠ dano** (D14.1): duas das abertas devolveram vazio com a stack
-#    ociosa, mas `conversation_history` lê `session:{id}:messages`, que tem **três
-#    produtores** (`session.ts:529`, `orchestrator-bridge/main.py:7340`,
-#    `channel-gateway/session_registry.py:144`). Zero agora não é inócuo.
+#    ociosa, mas `conversation_history` lê a conversa INTEIRA — desde a ALW-18
+#    (2026-09-28), projetada do stream canônico `session:{id}:stream`. Zero agora
+#    não é inócuo.
 #
 # DUAS METADES QUE NÃO SE SUBSTITUEM
 # ==================================
@@ -45,7 +45,7 @@
 # pagou para aprender que são: *"EXIGIR CREDENCIAL e RECORTAR LINHA são dois fatos"*.
 # Hoje um operador autenticado de QUALQUER pool lê a conversa de QUALQUER sessão por
 # `/api/conversation_history/{id}` — e o agravante é que a chave lida
-# (`session:{id}:messages`) **não tem sequer prefixo de tenant**, então nem o
+# (`session:{id}:stream`, desde a ALW-18) **não tem sequer prefixo de tenant**, então nem o
 # isolamento por tenant existe ali. O irmão gateado E escopado do mesmo dado é
 # `analytics-api /v1/transcript/sessions/{id}`, fechado em 2026-08-30 — de novo duas
 # portas para o mesmo dado, e agora só uma delas recorta.

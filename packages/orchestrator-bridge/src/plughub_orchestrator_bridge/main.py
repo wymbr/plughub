@@ -8484,11 +8484,12 @@ async def process_contact_event(
 
             # ── Clear conversation data (only when no hooks are pending) ──────
             # When on_human_end hooks were dispatched, the stream must survive
-            # until the wrap-up agent completes.  Stream/messages are cleaned
+            # until the wrap-up agent completes.  The stream is cleaned
             # naturally by TTL (4h) or by the re-entry after hooks complete.
+            # (The `session:{sid}:messages` list deleted here until ALW-18 no longer
+            # exists: the Console history is a projection of the stream.)
             if not _hooks_pending:
                 try:
-                    await redis_client.delete(f"session:{session_id}:messages")
                     # O stream NÃO é apagado: o persister e o replay da avaliação o leem
                     # depois deste ponto (RPL-01). Ver `retire_session_stream`.
                     await retire_session_stream(redis_client, session_id)

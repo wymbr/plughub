@@ -25,8 +25,6 @@ def registry():
     reg = AsyncMock()
     reg.send = AsyncMock(return_value=True)
     reg.close_connection = AsyncMock()
-    reg.append_message = AsyncMock()
-    reg.store_menu_masked_fields = MagicMock()
     return reg
 
 
@@ -56,7 +54,6 @@ class TestConsumerRouting:
         }
         await consumer._dispatch(payload)
         registry.send.assert_not_called()
-        registry.append_message.assert_not_called()
 
     async def test_ignores_missing_contact_id(self, consumer, registry):
         payload = {
@@ -100,41 +97,6 @@ class TestConsumerRouting:
 # ── WebchatChannelAdapter — deliver_text ──────────────────────────────────────
 
 class TestWebchatDeliverText:
-    async def test_persists_to_history(self, webchat_adapter, registry):
-        """
-        deliver_text appends to conversation history.
-        No WebSocket send — webchat uses hybrid stream model (XREAD).
-        """
-        payload = {
-            "type": "message.text",
-            "contact_id": "c1",
-            "session_id": "s1",
-            "channel": "webchat",
-            "message_id": "msg-001",
-            "author": {"type": "agent_ai"},
-            "text": "Posso ajudar.",
-            "timestamp": "2024-01-01T10:00:00Z",
-        }
-        await webchat_adapter.deliver_text(payload)
-
-        registry.append_message.assert_called_once()
-        call = registry.append_message.call_args
-        assert call.kwargs["session_id"] == "s1"
-        assert call.kwargs["text"] == "Posso ajudar."
-        assert call.kwargs["author"] == "agent_ai"
-
-    async def test_skips_empty_text(self, webchat_adapter, registry):
-        """No append when text is empty."""
-        payload = {
-            "type": "message.text",
-            "contact_id": "c1",
-            "session_id": "s1",
-            "channel": "webchat",
-            "text": "",
-        }
-        await webchat_adapter.deliver_text(payload)
-        registry.append_message.assert_not_called()
-
     async def test_does_not_send_to_websocket(self, webchat_adapter, registry):
         """Hybrid stream model — text must NOT go via registry.send."""
         payload = {
@@ -150,11 +112,32 @@ class TestWebchatDeliverText:
         await webchat_adapter.deliver_text(payload)
         registry.send.assert_not_called()
 
+    async def test_system_text_goes_to_the_socket_without_false_failure(
+        self, webchat_adapter, registry, caplog,
+    ):
+        """O aviso de sistema (fila muda) não tem entrega pelo stream ao widget: sai pelo WS. O
+        log de sucesso lê `session_id`; sem a variável, o NameError caía no `except` e dizia
+        "could not deliver" de um aviso que tinha sido entregue (achado na ALW-18)."""
+        payload = {
+            "type": "message.text", "contact_id": "c1", "session_id": "s1", "channel": "webchat",
+            "message_id": "m-sys", "author": {"type": "system", "id": "routing-engine"},
+            "text": "Aguardando agente.", "timestamp": "2026-09-28T10:00:00Z",
+        }
+        with caplog.at_level("INFO"):
+            await webchat_adapter.deliver_text(payload)
+        registry.send.assert_awaited_once()
+        enviado = registry.send.await_args.args[1]
+        assert enviado["type"] == "msg.text" and enviado["text"] == "Aguardando agente."
+        assert "could not deliver" not in caplog.text
+        assert "session=s1" in caplog.text
+
 
 # ── WebchatChannelAdapter — deliver_menu ──────────────────────────────────────
 
 class TestWebchatDeliverMenu:
-    async def test_stores_masked_fields(self, webchat_adapter, registry):
+    async def test_masked_menu_does_nothing_on_the_socket(self, webchat_adapter, registry):
+        """ALW-18: o menu chega ao widget pelo stream, e os campos mascarados não são mais
+        guardados para redigir uma lista de histórico — a lista saiu."""
         payload = {
             "type": "menu.payload",
             "contact_id": "c1",
@@ -165,9 +148,7 @@ class TestWebchatDeliverMenu:
             "masked_fields": ["cpf", "senha"],
         }
         await webchat_adapter.deliver_menu(payload)
-        registry.store_menu_masked_fields.assert_called_once_with(
-            "c1", "menu-001", ["cpf", "senha"]
-        )
+        registry.send.assert_not_called()
 
     async def test_no_send_to_websocket(self, webchat_adapter, registry):
         """Hybrid stream model — interaction.request must NOT go via registry.send."""

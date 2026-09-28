@@ -38,6 +38,13 @@ export const StreamEventTypeSchema = z.enum([
   // channel-gateway casa tipo por `if` encadeado e um tipo novo simplesmente não
   // mapeia. Isso foi MEDIDO antes de acrescentar o valor, não presumido.
   "mention_command",
+  // ALW-18 (2026-09-28) — aviso da PLATAFORMA ao cliente (hoje: o de espera da fila muda,
+  // gravado pelo routing-engine). Tipo PRÓPRIO, e não `message`, por dois motivos: o
+  // cliente do webchat já o recebe direto pelo WebSocket (render v2), e o `stream_subscriber`
+  // não entrega tipo que não conhece — então não duplica; e métrica que conta `message`
+  // (primeira resposta do agente, mensagens da sessão) não passa a contar aviso de sistema.
+  // Existe para o HISTÓRICO do Console, que agora é projeção do stream.
+  "system_notice",
   "interaction_request",
   "interaction_result",
   "flow_step_completed",

@@ -94,7 +94,6 @@ class TestTeclado:
         # continua sendo registro proprio, e e por isso que ela diz `dtmf` e nao `voice`.
         assert _resultados(producer) == [{"menu_id": "m1", "interaction": "button",
                                           "result": "correio", "via": "dtmf"}]
-        adapter._registry.append_message.assert_awaited()
         assert await _ate(lambda: SESSION_ID not in adapter._collects)
         leitor.cancel()
 
