@@ -17,6 +17,7 @@ Ponto de entrada único de toda a documentação do PlugHub. Cada seção mapeia
 | Como a plataforma compete no mercado | [product/competitive-analysis-2026-09.md](product/competitive-analysis-2026-09.md) (por segmento, set/2026; snapshots anteriores: [jul](product/competitive-analysis-2026-07.md), [mai](product/competitive-analysis.md)) |
 | O que adotar da Decagon (autoria por texto, simulação, analista, qualidade) | [product/decagon-paralelo-2026-09.md](product/decagon-paralelo-2026-09.md) |
 | Quais KPIs a plataforma calcula e como (fórmula, população, exclusões) | [product/kpi-catalog.md](product/kpi-catalog.md) |
+| O que falta para a versão de produção (alvo, fases, prioridade das fichas) | [product/producao-v1.md](product/producao-v1.md) |
 | O que cada tela da UI faz | [Módulos funcionais](#módulos-funcionais-modulos) |
 | Como um Arc/feature funciona internamente | [Arcos de implementação](#arcos-de-implementação-arcos) |
 | Como um pacote funciona internamente | [Pacotes técnicos](#pacotes-técnicos-pacotes) |
