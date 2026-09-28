@@ -78,7 +78,8 @@ Fatos com `arquivo:linha` em [`references/fatos-do-codigo.md`](references/fatos-
   `maximum` · `required` (boolean); `description`, `items`, `properties`, `minItems` e `nullable`
   são **recusados no publish** (SFE-07) — eram descartados calados e o modelo nunca os via.
   Estrutura de saída rica (array de objetos) vai por `json_schema` inline ou `json_schema_ref`
-  (tool-use com JSON Schema completo). Sentimento só é medido se `customer_utterance` referenciar a fala
+  (tool-use com JSON Schema completo; aí o `output_schema` é ignorado). Só exija campo que algum
+  step lê (`probe_reason_required_has_reader.sh`, SFE-08). Sentimento só é medido se `customer_utterance` referenciar a fala
   (`$.`/`@ctx.`, nunca literal). `model_profile`: `fast|balanced|powerful|evaluation`.
 - **`invoke`** — `tool` · `input` · `output_as` · `on_success`/`on_failure`; sem `target` usa
   `mcp-server-plughub`. ⚠️ O `invoke` de flow **não passa** pelo `judgeInvoke`, e `tools[]` do YAML

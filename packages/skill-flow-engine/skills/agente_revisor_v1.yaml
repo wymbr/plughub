@@ -171,11 +171,69 @@ steps:
       session_meta:        "$.pipeline_state.eval_context.context.session_meta"
       # Participantes
       participant_summary: "$.pipeline_state.eval_context.participant_summary"
+    # SFE-08 (2026-09-28): o contrato de SAÍDA vai ao modelo INTEIRO por aqui (tool-use: o
+    # schema é o `input_schema` da tool, com enums e DESCRIÇÕES). O gateway valida tipo,
+    # required, enum, items, minimum/maximum e nulo; ⚠️ `minItems` e "score_override quando
+    # revised" vão ao modelo como descrição, e quem impõe o segundo é a evaluation-api
+    # (400 `score_override required when decision=revised`). Até a SFE-07 este formato vivia
+    # no `output_schema`, que o descartava.
+    json_schema:
+      type: object
+      required: [dimension_decisions]
+      properties:
+        dimension_decisions:
+          type: array
+          minItems: 1
+          description: >
+            Uma entrada por dimensão que possui round=2 (contestada pelo agente humano). Não
+            incluir dimensões sem contestação — o revisor árbitro só decide o que foi
+            contestado; o score das demais permanece.
+          items:
+            type: object
+            required: [dimension_id, decision, justification]
+            properties:
+              dimension_id:
+                type: string
+                description: "ID da dimensão — deve ter round=2 nos threads"
+              decision:
+                type: string
+                enum: [upheld, revised]
+                description: >
+                  upheld: a contestação não procede, score original mantido.
+                  revised: a contestação procede, score alterado com evidência.
+              score_override:
+                type: [number, "null"]
+                minimum: 0
+                description: >
+                  Novo score (0 a max_score da dimensão), DIFERENTE do score do avaliador.
+                  OBRIGATÓRIO quando decision=revised; null quando decision=upheld.
+              evidence_entries:
+                type: array
+                minItems: 1
+                description: >
+                  Evidências do transcript que suportam a decisão revised. OBRIGATÓRIO quando
+                  decision=revised (mínimo 1). Omitir quando decision=upheld.
+                items:
+                  type: object
+                  required: [stream_entry_id, excerpt, relevance_note]
+                  properties:
+                    stream_entry_id:
+                      type: string
+                      description: "event_id do replay_event que serve como evidência"
+                    excerpt:
+                      type: string
+                      description: "Trecho exato (≤ 200 caracteres) do original_content do evento"
+                    relevance_note:
+                      type: string
+                      description: "Por que este evento suporta a decisão (1–3 frases)"
+              justification:
+                type: string
+                description: >
+                  Obrigatório em todos os casos — mínimo 20 palavras. Para upheld: por que a
+                  contestação não procede, com referência ao transcript. Para revised: por que
+                  procede (argumento ou evidência não considerada na avaliação original).
+    # Exigido pelo schema do step; IGNORADO enquanto `json_schema` estiver presente.
     output_schema:
-      # SFE-07: aqui só vale type/enum/minimum/maximum/required — é tudo o que o ai-gateway
-      # leva ao modelo. A estrutura dos itens que estava aqui era DESCARTADA no parse e nunca
-      # chegou ao modelo; ela precisa virar `json_schema` inline antes de este skill ser
-      # deployado (SFE-08). O formato original está no diff do commit da SFE-07.
       dimension_decisions:
         type: array
         required: true

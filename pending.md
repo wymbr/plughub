@@ -576,13 +576,20 @@ Grupo aberto em 2026-09-16 ao escrever a skill `skill-flow-authoring`.
 
 ---
 
+## `docs/arcos/arc13-review-contestation.md` — revisão, contestação e calibração
+
+Grupo aberto em 2026-09-28 ao fechar a SFE-08.
+
+| id | tarefa | estado | evidência |
+|---|---|---|---|
+| REV-01 | **Pré-revisão `adjust` sem `score_override` é gravada com nota nula, e as tools prometem obrigatoriedade que o Zod não impõe.** Achado na SFE-08 (2026-09-28): a revisão humana pós-contestação recusa `revised` sem nota com 400 (`evaluation-api/contestation_router.py:402`), mas a pré-revisão grava `score_override=body.score_override if body.action == "adjust" else None` (`:571`) — um `adjust` sem nota vira ajuste que não ajusta nada, sem erro. As tools do mcp-server (`tools/evaluation.ts`, ~1407–1542) descrevem o campo como *"Obrigatório quando adjust/revised"* e o declaram `optional()`: a regra existe em prosa e numa casa só. Conserto: mesma recusa (400) no `adjust`, e a condição no schema da tool (`superRefine`) para o erro chegar ao agente antes do HTTP. Os revisores de IA não rodam em pool nenhum hoje — exposição zero medida, dano zero | `aberto` | `CHANGELOG.md` § 2026-09-28 (2) |
+
 ## `docs/pacotes/skill-flow-engine.md` — interpretador de Skill Flow
 
 Grupo aberto em 2026-09-16 ao escrever a skill `skill-flow-authoring`.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| SFE-08 | **O contrato de SAÍDA dos agentes de avaliação não chega ao modelo inteiro.** Medido em 2026-09-25 (SFE-07): (1) `agente_pre_revisor_v1` e `agente_revisor_v1` declaravam o formato dos itens (`dimension_reviews`/`dimension_decisions`: `dimension_id`, decisão, evidência…; `calibration_signal.severity`…) num `output_schema` que o descartava — o modelo recebe só `array (required)`, e o `input` deles não descreve o formato. Nenhum pool os roda hoje. O formato original está no commit anterior ao da SFE-07 (`git show 4fd8f884^:packages/skill-flow-engine/skills/agente_pre_revisor_v1.yaml`, idem `agente_revisor_v1.yaml`). (2) `agente_avaliacao_v1` exige no `output_schema` `dimension_threads`, `overall_score` e `compliance_flags`, mas o JSON Schema que vai ao modelo (`buildEvaluationOutputSchema`, `mcp-server/tools/evaluation.ts`) cobre só `criterion_responses`, `overall_observation`, `highlights` e `improvement_points` — os três não chegam por caminho nenhum. Conserto: reescrever o formato como `json_schema` inline nos revisores, e decidir no avaliador se o builder passa a pedir os três ou se o `output_schema` deixa de exigi-los. **Antes de qualquer deploy dos revisores** | `aberto` | `CHANGELOG.md` § 2026-09-25 (18) |
 
 ---
 

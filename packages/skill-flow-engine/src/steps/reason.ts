@@ -153,6 +153,11 @@ function resolveJsonSchema(
     if (resolved && typeof resolved === "object" && !Array.isArray(resolved)) {
       return resolved as Record<string, unknown>
     }
+    // SFE-08: a referência foi DECLARADA e não resolveu — o step cai no caminho flat e o
+    // modelo passa a ser cobrado pelo `output_schema`, outro contrato. Era silencioso.
+    console.warn(
+      `[reason] json_schema_ref NÃO resolveu: step=${step.id} ref=${ref} session=${ctx.sessionId} — ` +
+      "o contrato que o autor declarou não vai ao modelo; o step segue pelo output_schema (fallback)")
   }
   return undefined
 }

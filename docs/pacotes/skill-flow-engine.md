@@ -441,6 +441,15 @@ Invoca o AI Gateway com um prompt declarado e retorna JSON estruturado conforme 
 > `json_schema`/`json_schema_ref`. O mesmo vale para o `menu`, que recusa `context_tags`: quem
 > escreve tag é `invoke`, `notify`, `reason` e `resolve`. Gate: `infra/test/probe_skill_yaml_strict.sh`.
 
+> **Com `json_schema` (inline ou `_ref`), o contrato é ELE, e o `output_schema` é ignorado** — pelo
+> gateway (vira o `input_schema` da tool) e pelo engine (sem validação flat). O validador do gateway
+> impõe `type` (inclusive lista com `"null"`), `properties`, `required`, `items`, `enum`,
+> `minimum`/`maximum` e `nullable`; **não** impõe `minItems` nem regra condicional — quem consome
+> impõe. Duas regras da SFE-08 (2026-09-28): **só se exige do modelo o que algum step LÊ**
+> (`$.pipeline_state.<output_as>.<campo>`, ou o objeto inteiro repassado) — gate
+> `infra/test/probe_reason_required_has_reader.sh`; e **`json_schema_ref` que não resolve cai no
+> caminho flat com WARN** nomeando step e referência, nunca calado.
+
 **Validação pelo AI Gateway antes de persistir:**
 
 | Tipo | Validação |

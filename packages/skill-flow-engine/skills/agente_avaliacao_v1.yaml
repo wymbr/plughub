@@ -249,21 +249,17 @@ steps:
       # Modo comparativo — o LLM deve comparar replay com produção se true
       comparison_mode:     "$.pipeline_state.eval_context.comparison_mode"
     output_schema:
-      # SFE-07: aqui só vale type/enum/minimum/maximum/required. A estrutura que estava
-      # aqui era DESCARTADA no parse. O que chega ao modelo é o `json_schema_ref` acima —
-      # `evaluation_output_schema`, montado do FORMULÁRIO em mcp-server
-      # `tools/evaluation.ts::buildEvaluationOutputSchema` — e ele cobre SÓ
-      # `criterion_responses`, `overall_observation`, `highlights` e `improvement_points`.
-      # `dimension_threads`, `overall_score` e `compliance_flags` não chegam por caminho
-      # nenhum (SFE-08).
+      # O que chega ao modelo é o `json_schema_ref` acima — `evaluation_output_schema`,
+      # montado do FORMULÁRIO em mcp-server `tools/evaluation.ts::buildEvaluationOutputSchema`;
+      # com ele presente, este `output_schema` é IGNORADO (tool-use) e só vale como fallback se
+      # a referência não resolver.
+      # SFE-08 (2026-09-28): saíram daqui `dimension_threads`, `overall_score` e
+      # `compliance_flags`. Eram exigidos e não chegavam ao modelo por caminho nenhum — e não
+      # tinham CONSUMIDOR: o `submit_result` abaixo não os repassa, porque a nota é
+      # recomputada do formulário no ingest e os threads round-1 nascem de
+      # `criterion_responses` (T7a/T7b). Pedi-los ao modelo seria pedir número que ninguém lê.
       criterion_responses:
         type: array
-        required: true
-      dimension_threads:
-        type: array
-        required: true
-      overall_score:
-        type: number
         required: true
       overall_observation:
         type: string
@@ -272,9 +268,6 @@ steps:
         type: array
         required: false
       improvement_points:
-        type: array
-        required: false
-      compliance_flags:
         type: array
         required: false
     output_as:  llm_result

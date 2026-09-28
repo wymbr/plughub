@@ -567,6 +567,7 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | SFE-06 | Os três pools que faltavam da SFE-04 re-promovidos com o `issue_status` — as duas premissas da ficha estavam erradas | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (15) |
 | SFE-07 | Campo desconhecido no `output_schema` do `reason` e no `menu` passa a ser RECUSADO no publish, não descartado; o e-mail do `auth_form` chega à aba Contexto | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (18) |
 | SFE-05 | SFE-03 no ar e medida: sessão nascida em 14:30 retomou depois do promote de 15:01 executando a versão do nascimento | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (17) |
+| SFE-08 | O contrato de saída dos revisores de IA chega ao modelo (`json_schema` inline) e o avaliador deixa de exigir três campos que nenhum caminho levava nem lia | 2026-09-28 | `CHANGELOG.md` § 2026-09-28 (2) |
 
 ## `docs/arcos/audit-lgpd.md` — trilha e direitos do titular
 

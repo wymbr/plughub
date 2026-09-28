@@ -1,5 +1,55 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (2) — SFE-08: o contrato de saída dos agentes de avaliação chega ao modelo inteiro
+
+**O defeito (medido na SFE-07, 2026-09-25).** Dois modos, a mesma causa — o contrato escrito
+num lugar que não viaja:
+
+1. `agente_pre_revisor_v1` e `agente_revisor_v1` descreviam o formato dos itens
+   (`dimension_reviews`/`dimension_decisions`, decisão, evidência, `calibration_signal.severity`)
+   no `output_schema`, que só leva tipo/enum/limites/obrigatório. O modelo recebia `array
+   (required)` e mais nada; o `input` também não descrevia o formato.
+2. `agente_avaliacao_v1` exigia `dimension_threads`, `overall_score` e `compliance_flags`. Com
+   `json_schema_ref`, o que vai ao modelo é o schema de `buildEvaluationOutputSchema`, que não os
+   tem — e o `output_schema` é ignorado nesse caminho. Nenhum step os lia: o `submit_result` não
+   os repassa, porque a nota é recomputada do formulário e os threads nascem de
+   `criterion_responses` (T7a/T7b).
+
+**O que mudou.**
+
+- Revisores: o formato original (`git show 4fd8f884^:…`) reescrito como `json_schema` inline —
+  `required` por item, `enum` nas decisões (`approve|adjust`, `upheld|revised`) e em
+  `severity`, `score_override` anulável com `minimum: 0`, descrições. O `output_schema` mínimo
+  fica, comentado como ignorado enquanto houver `json_schema`. O comentário diz o que o gateway
+  NÃO impõe (`minItems`, regra condicional): quem impõe é o consumidor.
+- Avaliador: o `output_schema` passa a exigir só o que o schema do builder pede
+  (`criterion_responses`, `overall_observation`; `highlights`/`improvement_points` opcionais).
+  Escolhido *deixar de exigir* em vez de *passar a pedir*: pedir ao modelo uma nota que a
+  plataforma recalcula seria produzir o número plausível que ninguém confere.
+- Engine: `json_schema_ref` declarado que não resolve deixava o step cair no caminho flat em
+  silêncio, cobrado por outro contrato. Agora loga step, referência e sessão
+  (`steps/reason.ts::resolveJsonSchema`).
+
+**Instrumentos.**
+
+- Gate novo `infra/test/probe_reason_required_has_reader.sh` (+ `_reason_required_reader.py`):
+  todo campo que um `reason` exige do modelo tem leitor `$.pipeline_state.<output_as>.<campo>`
+  no fluxo (objeto repassado inteiro conta). A = 8 steps julgados · B = 0 sem leitor · C = campo
+  plantado numa cópia é acusado. Contra o avaliador do `HEAD` anterior: FALHA acusando
+  `dimension_threads,overall_score` (`compliance_flags` já não era `required`). Registrado no
+  `gates.manifest`.
+- `src/__tests__/reason-json-schema.test.ts` (5 casos): inline chega inteiro ao gateway, ref
+  resolvida chega, com schema a validação flat não se aplica, controle sem schema reprova no
+  flat, ref que não resolve loga. Mutação 4/4 morta (não repassar inline, não resolver ref,
+  fallback mudo, validar flat com schema). Suíte do engine 330/330; `tsc` limpo;
+  `probe_skill_yaml_strict.sh` OK.
+
+**Deploy.** Nenhum pool roda os revisores; no avaliador a mudança não altera o runtime (o
+`output_schema` já era ignorado com `json_schema_ref`). A árvore mudou, o que roda não.
+
+**Achado de passagem.** A pré-revisão grava `adjust` sem `score_override` como nota nula, e as
+tools prometem obrigatoriedade que o Zod não impõe. Deixou ficha: `REV-01`.
+
 ## 2026-09-28 (1) — CTX-14: cada tenant lê o próprio catálogo de mascaramento no engine
 
 **O defeito (achado lendo o código na MSK-05).** `skill-flow-engine/src/ctx-audit.ts` guardava
