@@ -240,6 +240,29 @@ describe.skipIf(!REDIS_URL)("DUR-01 — menu estacionado (Redis real)", () => {
     expect(JSON.stringify(r.pipeline_state.results)).not.toContain("1234")
   })
 
+  it("9. acordar atrasado (wakeOnly) não recomeça o fluxo depois que ele terminou", async () => {
+    await rodar("s9", simples)
+    await responder("s9", "ok")
+    expect((await rodar("s9", simples)).outcome).toBe("resolved")
+    const r = await engine().run({
+      tenantId: T, sessionId: "s9", customerId: "c1", instanceId: INST,
+      skillId: "skill_teste", flow: simples, sessionContext: {}, menuWait: "park", wakeOnly: true,
+    })
+    expect("error" in r && r.error).toBe("NOT_PARKED")
+    expect(prompts).toHaveLength(1)            // sem wakeOnly, a saudação sairia de novo
+    expect(await redis.exists(lockKey("s9"))).toBe(0)
+  })
+
+  it("9b. wakeOnly numa sessão sem pipeline não nasce nada", async () => {
+    const r = await engine().run({
+      tenantId: T, sessionId: "s9b", customerId: "c1", instanceId: INST,
+      skillId: "skill_teste", flow: simples, sessionContext: {}, menuWait: "park", wakeOnly: true,
+    })
+    expect("error" in r && r.error).toBe("NOT_PARKED")
+    expect(prompts).toHaveLength(0)
+    expect(await redis.exists(stateKey("s9b"))).toBe(0)
+  })
+
   describe("8. o Lua do estacionamento, isolado", () => {
     const sm = () => new PipelineStateManager(redis as never)
     const req = (keys: string[]) => ({ step_id: "p", watch_keys: keys, deadline_ms: Date.now() + 1000 })

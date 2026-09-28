@@ -143,6 +143,39 @@ class TestHandleCrash:
         ]
         assert len(inbound_calls) == 0
 
+    async def test_skips_parked_conversation(self):
+        """
+        DUR-01: conversa ESTACIONADA num menu não tem lock nem flag de atividade — é o
+        registro do bridge (`session:{c}:parked_run:{inst}`) que diz que ela está viva.
+        O teste irmão `test_requeues_genuine_crash` é o controle: sem o registro, re-enfileira.
+        """
+        redis = AsyncMock()
+        redis.srem = AsyncMock(return_value=1)
+
+        def exists_side_effect(key):
+            return 1 if key == f"session:{CONV}:parked_run:{INST}" else 0
+
+        redis.exists = AsyncMock(side_effect=exists_side_effect)
+
+        registry = AsyncMock()
+        registry.get_instance_meta    = AsyncMock(return_value=make_meta())
+        registry.delete_instance_meta = AsyncMock()
+
+        producer = AsyncMock()
+        producer.send = AsyncMock(return_value=None)
+
+        detector = make_detector(redis, registry, producer)
+        await detector._handle_crash(TENANT, INST)
+
+        # Mesmo critério do controle (`test_requeues_genuine_crash`), que o vê ficar ≥ 1.
+        inbound_calls = [c for c in producer.send.call_args_list if "inbound" in str(c)]
+        assert len(inbound_calls) == 0
+        # o teste só vale se o registro FOI consultado com a chave exata
+        assert any(
+            c.args and c.args[0] == f"session:{CONV}:parked_run:{INST}"
+            for c in redis.exists.call_args_list
+        )
+
     async def test_no_meta_only_cleans_pools(self):
         """Instance without InstanceMeta only removes from pool sets."""
         redis = AsyncMock()

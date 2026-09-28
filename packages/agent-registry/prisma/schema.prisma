@@ -34,6 +34,9 @@ model Pool {
   max_concurrent_sessions Int?
   // Frente 1 (dispatch pull): "push" (auto-allocate, default) | "pull" (agent pulls from queue)
   dispatch_mode          String  @default("push")
+  // DUR-01: "block" (default) | "park" — como o agente de IA espera o cliente num `menu`.
+  // `park` estaciona a conversa e a resposta a acorda (adr-menu-durable-park.md).
+  menu_wait              String  @default("block")
   // E2f: does this pool serve CUSTOMER CONTACTS or INTERNAL work?
   //   "contact"  (default) — customer-facing; counts as contact, feeds TMA/SLA.
   //   "internal" — internal work spawned by the platform (detached wrap-up, hooks).

@@ -259,7 +259,7 @@ describe("SkillFlowEngine — idempotência (PRECONDITION_FAILED)", () => {
     })
 
     expect(result).toHaveProperty("error", "PRECONDITION_FAILED")
-    if ("error" in result) {
+    if ("error" in result && result.error === "PRECONDITION_FAILED") {
       expect(result.active_job_id).toBe("job-123")
     }
   })

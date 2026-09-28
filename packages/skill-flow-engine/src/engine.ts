@@ -178,6 +178,8 @@ export type RunResult =
   /** `deploy_version` (SFE-03): a versão que EXECUTOU — a do nascimento, também na retomada. */
   | { outcome: string; issue_status?: string; deploy_version?: string; pipeline_state: PipelineState }
   | { error: "PRECONDITION_FAILED"; active_job_id: string }
+  /** DUR-01 — acordar (`wakeOnly`) sem pipeline em andamento: nada foi executado. */
+  | { error: "NOT_PARKED"; status: string }
 
 // ─────────────────────────────────────────────
 // DAG Cycle Validation
@@ -431,6 +433,13 @@ export class SkillFlowEngine {
     journeyId?:        string
     /** DUR-01 — como o `menu` espera o cliente; ausente = `block` (BLPOP no processo). */
     menuWait?:         "block" | "park"
+    /**
+     * DUR-01 — esta chamada é um ACORDAR: só continua um pipeline em andamento, nunca
+     * nasce um. Sem isto, um acordar atrasado (outro já terminou a conversa) acharia o
+     * pipeline `completed` e o engine começaria o fluxo de novo do `entry` — o cliente
+     * receberia a saudação outra vez. Devolve `error: "NOT_PARKED"` sem executar nada.
+     */
+    wakeOnly?:         boolean
   }): Promise<RunResult> {
     const { tenantId, sessionId, customerId, skillId, flow, sessionContext } = params
     const config            = params.config
@@ -460,6 +469,16 @@ export class SkillFlowEngine {
     // o de quem acordou a conversa nesse meio-tempo, que tem o MESMO instance_id (afinidade).
     let parked = false
     try {
+      if (params.wakeOnly) {
+        const atual = await this.stateManager.get(tenantId, pipelineSessionId)
+        if (!atual || atual.status !== "in_progress") {
+          console.info(
+            `[engine] DUR-01 acordar sem pipeline em andamento: session=${sessionId} ` +
+            `status=${atual?.status ?? "ausente"} — nada executado`,
+          )
+          return { error: "NOT_PARKED", status: atual?.status ?? "absent" }
+        }
+      }
       // SFE-03 — QUAL versão executa: a recebida (nascimento) ou a fixada (retomada).
       const run = await this._pinnedVersion({
         tenantId, sessionId, pipelineSessionId, skillId, flow,

@@ -150,19 +150,27 @@ class CrashDetector:
 
             engine_lock_exists    = await self._redis.exists(lock_key)
             session_active_exists = await self._redis.exists(activity_key)
+            # DUR-01: conversa ESTACIONADA num menu não tem lock nem flag de atividade —
+            # nenhum processo a executa enquanto o cliente pensa. Sem este teste ela teria
+            # exatamente a cara de "o engine morreu" e seria re-enfileirada. O registro é
+            # do bridge, que a guarda até o acordar que terminar o fluxo.
+            parked_exists = await self._redis.exists(
+                f"session:{conversation_id}:parked_run:{instance_id}"
+            )
 
-            if engine_lock_exists or session_active_exists:
+            if engine_lock_exists or session_active_exists or parked_exists:
                 # Agent still active (executing skill flow or waiting for menu reply).
                 # The instance heartbeat may have expired but the agent is alive:
                 #   engine_lock_exists  — Skill Flow engine is executing a step
                 #   session_active_exists — agent is blocked in BLPOP (menu/collect wait)
+                #   parked_exists — conversation parked in a menu (DUR-01), no process
                 skipped_locked.append(conversation_id)
                 logger.info(
                     "Crash recovery: skipping active session "
                     "tenant=%s instance=%s conversation=%s "
-                    "lock=%s activity_flag=%s",
+                    "lock=%s activity_flag=%s parked=%s",
                     tenant_id, instance_id, conversation_id,
-                    bool(engine_lock_exists), bool(session_active_exists),
+                    bool(engine_lock_exists), bool(session_active_exists), bool(parked_exists),
                 )
                 continue
             await self._requeue_conversation(

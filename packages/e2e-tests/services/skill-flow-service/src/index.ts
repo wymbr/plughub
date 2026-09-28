@@ -340,7 +340,13 @@ app.post("/execute", async (req: Request, res: Response) => {
     session_token,
     deploy_version,
     menu_wait,
+    wake_only,
   } = req.body as {
+    /**
+     * DUR-01 — esta chamada ACORDA uma conversa estacionada: só continua um pipeline
+     * `in_progress`, nunca nasce um (409 `NOT_PARKED` sem executar nada).
+     */
+    wake_only?:      boolean
     /**
      * DUR-01 — como o `menu` espera o cliente. Ausente ou `block`: BLPOP dentro desta
      * requisição (como sempre foi). `park`: o engine devolve `outcome: "awaiting_input"`
@@ -732,7 +738,14 @@ app.post("/execute", async (req: Request, res: Response) => {
       // Arc 19: resume context — when set, the suspended step follows its on_resume path
       ...(resume_context ? { resumeContext: resume_context as ResumeContext } : {}),
       ...(menu_wait ? { menuWait: menu_wait } : {}),
+      ...(wake_only === true ? { wakeOnly: true } : {}),
     })
+
+    if ("error" in result && result.error === "NOT_PARKED") {
+      console.info(`[skill-flow-service] /execute NOT_PARKED: session=${session_id} status=${result.status}`)
+      res.status(409).json(result)
+      return
+    }
 
     if ("error" in result && result.error === "PRECONDITION_FAILED") {
       console.warn(`[skill-flow-service] /execute PRECONDITION_FAILED: session=${session_id} active_job=${result.active_job_id}`)

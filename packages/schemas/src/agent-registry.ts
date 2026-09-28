@@ -367,6 +367,16 @@ export const PoolRegistrationSchema = z.object({
    */
   dispatch_mode:          z.enum(["push", "pull"]).optional(),
   /**
+   * DUR-01 — como o agente de IA deste pool espera o cliente num step `menu`.
+   *   "block" (default): o executor espera dentro da requisição (BLPOP), segurando
+   *           conexão Redis, lock e requisição HTTP a conversa inteira.
+   *   "park": a conversa ESTACIONA — a requisição volta, e a resposta do cliente a
+   *           acorda. Vale para o agente principal; especialista de conferência e
+   *           menu dentro de `begin_transaction` continuam bloqueando.
+   * Ver `docs/adr/adr-menu-durable-park.md`.
+   */
+  menu_wait:              z.enum(["block", "park"]).optional(),
+  /**
    * E2f — este pool atende CONTATO de cliente ou trabalho INTERNO da plataforma?
    *   "contact" (default): voltado ao cliente. Conta como contato, alimenta TMA/SLA.
    *   "internal": trabalho interno criado pela plataforma (wrap-up destacado, hooks).

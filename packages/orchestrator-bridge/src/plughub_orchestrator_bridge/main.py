@@ -53,6 +53,7 @@ from plughub_contextstore.writer import write_context_tags
 from plughub_contextstore.loader import get_masking_catalog, set_context_map_fetcher
 from plughub_contextstore.masking import mask_free_text
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -498,6 +499,7 @@ async def deliver_collect_outcome(redis_client, session_id: str, contact_id: str
             continue
         key = menu_signal_key(session_id, "" if agent_key == "_default_" else agent_key)
         await redis_client.lpush(key, json.dumps({"_collect_outcome": outcome}))
+        _spawn(wake_parked_run(redis_client, session_id, agent_key, "collect"))   # DUR-01
         entregues += 1
     if entregues:
         logger.info("Desfecho de coleta %s entregue a %d menu(s): session=%s", outcome, entregues, session_id)
@@ -1522,6 +1524,8 @@ async def activate_native_agent(
     resume_context: dict | None = None,
     pool_id: str = "",
     token_instance_id: str = "",
+    menu_wait: str = "",
+    wake_only: bool = False,
 ) -> dict:
     """
     Activate a plughub-native orchestrator agent by calling skill-flow-service.
@@ -1628,6 +1632,12 @@ async def activate_native_agent(
     # Arc 19: resume context — when set, the engine picks up from the suspended step.
     if resume_context:
         payload["resume_context"] = resume_context
+    # DUR-01 — `park`: o menu estaciona e a requisição volta com `awaiting_input`;
+    # `wake_only`: esta chamada ACORDA uma conversa estacionada e nunca nasce um fluxo.
+    if menu_wait:
+        payload["menu_wait"] = menu_wait
+    if wake_only:
+        payload["wake_only"] = True
     # Conference agents (hook agents AND task-step specialists) share the same
     # session_id for message delivery, but each needs its own pipeline_state and
     # execution lock so two of them running in parallel on the same session never
@@ -1669,10 +1679,18 @@ async def activate_native_agent(
                 )
                 return body
             elif resp.status == 412:
-                logger.warning(
-                    "Skill already running: session=%s active_job=%s",
-                    session_id, body.get("active_job_id"),
+                # DUR-01: num ACORDAR, 412 é o caminho esperado — quem segura o lock lê a
+                # caixa antes de estacionar (o Lua garante), então a resposta não se perde.
+                (logger.info if wake_only else logger.warning)(
+                    "Skill already running: session=%s active_job=%s wake=%s",
+                    session_id, body.get("active_job_id"), wake_only,
                 )
+            elif resp.status == 409 and body.get("error") == "NOT_PARKED":
+                logger.info(
+                    "DUR-01 acordar sem pipeline em andamento: session=%s status=%s",
+                    session_id, body.get("status"),
+                )
+                return {"not_parked": True, "status": body.get("status")}
             else:
                 logger.error(
                     "Skill execute failed: session=%s status=%d body=%s",
@@ -4953,6 +4971,1059 @@ async def _release_native_instance_snapshot(
 
 # ── Process conversations.routed ──────────────────────────────────────────────
 
+async def _finish_native_segment(
+    http:         aiohttp.ClientSession,
+    redis_client: aioredis.Redis,
+    run:          dict,
+    agent_result: dict,
+) -> None:
+    """
+    Fecha o segmento de um agente nativo depois que o fluxo TERMINOU: avisa a
+    conferência, devolve a instância (`agent_ready` → `agent_done`), publica o
+    `participant_left` e aplica o desfecho ao contato (fechamento, hooks, suspensão).
+
+    DUR-01: era o fim do `process_routed`, e só podia rodar ali porque a requisição
+    ao `/execute` durava a conversa inteira. Com o `menu` estacionado, o fluxo
+    termina numa execução POSTERIOR (a que o acordar dispara), então o fechamento
+    virou função e recebe em `run` o que antes eram variáveis locais da ativação —
+    guardado em Redis enquanto a conversa está estacionada (`_park_native_run`).
+    """
+    session_id         = run["session_id"]
+    tenant_id          = run["tenant_id"]
+    customer_id        = run["customer_id"]
+    pool_id            = run["pool_id"]
+    agent_type_id      = run["agent_type_id"]
+    conference_id      = run["conference_id"]
+    native_instance_id = run["native_instance_id"]
+    native_snapshot    = run["native_snapshot"]
+    _part_role         = run["part_role"]
+    _part_seg_id       = run["part_seg_id"]
+    _part_seq_idx      = run["part_seq_idx"]
+    _part_parent_seg   = run["part_parent_seg"]
+    _part_joined_iso   = run["part_joined_iso"]
+    _part_joined_at    = datetime.fromisoformat(_part_joined_iso)
+    _is_hook_agent     = bool(run["is_hook_agent"])
+
+    # ── Conference: notify the human agent that the AI has completed ──────
+    # Published to agent:events:{session_id} (Redis pub/sub) so the
+    # Agent Assist UI can update its state immediately — the human can
+    # resume full control knowing exactly what the AI resolved.
+    if conference_id and agent_result.get("outcome"):
+        try:
+            await redis_client.publish(
+                f"agent:events:{session_id}",
+                json.dumps({
+                    "type":          "conference.agent_completed",
+                    "session_id":    session_id,
+                    "conference_id": conference_id,
+                    "agent_type_id": agent_type_id,
+                    "outcome":       agent_result.get("outcome"),
+                    "pipeline_state": agent_result.get("pipeline_state"),
+                    "completed_at":  datetime.now(timezone.utc).isoformat(),
+                }),
+            )
+            logger.info(
+                "Conference AI completed: session=%s conference=%s outcome=%s",
+                session_id, conference_id, agent_result.get("outcome"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not publish conference.agent_completed: session=%s — %s",
+                session_id, exc,
+            )
+
+    # Skill flow ended naturally — clear the completing marker so that any
+    # concurrent contact_closed event knows NOT to skip this instance.
+    if native_instance_id:
+        try:
+            await redis_client.delete(
+                f"session:{session_id}:ai_completing:{native_instance_id}"
+            )
+        except Exception:
+            pass
+
+    # Restore instance with a long TTL so the next contact can be routed.
+    # Stateless AI agents are always available after serving a session.
+    # Gap-A fix: always land the mirror at ready — even when native_snapshot
+    # is None (snapshot key expired mid-flow, e.g. delegate→OTP→suspend) — so
+    # the mirror is never left busy after agent_done drops the SCARD.
+    await _release_native_instance_snapshot(
+        redis_client, tenant_id, native_instance_id, pool_id,
+        agent_type_id, native_snapshot,
+    )
+
+    # Notify routing-engine of the instance transition:
+    #   1. agent_ready  — triggers _drain_queue_for_agent() so queued contacts
+    #                     are offered to this instance immediately. Also triggers
+    #                     _refresh_pool_snapshots() so Monitor reflects the restored
+    #                     capacity without waiting for the next routing event.
+    #                     max_concurrent_sessions read from the instance snapshot so
+    #                     the routing-engine models capacity correctly (#276).
+    #   2. agent_done   — triggers remove_conversation() → DECR pool active_count.
+    #                     Must fire AFTER agent_ready so the drain sees correct counts.
+    if _kafka_producer and native_instance_id:
+        _snap_max_concurrent = int(
+            (native_snapshot or {}).get("max_concurrent_sessions")
+            or (native_snapshot or {}).get("max_concurrent")
+            or 1
+        )
+        _snap_pools = list((native_snapshot or {}).get("pools") or ([pool_id] if pool_id else []))
+        _spawn(_kafka_producer.send(
+            TOPIC_LIFECYCLE,
+            json.dumps({
+                "event":                   "agent_ready",
+                "tenant_id":               tenant_id,
+                "instance_id":             native_instance_id,
+                "agent_type_id":           agent_type_id,
+                "status":                  "ready",
+                "execution_model":         (native_snapshot or {}).get("execution_model", "stateless"),
+                "current_sessions":        0,
+                "max_concurrent_sessions": _snap_max_concurrent,
+                "pools":                   _snap_pools,
+                "timestamp":               datetime.now(timezone.utc).isoformat(),
+            }).encode("utf-8"),
+        ))
+
+    # Notify routing-engine to decrement the pool's busy counter.
+    # For plughub-native agents the bridge manages lifecycle via direct Redis
+    # writes; mcp-server never publishes agent_done, so remove_conversation()
+    # is never called and _pool_active_count_key stays elevated. We publish
+    # agent_done here immediately after the instance is restored.
+    if _kafka_producer and native_instance_id:
+        _spawn(_kafka_producer.send(
+            TOPIC_LIFECYCLE,
+            json.dumps({
+                "event":           "agent_done",
+                "tenant_id":       tenant_id,
+                "instance_id":     native_instance_id,
+                "agent_type_id":   agent_type_id,
+                "pools":           _snap_pools,   # required by remove_conversation()
+                "conversation_id": session_id,
+                "timestamp":       datetime.now(timezone.utc).isoformat(),
+            }).encode("utf-8"),
+        ))
+
+    # Signal to process_contact_event that this instance was naturally
+    # restored — no emergency restore needed on future contact_closed events.
+    if native_instance_id:
+        try:
+            await redis_client.srem(
+                f"session:{session_id}:ai_agents", native_instance_id
+            )
+        except Exception:
+            pass
+
+    # ── Clear specialist conference key ───────────────────────────────────
+    # For plughub-native agents, runtime.ts agent_done is never called so
+    # conference_agent_completed is never published → the Kafka handler that
+    # normally cleans up this key never runs.  Without this delete the key
+    # persists with its 4h TTL and the dedup guard blocks re-invocation of
+    # the same pool within the same session (e.g. calling @auth_form twice).
+    if conference_id and pool_id:
+        try:
+            await redis_client.delete(
+                f"session:{session_id}:conference:specialist:{pool_id}"
+            )
+            logger.info(
+                "Specialist conference key cleared: session=%s pool=%s",
+                session_id, pool_id,
+            )
+        except Exception:
+            pass
+
+    # ── Fase C: participant_left ───────────────────────────────────────────
+    _part_duration_ms = int(
+        (datetime.now(timezone.utc) - _part_joined_at).total_seconds() * 1000
+    )
+    # ── Arc 5: retrieve segment_id stored at participant_joined ───────────
+    _left_seg_id = _part_seg_id   # already in scope; GETDEL for cleanup
+    try:
+        _raw_seg = await redis_client.getdel(
+            f"session:{session_id}:segment:{native_instance_id}"
+        )
+        if _raw_seg:
+            _left_seg_id = (
+                _raw_seg if isinstance(_raw_seg, str) else _raw_seg.decode()
+            )
+    except Exception:
+        pass
+    # Outcome from agent_result (populated by activate_native_agent)
+    _part_outcome = agent_result.get("outcome") if agent_result else None
+    # flow_id = skill-flow deployado que o agente executou (avaliação IA por skill)
+    _part_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
+    # F7: motivo de escalação normalizado declarado pelo escalate step (IA),
+    # persistido em pipeline_state.results.escalation_reason via output_as.
+    _part_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
+    _part_esc = str(_part_results.get("escalation_reason", "") or "") or None
+    _part_issue = _flow_issue_status(agent_result)
+    # ── Fase A (queue-attended-model): record last primary outcome ────────
+    # Single source of truth for outcome is the segment; the session-level
+    # outcome in contact_closed is DERIVED from the last primary segment.
+    # _close_contact_layer() reads this marker to populate the analytics event.
+    if _part_role == "primary" and _part_outcome:
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:last_outcome",
+                604800,
+                json.dumps({"outcome": _part_outcome, "agent_kind": "ai"}),
+            )
+        except Exception:
+            pass
+    _spawn(_publish_participant_event(
+        session_id=session_id,
+        tenant_id=tenant_id,
+        participant_id=native_instance_id,
+        pool_id=pool_id,
+        agent_type_id=agent_type_id,
+        event_type="participant_left",
+        agent_type="native",
+        role=_part_role,
+        segment_id=_left_seg_id,
+        sequence_index=_part_seq_idx,
+        parent_segment_id=_part_parent_seg,
+        conference_id=conference_id,
+        joined_at=_part_joined_iso,
+        duration_ms=_part_duration_ms,
+        outcome=_part_outcome,
+        flow_id=_part_flow_id,
+        escalation_reason=_part_esc,
+        issue_status=_part_issue,
+        deploy_version=_flow_deploy_version(agent_result),
+    ))
+    # G5 dedup guard: conference_agent_completed checks this key before emitting
+    # participant_left for external conference specialists.  Native bridge agents
+    # always go through process_routed (here), so the guard is set and the Kafka
+    # handler correctly skips emission.  External agents never reach this branch,
+    # so the guard is absent and conference_agent_completed emits for them.
+    if native_instance_id:
+        try:
+            await redis_client.set(
+                f"session:{session_id}:participant_left:{native_instance_id}",
+                "1",
+                nx=True,
+                ex=86400,
+            )
+        except Exception:
+            pass
+
+    # ── Primary AI agent complete: trigger contact close ──────────────────
+    # Conference / hook agents are handled by the Fase B/C block below
+    # (counter tracked via hook_conf keys).  Primary (non-conference) AI
+    # agents own the session lifecycle directly, so we must trigger the
+    # close here.  The idempotency guard (close_fired NX key) inside
+    # _trigger_contact_close prevents double-close when the channel-gateway
+    # already fired a close due to customer disconnect or session timeout.
+    #
+    # EXCEÇÃO: outcomes de escalação/transferência indicam que a sessão
+    # continua com outro agente — NÃO fechar o WebSocket do cliente.
+    # O conversation_escalate (BPM tool) já publicou conversations.inbound
+    # para alocar o próximo agente; fechar aqui causaria race condition.
+    # Arc 19: "suspended" is added so webhook sessions are NOT closed when
+    # the engine returns outcome: "suspended" — the session persists in Redis
+    # (TTL extended by persistSuspendWebhook) awaiting a resume signal.
+    _ai_outcome = (agent_result or {}).get("outcome", "")
+    if not conference_id and contato_encerra_com(_ai_outcome):
+        # G1 fix: freeze AHT at primary AI completion, before any hook agents run.
+        await _mark_contact_ended(redis_client, session_id)
+        # ── on_contact_end no fim de contato de primário IA (completude do hook) ──
+        # O hook on_contact_end (fim-de-CONTATO) é o mecanismo GENÉRICO de
+        # fim-de-contato: segura a sessão do cliente (posatt:customer_active) e roda
+        # o skill do pool configurado NA conferência. Até aqui só era disparado no
+        # caminho com humano (process_contact_event); um contato resolvido SÓ por IA
+        # fechava direto sem dar a chance ao hook. Aqui completamos: quando o
+        # contato encerra com o primário IA e o pool declara hooks.on_contact_end,
+        # disparamos o hook em vez de fechar direto. NÃO é lógica de survey — o que o
+        # hook faz (NPS in-conference, outbound, skip) é decisão do SKILL configurado.
+        # Gate em outcome=resolved: é o sinal "cliente presente no fim" do fluxo só-IA
+        # (em failed/abandoned/timeout o cliente já saiu — fecha direto, como antes).
+        _contact_end_hooks: list = []
+        _process_end_hooks: list = []
+        if _part_role == "primary" and http and pool_id and tenant_id:
+            try:
+                _ce_cfg    = await get_pool_config(http, tenant_id, pool_id)
+                _hooks_cfg = ((_ce_cfg or {}).get("hooks") or {})
+                # on_contact_end: cliente presente no fim (só em resolved).
+                if _ai_outcome == "resolved":
+                    _contact_end_hooks = _hooks_cfg.get("on_contact_end", []) or []
+                # Journey J4 on_process_end: fim de PROCESSO/N3 (workflow webhook).
+                # Mecanismo GENÉRICO — dispara em QUALQUER desfecho terminal (o agente
+                # decide via process_outcome); cliente NÃO precisa estar inline (agentes
+                # de survey usam veículo outbound). Só relevante p/ pools webhook (N3).
+                _process_end_hooks = _hooks_cfg.get("on_process_end", []) or []
+            except Exception as _ce_exc:
+                logger.warning(
+                    "contact/process-end hook lookup failed: session=%s pool=%s — %s",
+                    session_id, pool_id, _ce_exc,
+                )
+        if _contact_end_hooks or _process_end_hooks:
+            _ce_customer = session_id
+            try:
+                _ce_meta = await redis_client.get(f"session:{session_id}:meta")
+                if _ce_meta:
+                    _ce_customer = (json.loads(
+                        _ce_meta if isinstance(_ce_meta, str) else _ce_meta.decode()
+                    ).get("customer_id") or session_id)
+            except Exception:
+                pass
+            await _write_pre_hook_context(
+                redis_client, tenant_id, session_id,
+                close_origin="flow_complete",
+            )
+            if _contact_end_hooks:
+                _spawn(fire_pool_hooks(
+                    http=http, redis_client=redis_client,
+                    session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
+                    customer_id=_ce_customer, hook_type="on_contact_end",
+                    human_instance_id="",
+                ))
+                _spawn(_hook_timeout_guard(
+                    redis_client, session_id, "on_contact_end",
+                ))
+            if _process_end_hooks:
+                # Journey J4 — carimba process_outcome no ctx pré-hook. A raiz canônica
+                # já está em core.contact.root_session_id (J1) e o customer_id nativo em
+                # caller.customer_id — o agente de survey lê ambos p/ gravar grain=journey.
+                try:
+                    # ALW-02 — pelo funil, que CARIMBA o `atributo` (D9.6).
+                    await write_context_tags(
+                        redis_client, tenant_id, session_id,
+                        {"core.process.outcome": _ai_outcome},
+                        source="bridge:pre_hook",
+                        updated_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                except Exception:
+                    pass
+                _spawn(fire_pool_hooks(
+                    http=http, redis_client=redis_client,
+                    session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
+                    customer_id=_ce_customer, hook_type="on_process_end",
+                    human_instance_id="",
+                ))
+                _spawn(_hook_timeout_guard(
+                    redis_client, session_id, "on_process_end",
+                ))
+            # ── Camada 1 (contato) × camada 3 (conferência): não colapsar ─────
+            # Com hooks, o teardown é DIFERIDO — mas cada camada tem seu gatilho:
+            #   • camada 1 (`_close_contact_layer`, publica `contact_closed`) dispara
+            #     quando `posatt:customer_active` zera (último hook DE CLIENTE termina);
+            #   • camada 3 (`_destroy_conference`) dispara quando `posatt:active` zera.
+            # Se NENHUM hook fala com o cliente, `posatt:customer_active` nunca é
+            # incrementado → nunca zera → **a camada 1 nunca fecha**: o contato fica
+            # eternamente `active` no analytics (corrompendo open_count/TMA/SLA), e o
+            # `close_fired` que o `_destroy_conference` grava ainda faz o
+            # `session_watchdog` considerar a sessão já fechada — a rede de segurança
+            # não pega. `on_process_end` é `side=agent` por natureza (o survey sai por
+            # veículo OUTBOUND, não inline), então cai exatamente aqui.
+            # Espelha a mesma guarda do caminho humano (`agent_done` → on_human_end).
+            # Camada D: um hook `detached` NÃO segura o WS do cliente (vai por
+            # workflow webhook), então NÃO conta como "customer hook" — senão o
+            # contato ficaria eternamente `active` esperando um posatt:customer_active
+            # que nunca é incrementado. Só INLINE segura.
+            def _inline(_e) -> bool:
+                return isinstance(_e, dict) and (_e.get("dispatch", "inline") or "inline") != "detached"
+            _has_customer_hooks = any(_inline(e) for e in _contact_end_hooks) or any(
+                _inline(e) and (e.get("side", "agent") or "agent") == "customer"
+                for e in _process_end_hooks
+            )
+            if not _has_customer_hooks:
+                _spawn(_close_contact_layer(redis_client, session_id))
+            logger.info(
+                "contact/process-end hooks dispatched (AI primary): session=%s pool=%s "
+                "on_contact_end=%d on_process_end=%d outcome=%s customer_hooks=%s",
+                session_id, pool_id, len(_contact_end_hooks), len(_process_end_hooks),
+                _ai_outcome, _has_customer_hooks,
+            )
+        else:
+            _spawn(_trigger_contact_close(redis_client, session_id))
+
+    # ── Arc 19 Fase B: publish session_suspended to canonical stream ──────
+    # Fired for webhook pool sessions only (channel_type: webhook).
+    # Non-webhook sessions never return outcome: "suspended" because the
+    # engine guard (Arc 19 step profile enforcement) blocks the suspend step.
+    if _ai_outcome == "suspended" and not conference_id:
+        try:
+            # O leitor mora em `descobrir_parque` (topo deste módulo), onde
+            # pode ser testado: são DOIS sufixos de token, e ler só um foi o
+            # defeito da RET-12. Detalhe e gate no comentário de lá.
+            _susp_token, _susp_step_id, _susp_expires = descobrir_parque(
+                ((agent_result or {}).get("pipeline_state") or {}).get("results")
+            )
+
+            await redis_client.xadd(
+                f"session:{session_id}:stream",
+                {
+                    "event_id":    str(uuid.uuid4()),
+                    "type":        "session_suspended",
+                    "timestamp":   datetime.now(timezone.utc).isoformat(),
+                    "author_id":   native_instance_id or agent_type_id,
+                    "author_role": "ai",
+                    "visibility":  json.dumps("agents_only"),
+                    "segment_id":  _left_seg_id or "",
+                    "payload":     json.dumps({
+                        "step_id":           _susp_step_id,
+                        "resume_token":      _susp_token,
+                        "resume_expires_at": _susp_expires,
+                    }),
+                },
+                maxlen=500,
+            )
+
+            # Update the status key so WebhookAdapter.get_status() returns "suspended".
+            # TTL: use the session TTL as a safe floor; the actual Redis key TTLs on
+            # the session stream were extended by persistSuspendWebhook (Fase C).
+            if tenant_id:
+                await redis_client.setex(
+                    f"{tenant_id}:session:{session_id}:status",
+                    _stl(),
+                    "suspended",
+                )
+
+            # Arc 19 Fase E: publish session_suspended to Kafka conversations.events
+            # so analytics-api can write status='suspended' to ClickHouse sessions table.
+            if _kafka_producer is not None and tenant_id:
+                try:
+                    _susp_now = datetime.now(timezone.utc).isoformat()
+                    # `sessions` é ReplacingMergeTree de LINHA INTEIRA: a última versão
+                    # SUBSTITUI a anterior, não faz merge de colunas. Um evento parcial
+                    # (só status) chega com row_version mais novo que o do `routed` e
+                    # **apaga** pool_id/channel/customer_id/opened_at da linha. Por isso
+                    # todo escritor de `sessions` precisa mandar a linha COMPLETA — o
+                    # `contact_closed` já faz isso (relê o meta); o suspend não fazia.
+                    _susp_meta: dict = {}
+                    try:
+                        _raw_sm = await redis_client.get(f"session:{session_id}:meta")
+                        if _raw_sm:
+                            _susp_meta = json.loads(
+                                _raw_sm if isinstance(_raw_sm, str) else _raw_sm.decode()
+                            )
+                    except Exception:
+                        pass
+                    # ── D4 / Fase 2 — a lacuna ganha linha ABERTA ────────
+                    # `_susp_token` e `_susp_expires` já estavam em escopo (o
+                    # logger.info logo abaixo os imprime há tempos); só não
+                    # entravam no evento. O `suspend_reason` vem do
+                    # `{tenant}:resume_meta:{token}`, escrito pelo engine ANTES
+                    # de o agente retornar `suspended` — logo já existe aqui.
+                    # Sem ele a linha aberta responderia "está parada" sem
+                    # responder "por quê", que é metade do motivo da D4.
+                    _susp_reason = ""
+                    if _susp_token:
+                        try:
+                            _rm_raw = await redis_client.get(
+                                f"{tenant_id}:resume_meta:{_susp_token}"
+                            )
+                            if _rm_raw:
+                                _susp_reason = json.loads(
+                                    _rm_raw if isinstance(_rm_raw, str) else _rm_raw.decode()
+                                ).get("suspend_reason", "") or ""
+                        except Exception:
+                            pass
+                        if not _susp_reason:
+                            # Barulhento: motivo vazio numa transição é dado
+                            # perdido para sempre — o resume não o inventa.
+                            logger.warning(
+                                "session_suspended: resume_meta sem suspend_reason "
+                                "(session=%s token=%s) — a transição nasce sem motivo",
+                                session_id, _susp_token,
+                            )
+                    await _kafka_producer.send_and_wait(
+                        TOPIC_EVENTS,
+                        json.dumps({
+                            "event_type":  "session_suspended",
+                            "session_id":  session_id,
+                            "tenant_id":   tenant_id,
+                            "step_id":     _susp_step_id,
+                            "timestamp":   _susp_now,
+                            # Identidade da sessão — preserva o que o `routed` gravou.
+                            "pool_id":     _susp_meta.get("pool_id") or pool_id or "",
+                            "channel":     _susp_meta.get("channel") or "",
+                            "customer_id": _susp_meta.get("contact_id") or customer_id or "",
+                            # `opened_at` é a ABERTURA, não o instante do suspend.
+                            "opened_at":   _susp_meta.get("started_at") or "",
+                            # D4: identidade e conteúdo da LACUNA (linha aberta).
+                            "resume_token":      _susp_token or "",
+                            "resume_expires_at": _susp_expires or None,
+                            "suspend_reason":    _susp_reason,
+                        }).encode("utf-8"),
+                    )
+                except Exception as _ke:
+                    logger.warning(
+                        "Could not publish session_suspended to Kafka: session=%s — %s",
+                        session_id, _ke,
+                    )
+
+            logger.info(
+                "session_suspended published to stream: session=%s step=%s token=%s expires=%s",
+                session_id, _susp_step_id, _susp_token, _susp_expires,
+            )
+        except Exception as _susp_exc:
+            logger.warning(
+                "Could not publish session_suspended to stream: session=%s — %s",
+                session_id, _susp_exc,
+            )
+
+    # ── Arc 14 / Fase B/C: hook completion detection ─────────────────────
+    # hook_conf key stores "{hook_type}:{target_pool}:{side}" (Arc 14 extended
+    # from the old "{hook_type}:{target_pool}" format — backward compat: missing
+    # side part defaults to "agent").
+    #
+    # Algorithm (Arc 14 Fase A):
+    #   1. DECR hook_pending:{hook_type} (tracks completion per hook_type)
+    #   2. If last on_human_end: dispatch post_human BEFORE DECRing posatt:active
+    #      (so post_human INCRs are already in place before our DECR)
+    #   3. DECR posatt:active (one per hook segment completing, regardless of type)
+    #   4. If posatt:active == 0 and no new segments dispatched → _destroy_conference()
+    #      (Layer 1 — customer WS — was already closed by _close_contact_layer())
+    if conference_id:
+        try:
+            hook_label = await redis_client.getdel(
+                f"session:{session_id}:hook_conf:{conference_id}"
+            )
+            if hook_label:
+                _hl = hook_label if isinstance(hook_label, str) else hook_label.decode()
+                # F5: 5º campo = human_segment_id. "{hook}:{target}:{side}:{origin}:{seg}"
+                _hl_parts           = _hl.split(":", 4)
+                completed_hook_type = _hl_parts[0]
+                _hook_target_pool   = _hl_parts[1] if len(_hl_parts) > 1 else ""
+                _hook_side          = _hl_parts[2] if len(_hl_parts) > 2 else "agent"
+                _hook_origin_pool   = _hl_parts[3] if len(_hl_parts) > 3 else ""  # Arc 14 Fase C
+                _hook_human_seg     = _hl_parts[4] if len(_hl_parts) > 4 else ""   # F5
+
+                # G7 Slice B: segment_wrapup é fim-de-SEGMENTO (transfer) — NÃO
+                # arma contadores de close. Não DECR hook_pending/posatt:active,
+                # não dispara _close_contact_layer/_destroy_conference. Só aplica a
+                # disposição ao segmento, limpa wrap_up_pending e fecha o painel
+                # de wrap-up da origem (posatt_segment_complete). O contato segue
+                # pelo destino (re-rota já em voo).
+                _is_segment_wrapup = (completed_hook_type == "segment_wrapup")
+
+                if _is_segment_wrapup:
+                    remaining_hooks = 0
+                else:
+                    remaining_hooks = await redis_client.decr(
+                        f"session:{session_id}:hook_pending:{completed_hook_type}"
+                    )
+                logger.info(
+                    "Hook agent completed: session=%s conference=%s hook=%s pool=%s side=%s remaining=%d",
+                    session_id, conference_id, completed_hook_type, _hook_target_pool,
+                    _hook_side, remaining_hooks,
+                )
+
+                # Arc 14 Fase B: publish targeted session.closed for this segment.
+                # Read the participant SET registered by fire_pool_hooks (fixed-side)
+                # and by process_routed on hook-agent join.
+                # recipients=[...] → only those agents tear down their session view.
+                # The broadcast session.closed (reason=conference_destroyed) from
+                # _destroy_conference() still fires as the global cleanup signal.
+                try:
+                    _pset_key = (
+                        f"session:{session_id}:posatt:{conference_id}:participants"
+                    )
+                    _raw_pids = await redis_client.smembers(_pset_key)
+                    _recipients = [
+                        (p.decode() if isinstance(p, bytes) else p)
+                        for p in (_raw_pids or [])
+                    ]
+                    if _recipients:
+                        await redis_client.publish(
+                            f"agent:events:{session_id}",
+                            json.dumps({
+                                "type":       "session.closed",
+                                "session_id": session_id,
+                                "reason":     "posatt_segment_complete",
+                                "recipients": _recipients,
+                            }),
+                        )
+                        await redis_client.delete(_pset_key)
+                        logger.info(
+                            "posatt segment closed: session=%s conf=%s hook=%s "
+                            "recipients=%s",
+                            session_id, conference_id, completed_hook_type, _recipients,
+                        )
+                    else:
+                        logger.debug(
+                            "posatt segment closed: no participants SET found — "
+                            "session=%s conf=%s", session_id, conference_id,
+                        )
+                except Exception as _tgt_exc:
+                    logger.warning(
+                        "Could not publish posatt targeted session.closed: "
+                        "session=%s — %s", session_id, _tgt_exc,
+                    )
+
+                # Arc 14 Fase C: wrap_up_pending cleanup.
+                # When the agent-side (wrap-up) segment completes, delete the flag
+                # so the routing-engine can allocate new contacts to this agent.
+                # Use origin_pool from hook_conf (4th field) to derive instance_id:
+                # human-{origin_pool} — same key written by fire_pool_hooks.
+                if _hook_side == "agent" and completed_hook_type in ("on_human_end", "segment_wrapup"):
+                    try:
+                        if _hook_origin_pool and tenant_id:
+                            _wup_iid = f"human-{_hook_origin_pool}"
+                            _wp_key = (
+                                f"{tenant_id}:instance:{_wup_iid}:wrap_up_pending"
+                            )
+                            await redis_client.delete(_wp_key)
+                            logger.info(
+                                "wrap_up_pending cleared: session=%s instance=%s",
+                                session_id, _wup_iid,
+                            )
+                        else:
+                            logger.warning(
+                                "wrap_up_pending: no origin_pool in hook_conf — "
+                                "key not deleted: session=%s", session_id,
+                            )
+                    except Exception as _wup_exc:
+                        logger.warning(
+                            "Could not clear wrap_up_pending: session=%s — %s",
+                            session_id, _wup_exc,
+                        )
+
+                    # ── F5 (grão segmento): wrap-up completou ──────────────
+                    # A disposição coletada está no pipeline_state do PRÓPRIO
+                    # agente que completou (results.wrapup_classificacao/resumo)
+                    # — sem depender de ContextStore. Atribui ao segmento humano
+                    # que ESTE on_human_end serviu (_hook_human_seg do hook_conf).
+                    if _hook_human_seg:
+                        _wp_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
+                        _wp_cls = str(_wp_results.get("wrapup_classificacao", "") or "")
+                        _wp_res = str(_wp_results.get("wrapup_resumo", "") or "")
+                        # F7: motivo de escalação normalizado (só presente quando escalado).
+                        _wp_esc = str(_wp_results.get("wrapup_escalation_reason", "") or "")
+                        if _wp_cls:
+                            _spawn(_apply_wrapup_to_segment(
+                                redis_client, session_id, _hook_human_seg, _wp_cls, _wp_res, _wp_esc,
+                            ))
+
+                # Arc 14 Fase E: when a customer-side hook (NPS) completes,
+                # DECR posatt:customer_active and close the customer WS when
+                # the counter reaches 0 (all NPS/survey segments finished).
+                # In the no-customer-hook path, _close_contact_layer() fires
+                # immediately in the agent_done handler above.
+                if _hook_side == "customer":
+                    # F10.3b: o NPS de segmento é gravado pelo PRÓPRIO agente de
+                    # NPS via survey_record(grain=segment) — caminho unificado em
+                    # session_signal. O bridge não deriva mais nps_score aqui
+                    # (legado _apply_nps_to_segment/segments.nps_score removido).
+                    try:
+                        _cust_remaining = await redis_client.decr(
+                            f"session:{session_id}:posatt:customer_active"
+                        )
+                        logger.info(
+                            "posatt:customer_active DECR: session=%s conf=%s "
+                            "hook=%s remaining=%d",
+                            session_id, conference_id, completed_hook_type,
+                            _cust_remaining,
+                        )
+                        if _cust_remaining <= 0:
+                            _spawn(
+                                _close_contact_layer(redis_client, session_id)
+                            )
+                    except Exception as _ca_exc:
+                        logger.warning(
+                            "Could not DECR posatt:customer_active: session=%s — %s",
+                            session_id, _ca_exc,
+                        )
+
+                # Arc 14: dispatch post_human BEFORE DECRing posatt:active so that
+                # fire_pool_hooks() INCRs posatt:active for each new segment FIRST.
+                _dispatched_post = False
+                if remaining_hooks <= 0 and completed_hook_type == "on_human_end":
+                    _ph_pool = _ph_tenant = _ph_customer = ""
+                    try:
+                        _ph_raw = await redis_client.get(f"session:{session_id}:meta")
+                        if _ph_raw:
+                            _ph_meta     = json.loads(_ph_raw)
+                            _ph_pool     = _ph_meta.get("pool_id", "")
+                            _ph_tenant   = (
+                                _ph_meta.get("tenant_id", "")
+                                or _ph_meta.get("tenant", "")
+                            )
+                            _ph_customer = (
+                                _ph_meta.get("customer_id", session_id) or session_id
+                            )
+                    except Exception as _ph_exc:
+                        logger.debug(
+                            "Could not read meta for post_human check: "
+                            "session=%s — %s", session_id, _ph_exc,
+                        )
+                    if http and _ph_pool and _ph_tenant:
+                        try:
+                            _ph_config = await get_pool_config(
+                                http, _ph_tenant, _ph_pool
+                            )
+                            _post_human_list = (
+                                ((_ph_config or {}).get("hooks") or {})
+                                .get("post_human", [])
+                            )
+                            if _post_human_list:
+                                # fire_pool_hooks INCRs posatt:active for each post_human hook
+                                _spawn(fire_pool_hooks(
+                                    http=http,
+                                    redis_client=redis_client,
+                                    session_id=session_id,
+                                    pool_id=_ph_pool,
+                                    tenant_id=_ph_tenant,
+                                    customer_id=_ph_customer,
+                                    hook_type="post_human",
+                                ))
+                                _spawn(_hook_timeout_guard(
+                                    redis_client, session_id, "post_human",
+                                ))
+                                logger.info(
+                                    "post_human hooks dispatched: session=%s pool=%s count=%d "
+                                    "(timeout guard scheduled: %ds)",
+                                    session_id, _ph_pool, len(_post_human_list),
+                                    _HOOK_TIMEOUT_S,
+                                )
+                                _dispatched_post = True
+                        except Exception as _ph_exc2:
+                            logger.warning(
+                                "Could not check post_human hooks: session=%s — %s",
+                                session_id, _ph_exc2,
+                            )
+
+                # Arc 14: DECR posatt:active for this completing hook segment.
+                # Done AFTER dispatching post_human so INCRs precede this DECR.
+                # G7 Slice B: segment_wrapup nunca fez INCR posatt:active e NÃO pode
+                # fechar o contato (segue pelo destino) — pula DECR + _destroy.
+                _posatt_remaining = -1
+                if not _is_segment_wrapup:
+                    try:
+                        _posatt_remaining = await redis_client.decr(
+                            f"session:{session_id}:posatt:active"
+                        )
+                        logger.info(
+                            "posatt:active DECR: session=%s conference=%s hook=%s remaining=%d",
+                            session_id, conference_id, completed_hook_type, _posatt_remaining,
+                        )
+                    except Exception as _pa_exc:
+                        logger.warning(
+                            "Could not DECR posatt:active: session=%s — %s",
+                            session_id, _pa_exc,
+                        )
+
+                    # Destroy conference when all posatt segments finished AND no new
+                    # segments were just dispatched (post_human dispatch adds more INCRs).
+                    # _close_contact_layer() already closed the customer WS immediately.
+                    if _posatt_remaining <= 0 and not _dispatched_post:
+                        _spawn(
+                            _destroy_conference(redis_client, session_id)
+                        )
+
+                # G7 Fatia 2b/3 — conclusão de um segment_wrapup do fan-out de
+                # customer-disconnect: DECR contact_close_pending (via marcador
+                # close_arming por-conferência, idempotente). Quando zera E não há
+                # posatt:active pendente → fecha o contato (deferido até aqui para
+                # que TODOS os humanos recebessem wrap-up). segment_wrapup de
+                # transfer/peer-continuação não tem o marcador → no-op.
+                if _is_segment_wrapup:
+                    try:
+                        _arming = await redis_client.getdel(
+                            f"session:{session_id}:close_arming:{conference_id}"
+                        )
+                        if _arming:
+                            _ccp_rem = await redis_client.decr(
+                                f"session:{session_id}:contact_close_pending"
+                            )
+                            logger.info(
+                                "contact_close_pending DECR: session=%s conf=%s remaining=%d",
+                                session_id, conference_id, _ccp_rem,
+                            )
+                            if _ccp_rem <= 0:
+                                # Todos os wrap-ups de peer terminaram. _close_contact_layer
+                                # é idempotente (contact_close_fired NX) e _destroy_conference
+                                # se auto-guarda em posatt:active — então, na ordem âncora-por-
+                                # último, o _destroy aqui adia e a conclusão da âncora
+                                # (posatt→0) o re-dispara. Robusto em qualquer ordem.
+                                logger.info(
+                                    "Fan-out complete (contact_close_pending=0) — closing "
+                                    "contact: session=%s", session_id,
+                                )
+                                _spawn(
+                                    _close_contact_layer(redis_client, session_id)
+                                )
+                                _spawn(
+                                    _destroy_conference(redis_client, session_id)
+                                )
+                    except Exception as _ccp_exc:
+                        logger.warning(
+                            "Could not process contact_close_pending: session=%s — %s",
+                            session_id, _ccp_exc,
+                        )
+
+        except Exception as exc:
+            logger.warning(
+                "Hook completion detection error: session=%s conference=%s — %s",
+                session_id, conference_id, exc,
+            )
+
+        # ── G2 fix (native inline): SREM + deferred on_human_end dispatch ──────
+        # For plughub-native specialists the skill flow runs inline inside
+        # activate_native_agent — runtime.ts agent_done is never called, so
+        # conference_agent_completed is never published to Kafka and the Kafka
+        # handler's G2 block (line ~2500) never executes.
+        # We must do the SREM + deferred hook check here, synchronously, after
+        # the skill flow returns.
+        if native_instance_id and not _is_hook_agent:
+            try:
+                await redis_client.srem(
+                    f"session:{session_id}:active_ai_specialists", native_instance_id,
+                )
+                _native_rem_specs = await redis_client.scard(
+                    f"session:{session_id}:active_ai_specialists"
+                )
+                if _native_rem_specs == 0:
+                    _native_pend_raw = await redis_client.getdel(
+                        f"session:{session_id}:pending_on_human_end"
+                    )
+                    if _native_pend_raw:
+                        _npd = json.loads(
+                            _native_pend_raw if isinstance(_native_pend_raw, str)
+                            else _native_pend_raw.decode()
+                        )
+                        _npd_pool     = _npd.get("pool_id", "")
+                        _npd_tenant   = _npd.get("tenant_id", "")
+                        _npd_customer = _npd.get("customer_id", session_id)
+                        _npd_h_inst   = _npd.get("human_instance_id")
+                        _npd_cust_pid = _npd.get("customer_participant_id")
+                        logger.info(
+                            "All native specialists done — dispatching deferred on_human_end: "
+                            "session=%s pool=%s", session_id, _npd_pool,
+                        )
+                        if http and _npd_pool and _npd_tenant:
+                            _npd_pool_cfg = await get_pool_config(
+                                http, _npd_tenant, _npd_pool
+                            )
+                            _npd_hooks_cfg = (_npd_pool_cfg or {}).get("hooks") or {}
+                            _npd_hooks      = _npd_hooks_cfg.get("on_human_end", [])
+                            # G7 Fase 3b: NPS migrou para on_contact_end.
+                            _npd_contact    = _npd_hooks_cfg.get("on_contact_end", [])
+                            if _npd_hooks or _npd_contact:
+                                await _write_pre_hook_context(
+                                    redis_client, _npd_tenant, session_id,
+                                    close_origin="agent_closed",
+                                    human_instance_id=_npd_h_inst,
+                                    customer_participant_id=_npd_cust_pid,
+                                )
+                                if _npd_hooks:
+                                    _spawn(fire_pool_hooks(
+                                        http=http, redis_client=redis_client,
+                                        session_id=session_id,
+                                        pool_id=_npd_pool,
+                                        tenant_id=_npd_tenant,
+                                        customer_id=_npd_customer,
+                                        hook_type="on_human_end",
+                                        human_instance_id=_npd_h_inst or "",
+                                    ))
+                                    _spawn(_hook_timeout_guard(
+                                        redis_client, session_id, "on_human_end",
+                                    ))
+                                if _npd_contact:
+                                    _spawn(fire_pool_hooks(
+                                        http=http, redis_client=redis_client,
+                                        session_id=session_id,
+                                        pool_id=_npd_pool,
+                                        tenant_id=_npd_tenant,
+                                        customer_id=_npd_customer,
+                                        hook_type="on_contact_end",
+                                        human_instance_id=_npd_h_inst or "",
+                                    ))
+                                    _spawn(_hook_timeout_guard(
+                                        redis_client, session_id, "on_contact_end",
+                                    ))
+                                logger.info(
+                                    "contact-end hooks dispatched (native deferred): "
+                                    "session=%s pool=%s on_human_end=%d on_contact_end=%d",
+                                    session_id, _npd_pool, len(_npd_hooks), len(_npd_contact),
+                                )
+                            else:
+                                _spawn(
+                                    _trigger_contact_close(redis_client, session_id)
+                                )
+                        else:
+                            _spawn(
+                                _trigger_contact_close(redis_client, session_id)
+                            )
+            except Exception as _g2n_exc:
+                logger.warning(
+                    "G2 native: could not process deferred on_human_end: "
+                    "session=%s — %s", session_id, _g2n_exc,
+                )
+
+
+# ── DUR-01 F2 — conversa ESTACIONADA num `menu` ───────────────────────────────
+#
+# Com o pool em `menu_wait: park`, o `/execute` volta com `awaiting_input` assim que o
+# menu manda o prompt: nenhuma requisição, conexão Redis ou lock fica preso esperando o
+# cliente. O que o fim do `process_routed` precisaria para fechar o segmento vai para
+# `session:{sid}:parked_run:{campo}` (campo = instance_id, o MESMO do `menu:waiting`),
+# e quem traz a resposta ACORDA a conversa: `/execute` de novo, com `wake_only`.
+#
+# Quatro gatilhos, todos pelo bridge — o único que chama o executor: a resposta do
+# cliente (`process_inbound`), o sinal de coleta e o de @mention, o fechamento do
+# contato, e o prazo do menu (`_menu_deadline_scanner`).
+
+# Sessão HTTP compartilhada do `run()`: o acordar parte de lugares que não a recebem
+# (fechamento, sinal de coleta, varredura) e precisa dela para o registry.
+_SHARED_HTTP: aiohttp.ClientSession | None = None
+
+
+def _parked_run_key(session_id: str, field: str) -> str:
+    return f"session:{session_id}:parked_run:{field}"
+
+
+def _parked_runs_set(session_id: str) -> str:
+    return f"session:{session_id}:parked_runs"
+
+
+async def _pool_menu_wait(http: aiohttp.ClientSession, tenant_id: str, pool_id: str) -> str:
+    """
+    `park` só quando o pool o declara. Registry fora ⇒ `block`, DITO: a conversa segue
+    funcionando como sempre, mas o pool que pediu para estacionar deixa de estacionar —
+    e isso aparece no log, nunca em silêncio.
+    """
+    if not (http and tenant_id and pool_id):
+        return "block"
+    cfg = await get_pool_config(http, tenant_id, pool_id)
+    if cfg is None:
+        logger.warning(
+            "DUR-01 menu_wait do pool %s ilegível (registry sem resposta) — este contato "
+            "BLOQUEIA a espera do menu no executor em vez de estacionar", pool_id,
+        )
+        return "block"
+    return "park" if cfg.get("menu_wait") == "park" else "block"
+
+
+async def _park_native_run(redis_client: aioredis.Redis, run: dict, activation: dict) -> None:
+    """Guarda o contexto da ativação enquanto a conversa está estacionada."""
+    field = run["native_instance_id"] or "_default_"
+    ttl   = _stl()
+    await redis_client.set(
+        _parked_run_key(run["session_id"], field),
+        json.dumps({"run": run, "activation": activation}),
+        ex=ttl,
+    )
+    await redis_client.sadd(_parked_runs_set(run["session_id"]), field)
+    await redis_client.expire(_parked_runs_set(run["session_id"]), ttl)
+    logger.info(
+        "DUR-01 conversa estacionada: session=%s instance=%s pool=%s",
+        run["session_id"], run["native_instance_id"], run["pool_id"],
+    )
+
+
+async def wake_parked_run(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    field:        str,
+    reason:       str,
+) -> str:
+    """
+    Acorda a conversa estacionada em `field` e, se o fluxo TERMINAR nesta execução,
+    fecha o segmento. Devolve o que aconteceu (para log e teste):
+
+      not_parked       — não havia conversa estacionada ali (nada a fazer)
+      busy             — outra execução segura o pipeline (412): ela lê a caixa
+      parked_again     — o menu não achou nada novo, ou reofertou: estacionou de novo
+      finished         — o fluxo terminou e o segmento foi fechado por ESTA chamada
+      already_finished — outro acordar já fechou o segmento
+    """
+    raw = await redis_client.get(_parked_run_key(session_id, field))
+    if not raw:
+        return "not_parked"
+    http = _SHARED_HTTP
+    if http is None:
+        logger.error(
+            "DUR-01 acordar sem sessão HTTP: session=%s field=%s reason=%s — a conversa "
+            "CONTINUA estacionada até o próximo gatilho", session_id, field, reason,
+        )
+        return "busy"
+    parked = json.loads(raw if isinstance(raw, str) else raw.decode())
+    run, act = parked["run"], parked["activation"]
+
+    result = await activate_native_agent(
+        http=http, redis_client=redis_client,
+        session_id=session_id, customer_id=run["customer_id"],
+        agent_type_id=run["agent_type_id"], tenant_id=run["tenant_id"],
+        skills=act.get("skills") or [],
+        instance_id=run["native_instance_id"],
+        conference_id=run["conference_id"],
+        segment_id=run["part_seg_id"],
+        webhook_pool=bool(act.get("webhook_pool")),
+        pool_id=run["pool_id"],
+        menu_wait="park", wake_only=True,
+    )
+    outcome = result.get("outcome")
+    if result.get("not_parked"):
+        # O pipeline não está em andamento, mas o registro de estacionamento ainda
+        # existe: ou outro acordar terminou e está fechando (ele apaga o registro), ou o
+        # pipeline expirou com a conversa estacionada — este segundo caso nunca fecharia
+        # o segmento sozinho, então quem apagar o registro fecha como falha.
+        if await redis_client.delete(_parked_run_key(session_id, field)) == 0:
+            return "already_finished"
+        await redis_client.srem(_parked_runs_set(session_id), field)
+        logger.error(
+            "DUR-01 conversa estacionada sem pipeline em andamento (status=%s): session=%s "
+            "field=%s — segmento fechado como FALHA", result.get("status"), session_id, field,
+        )
+        await _finish_native_segment(http, redis_client, run, {"outcome": "failed"})
+        return "finished"
+    if not outcome:
+        return "busy"
+    if outcome == "awaiting_input":
+        return "parked_again"
+    # Terminou. Só UM acordar fecha o segmento: o que apagar o registro.
+    if await redis_client.delete(_parked_run_key(session_id, field)) == 0:
+        return "already_finished"
+    await redis_client.srem(_parked_runs_set(session_id), field)
+    logger.info(
+        "DUR-01 conversa acordada terminou: session=%s field=%s reason=%s outcome=%s",
+        session_id, field, reason, outcome,
+    )
+    await _finish_native_segment(http, redis_client, run, result)
+    return "finished"
+
+
+async def wake_all_parked_runs(redis_client: aioredis.Redis, session_id: str, reason: str) -> int:
+    """Acorda toda conversa estacionada da sessão (fechamento do contato). Devolve quantas."""
+    fields = await redis_client.smembers(_parked_runs_set(session_id)) or set()
+    for f in fields:
+        field = f.decode() if isinstance(f, bytes) else f
+        _spawn(wake_parked_run(redis_client, session_id, field, reason))
+    return len(fields)
+
+
+async def _menu_deadline_scanner(redis_client: aioredis.Redis, tenant_ids: list[str]) -> None:
+    """
+    D6 — acorda o menu estacionado cujo prazo venceu; o menu, com a caixa vazia e o
+    prazo passado, sai por `on_timeout`. O `ZREM` é o claim: com N réplicas, só quem
+    remove acorda. ⚠️ Queda entre o claim e o acordar perde AQUELE prazo — a conversa
+    segue estacionada até a resposta ou o fechamento, nunca some.
+    """
+    while True:
+        try:
+            agora = int(time.time() * 1000)
+            for tenant_id in tenant_ids:
+                chave = f"{tenant_id}:menu:deadlines"
+                vencidos = await redis_client.zrangebyscore(chave, "-inf", agora, start=0, num=200)
+                for m in vencidos or []:
+                    psid = m.decode() if isinstance(m, bytes) else m
+                    if await redis_client.zrem(chave, psid) != 1:
+                        continue
+                    marca = await redis_client.get(f"{tenant_id}:pipeline:{psid}:parked")
+                    if not marca:
+                        continue
+                    iid = (json.loads(marca if isinstance(marca, str) else marca.decode())
+                           .get("instance_id") or "")
+                    session_id = psid.split("--seg--")[0]
+                    _spawn(wake_parked_run(redis_client, session_id, iid or "_default_", "deadline"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("DUR-01 varredura de prazos falhou (tenta de novo em 1 s): %s", exc)
+        await asyncio.sleep(1)
+
+
 async def process_routed(
     msg: dict,
     http: aiohttp.ClientSession,
@@ -5701,6 +6772,12 @@ async def process_routed(
                     session_id, _mm_exc,
                 )
 
+        # DUR-01 — o pool decide se a espera do `menu` estaciona. Só o agente PRINCIPAL:
+        # especialista de conferência (hooks, @mention) tem fechamento amarrado a
+        # contadores de conferência que a F2 não cobre, e continua bloqueando.
+        _menu_wait = "block"
+        if not conference_id and native_instance_id:
+            _menu_wait = await _pool_menu_wait(http, tenant_id, pool_id)
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
             session_id=session_id, customer_id=customer_id,
@@ -5711,854 +6788,36 @@ async def process_routed(
             segment_id=_part_seg_id,
             webhook_pool=_is_webhook_pool,
             pool_id=pool_id,
+            menu_wait=_menu_wait if _menu_wait == "park" else "",
         )
 
-        # ── Conference: notify the human agent that the AI has completed ──────
-        # Published to agent:events:{session_id} (Redis pub/sub) so the
-        # Agent Assist UI can update its state immediately — the human can
-        # resume full control knowing exactly what the AI resolved.
-        if conference_id and agent_result.get("outcome"):
-            try:
-                await redis_client.publish(
-                    f"agent:events:{session_id}",
-                    json.dumps({
-                        "type":          "conference.agent_completed",
-                        "session_id":    session_id,
-                        "conference_id": conference_id,
-                        "agent_type_id": agent_type_id,
-                        "outcome":       agent_result.get("outcome"),
-                        "pipeline_state": agent_result.get("pipeline_state"),
-                        "completed_at":  datetime.now(timezone.utc).isoformat(),
-                    }),
-                )
-                logger.info(
-                    "Conference AI completed: session=%s conference=%s outcome=%s",
-                    session_id, conference_id, agent_result.get("outcome"),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Could not publish conference.agent_completed: session=%s — %s",
-                    session_id, exc,
-                )
-
-        # Skill flow ended naturally — clear the completing marker so that any
-        # concurrent contact_closed event knows NOT to skip this instance.
-        if native_instance_id:
-            try:
-                await redis_client.delete(
-                    f"session:{session_id}:ai_completing:{native_instance_id}"
-                )
-            except Exception:
-                pass
-
-        # Restore instance with a long TTL so the next contact can be routed.
-        # Stateless AI agents are always available after serving a session.
-        # Gap-A fix: always land the mirror at ready — even when native_snapshot
-        # is None (snapshot key expired mid-flow, e.g. delegate→OTP→suspend) — so
-        # the mirror is never left busy after agent_done drops the SCARD.
-        await _release_native_instance_snapshot(
-            redis_client, tenant_id, native_instance_id, pool_id,
-            agent_type_id, native_snapshot,
-        )
-
-        # Notify routing-engine of the instance transition:
-        #   1. agent_ready  — triggers _drain_queue_for_agent() so queued contacts
-        #                     are offered to this instance immediately. Also triggers
-        #                     _refresh_pool_snapshots() so Monitor reflects the restored
-        #                     capacity without waiting for the next routing event.
-        #                     max_concurrent_sessions read from the instance snapshot so
-        #                     the routing-engine models capacity correctly (#276).
-        #   2. agent_done   — triggers remove_conversation() → DECR pool active_count.
-        #                     Must fire AFTER agent_ready so the drain sees correct counts.
-        if _kafka_producer and native_instance_id:
-            _snap_max_concurrent = int(
-                (native_snapshot or {}).get("max_concurrent_sessions")
-                or (native_snapshot or {}).get("max_concurrent")
-                or 1
-            )
-            _snap_pools = list((native_snapshot or {}).get("pools") or ([pool_id] if pool_id else []))
-            _spawn(_kafka_producer.send(
-                TOPIC_LIFECYCLE,
-                json.dumps({
-                    "event":                   "agent_ready",
-                    "tenant_id":               tenant_id,
-                    "instance_id":             native_instance_id,
-                    "agent_type_id":           agent_type_id,
-                    "status":                  "ready",
-                    "execution_model":         (native_snapshot or {}).get("execution_model", "stateless"),
-                    "current_sessions":        0,
-                    "max_concurrent_sessions": _snap_max_concurrent,
-                    "pools":                   _snap_pools,
-                    "timestamp":               datetime.now(timezone.utc).isoformat(),
-                }).encode("utf-8"),
-            ))
-
-        # Notify routing-engine to decrement the pool's busy counter.
-        # For plughub-native agents the bridge manages lifecycle via direct Redis
-        # writes; mcp-server never publishes agent_done, so remove_conversation()
-        # is never called and _pool_active_count_key stays elevated. We publish
-        # agent_done here immediately after the instance is restored.
-        if _kafka_producer and native_instance_id:
-            _spawn(_kafka_producer.send(
-                TOPIC_LIFECYCLE,
-                json.dumps({
-                    "event":           "agent_done",
-                    "tenant_id":       tenant_id,
-                    "instance_id":     native_instance_id,
-                    "agent_type_id":   agent_type_id,
-                    "pools":           _snap_pools,   # required by remove_conversation()
-                    "conversation_id": session_id,
-                    "timestamp":       datetime.now(timezone.utc).isoformat(),
-                }).encode("utf-8"),
-            ))
-
-        # Signal to process_contact_event that this instance was naturally
-        # restored — no emergency restore needed on future contact_closed events.
-        if native_instance_id:
-            try:
-                await redis_client.srem(
-                    f"session:{session_id}:ai_agents", native_instance_id
-                )
-            except Exception:
-                pass
-
-        # ── Clear specialist conference key ───────────────────────────────────
-        # For plughub-native agents, runtime.ts agent_done is never called so
-        # conference_agent_completed is never published → the Kafka handler that
-        # normally cleans up this key never runs.  Without this delete the key
-        # persists with its 4h TTL and the dedup guard blocks re-invocation of
-        # the same pool within the same session (e.g. calling @auth_form twice).
-        if conference_id and pool_id:
-            try:
-                await redis_client.delete(
-                    f"session:{session_id}:conference:specialist:{pool_id}"
-                )
-                logger.info(
-                    "Specialist conference key cleared: session=%s pool=%s",
-                    session_id, pool_id,
-                )
-            except Exception:
-                pass
-
-        # ── Fase C: participant_left ───────────────────────────────────────────
-        _part_duration_ms = int(
-            (datetime.now(timezone.utc) - _part_joined_at).total_seconds() * 1000
-        )
-        # ── Arc 5: retrieve segment_id stored at participant_joined ───────────
-        _left_seg_id = _part_seg_id   # already in scope; GETDEL for cleanup
-        try:
-            _raw_seg = await redis_client.getdel(
-                f"session:{session_id}:segment:{native_instance_id}"
-            )
-            if _raw_seg:
-                _left_seg_id = (
-                    _raw_seg if isinstance(_raw_seg, str) else _raw_seg.decode()
-                )
-        except Exception:
-            pass
-        # Outcome from agent_result (populated by activate_native_agent)
-        _part_outcome = agent_result.get("outcome") if agent_result else None
-        # flow_id = skill-flow deployado que o agente executou (avaliação IA por skill)
-        _part_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
-        # F7: motivo de escalação normalizado declarado pelo escalate step (IA),
-        # persistido em pipeline_state.results.escalation_reason via output_as.
-        _part_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
-        _part_esc = str(_part_results.get("escalation_reason", "") or "") or None
-        _part_issue = _flow_issue_status(agent_result)
-        # ── Fase A (queue-attended-model): record last primary outcome ────────
-        # Single source of truth for outcome is the segment; the session-level
-        # outcome in contact_closed is DERIVED from the last primary segment.
-        # _close_contact_layer() reads this marker to populate the analytics event.
-        if _part_role == "primary" and _part_outcome:
-            try:
-                await redis_client.setex(
-                    f"session:{session_id}:last_outcome",
-                    604800,
-                    json.dumps({"outcome": _part_outcome, "agent_kind": "ai"}),
-                )
-            except Exception:
-                pass
-        _spawn(_publish_participant_event(
-            session_id=session_id,
-            tenant_id=tenant_id,
-            participant_id=native_instance_id,
-            pool_id=pool_id,
-            agent_type_id=agent_type_id,
-            event_type="participant_left",
-            agent_type="native",
-            role=_part_role,
-            segment_id=_left_seg_id,
-            sequence_index=_part_seq_idx,
-            parent_segment_id=_part_parent_seg,
-            conference_id=conference_id,
-            joined_at=_part_joined_iso,
-            duration_ms=_part_duration_ms,
-            outcome=_part_outcome,
-            flow_id=_part_flow_id,
-            escalation_reason=_part_esc,
-            issue_status=_part_issue,
-            deploy_version=_flow_deploy_version(agent_result),
-        ))
-        # G5 dedup guard: conference_agent_completed checks this key before emitting
-        # participant_left for external conference specialists.  Native bridge agents
-        # always go through process_routed (here), so the guard is set and the Kafka
-        # handler correctly skips emission.  External agents never reach this branch,
-        # so the guard is absent and conference_agent_completed emits for them.
-        if native_instance_id:
-            try:
-                await redis_client.set(
-                    f"session:{session_id}:participant_left:{native_instance_id}",
-                    "1",
-                    nx=True,
-                    ex=86400,
-                )
-            except Exception:
-                pass
-
-        # ── Primary AI agent complete: trigger contact close ──────────────────
-        # Conference / hook agents are handled by the Fase B/C block below
-        # (counter tracked via hook_conf keys).  Primary (non-conference) AI
-        # agents own the session lifecycle directly, so we must trigger the
-        # close here.  The idempotency guard (close_fired NX key) inside
-        # _trigger_contact_close prevents double-close when the channel-gateway
-        # already fired a close due to customer disconnect or session timeout.
-        #
-        # EXCEÇÃO: outcomes de escalação/transferência indicam que a sessão
-        # continua com outro agente — NÃO fechar o WebSocket do cliente.
-        # O conversation_escalate (BPM tool) já publicou conversations.inbound
-        # para alocar o próximo agente; fechar aqui causaria race condition.
-        # Arc 19: "suspended" is added so webhook sessions are NOT closed when
-        # the engine returns outcome: "suspended" — the session persists in Redis
-        # (TTL extended by persistSuspendWebhook) awaiting a resume signal.
-        _ai_outcome = (agent_result or {}).get("outcome", "")
-        if not conference_id and contato_encerra_com(_ai_outcome):
-            # G1 fix: freeze AHT at primary AI completion, before any hook agents run.
-            await _mark_contact_ended(redis_client, session_id)
-            # ── on_contact_end no fim de contato de primário IA (completude do hook) ──
-            # O hook on_contact_end (fim-de-CONTATO) é o mecanismo GENÉRICO de
-            # fim-de-contato: segura a sessão do cliente (posatt:customer_active) e roda
-            # o skill do pool configurado NA conferência. Até aqui só era disparado no
-            # caminho com humano (process_contact_event); um contato resolvido SÓ por IA
-            # fechava direto sem dar a chance ao hook. Aqui completamos: quando o
-            # contato encerra com o primário IA e o pool declara hooks.on_contact_end,
-            # disparamos o hook em vez de fechar direto. NÃO é lógica de survey — o que o
-            # hook faz (NPS in-conference, outbound, skip) é decisão do SKILL configurado.
-            # Gate em outcome=resolved: é o sinal "cliente presente no fim" do fluxo só-IA
-            # (em failed/abandoned/timeout o cliente já saiu — fecha direto, como antes).
-            _contact_end_hooks: list = []
-            _process_end_hooks: list = []
-            if _part_role == "primary" and http and pool_id and tenant_id:
-                try:
-                    _ce_cfg    = await get_pool_config(http, tenant_id, pool_id)
-                    _hooks_cfg = ((_ce_cfg or {}).get("hooks") or {})
-                    # on_contact_end: cliente presente no fim (só em resolved).
-                    if _ai_outcome == "resolved":
-                        _contact_end_hooks = _hooks_cfg.get("on_contact_end", []) or []
-                    # Journey J4 on_process_end: fim de PROCESSO/N3 (workflow webhook).
-                    # Mecanismo GENÉRICO — dispara em QUALQUER desfecho terminal (o agente
-                    # decide via process_outcome); cliente NÃO precisa estar inline (agentes
-                    # de survey usam veículo outbound). Só relevante p/ pools webhook (N3).
-                    _process_end_hooks = _hooks_cfg.get("on_process_end", []) or []
-                except Exception as _ce_exc:
-                    logger.warning(
-                        "contact/process-end hook lookup failed: session=%s pool=%s — %s",
-                        session_id, pool_id, _ce_exc,
-                    )
-            if _contact_end_hooks or _process_end_hooks:
-                _ce_customer = session_id
-                try:
-                    _ce_meta = await redis_client.get(f"session:{session_id}:meta")
-                    if _ce_meta:
-                        _ce_customer = (json.loads(
-                            _ce_meta if isinstance(_ce_meta, str) else _ce_meta.decode()
-                        ).get("customer_id") or session_id)
-                except Exception:
-                    pass
-                await _write_pre_hook_context(
-                    redis_client, tenant_id, session_id,
-                    close_origin="flow_complete",
-                )
-                if _contact_end_hooks:
-                    _spawn(fire_pool_hooks(
-                        http=http, redis_client=redis_client,
-                        session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
-                        customer_id=_ce_customer, hook_type="on_contact_end",
-                        human_instance_id="",
-                    ))
-                    _spawn(_hook_timeout_guard(
-                        redis_client, session_id, "on_contact_end",
-                    ))
-                if _process_end_hooks:
-                    # Journey J4 — carimba process_outcome no ctx pré-hook. A raiz canônica
-                    # já está em core.contact.root_session_id (J1) e o customer_id nativo em
-                    # caller.customer_id — o agente de survey lê ambos p/ gravar grain=journey.
-                    try:
-                        # ALW-02 — pelo funil, que CARIMBA o `atributo` (D9.6).
-                        await write_context_tags(
-                            redis_client, tenant_id, session_id,
-                            {"core.process.outcome": _ai_outcome},
-                            source="bridge:pre_hook",
-                            updated_at=datetime.now(timezone.utc).isoformat(),
-                        )
-                    except Exception:
-                        pass
-                    _spawn(fire_pool_hooks(
-                        http=http, redis_client=redis_client,
-                        session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
-                        customer_id=_ce_customer, hook_type="on_process_end",
-                        human_instance_id="",
-                    ))
-                    _spawn(_hook_timeout_guard(
-                        redis_client, session_id, "on_process_end",
-                    ))
-                # ── Camada 1 (contato) × camada 3 (conferência): não colapsar ─────
-                # Com hooks, o teardown é DIFERIDO — mas cada camada tem seu gatilho:
-                #   • camada 1 (`_close_contact_layer`, publica `contact_closed`) dispara
-                #     quando `posatt:customer_active` zera (último hook DE CLIENTE termina);
-                #   • camada 3 (`_destroy_conference`) dispara quando `posatt:active` zera.
-                # Se NENHUM hook fala com o cliente, `posatt:customer_active` nunca é
-                # incrementado → nunca zera → **a camada 1 nunca fecha**: o contato fica
-                # eternamente `active` no analytics (corrompendo open_count/TMA/SLA), e o
-                # `close_fired` que o `_destroy_conference` grava ainda faz o
-                # `session_watchdog` considerar a sessão já fechada — a rede de segurança
-                # não pega. `on_process_end` é `side=agent` por natureza (o survey sai por
-                # veículo OUTBOUND, não inline), então cai exatamente aqui.
-                # Espelha a mesma guarda do caminho humano (`agent_done` → on_human_end).
-                # Camada D: um hook `detached` NÃO segura o WS do cliente (vai por
-                # workflow webhook), então NÃO conta como "customer hook" — senão o
-                # contato ficaria eternamente `active` esperando um posatt:customer_active
-                # que nunca é incrementado. Só INLINE segura.
-                def _inline(_e) -> bool:
-                    return isinstance(_e, dict) and (_e.get("dispatch", "inline") or "inline") != "detached"
-                _has_customer_hooks = any(_inline(e) for e in _contact_end_hooks) or any(
-                    _inline(e) and (e.get("side", "agent") or "agent") == "customer"
-                    for e in _process_end_hooks
-                )
-                if not _has_customer_hooks:
-                    _spawn(_close_contact_layer(redis_client, session_id))
-                logger.info(
-                    "contact/process-end hooks dispatched (AI primary): session=%s pool=%s "
-                    "on_contact_end=%d on_process_end=%d outcome=%s customer_hooks=%s",
-                    session_id, pool_id, len(_contact_end_hooks), len(_process_end_hooks),
-                    _ai_outcome, _has_customer_hooks,
-                )
-            else:
-                _spawn(_trigger_contact_close(redis_client, session_id))
-
-        # ── Arc 19 Fase B: publish session_suspended to canonical stream ──────
-        # Fired for webhook pool sessions only (channel_type: webhook).
-        # Non-webhook sessions never return outcome: "suspended" because the
-        # engine guard (Arc 19 step profile enforcement) blocks the suspend step.
-        if _ai_outcome == "suspended" and not conference_id:
-            try:
-                # O leitor mora em `descobrir_parque` (topo deste módulo), onde
-                # pode ser testado: são DOIS sufixos de token, e ler só um foi o
-                # defeito da RET-12. Detalhe e gate no comentário de lá.
-                _susp_token, _susp_step_id, _susp_expires = descobrir_parque(
-                    ((agent_result or {}).get("pipeline_state") or {}).get("results")
-                )
-
-                await redis_client.xadd(
-                    f"session:{session_id}:stream",
-                    {
-                        "event_id":    str(uuid.uuid4()),
-                        "type":        "session_suspended",
-                        "timestamp":   datetime.now(timezone.utc).isoformat(),
-                        "author_id":   native_instance_id or agent_type_id,
-                        "author_role": "ai",
-                        "visibility":  json.dumps("agents_only"),
-                        "segment_id":  _left_seg_id or "",
-                        "payload":     json.dumps({
-                            "step_id":           _susp_step_id,
-                            "resume_token":      _susp_token,
-                            "resume_expires_at": _susp_expires,
-                        }),
-                    },
-                    maxlen=500,
-                )
-
-                # Update the status key so WebhookAdapter.get_status() returns "suspended".
-                # TTL: use the session TTL as a safe floor; the actual Redis key TTLs on
-                # the session stream were extended by persistSuspendWebhook (Fase C).
-                if tenant_id:
-                    await redis_client.setex(
-                        f"{tenant_id}:session:{session_id}:status",
-                        _stl(),
-                        "suspended",
-                    )
-
-                # Arc 19 Fase E: publish session_suspended to Kafka conversations.events
-                # so analytics-api can write status='suspended' to ClickHouse sessions table.
-                if _kafka_producer is not None and tenant_id:
-                    try:
-                        _susp_now = datetime.now(timezone.utc).isoformat()
-                        # `sessions` é ReplacingMergeTree de LINHA INTEIRA: a última versão
-                        # SUBSTITUI a anterior, não faz merge de colunas. Um evento parcial
-                        # (só status) chega com row_version mais novo que o do `routed` e
-                        # **apaga** pool_id/channel/customer_id/opened_at da linha. Por isso
-                        # todo escritor de `sessions` precisa mandar a linha COMPLETA — o
-                        # `contact_closed` já faz isso (relê o meta); o suspend não fazia.
-                        _susp_meta: dict = {}
-                        try:
-                            _raw_sm = await redis_client.get(f"session:{session_id}:meta")
-                            if _raw_sm:
-                                _susp_meta = json.loads(
-                                    _raw_sm if isinstance(_raw_sm, str) else _raw_sm.decode()
-                                )
-                        except Exception:
-                            pass
-                        # ── D4 / Fase 2 — a lacuna ganha linha ABERTA ────────
-                        # `_susp_token` e `_susp_expires` já estavam em escopo (o
-                        # logger.info logo abaixo os imprime há tempos); só não
-                        # entravam no evento. O `suspend_reason` vem do
-                        # `{tenant}:resume_meta:{token}`, escrito pelo engine ANTES
-                        # de o agente retornar `suspended` — logo já existe aqui.
-                        # Sem ele a linha aberta responderia "está parada" sem
-                        # responder "por quê", que é metade do motivo da D4.
-                        _susp_reason = ""
-                        if _susp_token:
-                            try:
-                                _rm_raw = await redis_client.get(
-                                    f"{tenant_id}:resume_meta:{_susp_token}"
-                                )
-                                if _rm_raw:
-                                    _susp_reason = json.loads(
-                                        _rm_raw if isinstance(_rm_raw, str) else _rm_raw.decode()
-                                    ).get("suspend_reason", "") or ""
-                            except Exception:
-                                pass
-                            if not _susp_reason:
-                                # Barulhento: motivo vazio numa transição é dado
-                                # perdido para sempre — o resume não o inventa.
-                                logger.warning(
-                                    "session_suspended: resume_meta sem suspend_reason "
-                                    "(session=%s token=%s) — a transição nasce sem motivo",
-                                    session_id, _susp_token,
-                                )
-                        await _kafka_producer.send_and_wait(
-                            TOPIC_EVENTS,
-                            json.dumps({
-                                "event_type":  "session_suspended",
-                                "session_id":  session_id,
-                                "tenant_id":   tenant_id,
-                                "step_id":     _susp_step_id,
-                                "timestamp":   _susp_now,
-                                # Identidade da sessão — preserva o que o `routed` gravou.
-                                "pool_id":     _susp_meta.get("pool_id") or pool_id or "",
-                                "channel":     _susp_meta.get("channel") or "",
-                                "customer_id": _susp_meta.get("contact_id") or customer_id or "",
-                                # `opened_at` é a ABERTURA, não o instante do suspend.
-                                "opened_at":   _susp_meta.get("started_at") or "",
-                                # D4: identidade e conteúdo da LACUNA (linha aberta).
-                                "resume_token":      _susp_token or "",
-                                "resume_expires_at": _susp_expires or None,
-                                "suspend_reason":    _susp_reason,
-                            }).encode("utf-8"),
-                        )
-                    except Exception as _ke:
-                        logger.warning(
-                            "Could not publish session_suspended to Kafka: session=%s — %s",
-                            session_id, _ke,
-                        )
-
-                logger.info(
-                    "session_suspended published to stream: session=%s step=%s token=%s expires=%s",
-                    session_id, _susp_step_id, _susp_token, _susp_expires,
-                )
-            except Exception as _susp_exc:
-                logger.warning(
-                    "Could not publish session_suspended to stream: session=%s — %s",
-                    session_id, _susp_exc,
-                )
-
-        # ── Arc 14 / Fase B/C: hook completion detection ─────────────────────
-        # hook_conf key stores "{hook_type}:{target_pool}:{side}" (Arc 14 extended
-        # from the old "{hook_type}:{target_pool}" format — backward compat: missing
-        # side part defaults to "agent").
-        #
-        # Algorithm (Arc 14 Fase A):
-        #   1. DECR hook_pending:{hook_type} (tracks completion per hook_type)
-        #   2. If last on_human_end: dispatch post_human BEFORE DECRing posatt:active
-        #      (so post_human INCRs are already in place before our DECR)
-        #   3. DECR posatt:active (one per hook segment completing, regardless of type)
-        #   4. If posatt:active == 0 and no new segments dispatched → _destroy_conference()
-        #      (Layer 1 — customer WS — was already closed by _close_contact_layer())
-        if conference_id:
-            try:
-                hook_label = await redis_client.getdel(
-                    f"session:{session_id}:hook_conf:{conference_id}"
-                )
-                if hook_label:
-                    _hl = hook_label if isinstance(hook_label, str) else hook_label.decode()
-                    # F5: 5º campo = human_segment_id. "{hook}:{target}:{side}:{origin}:{seg}"
-                    _hl_parts           = _hl.split(":", 4)
-                    completed_hook_type = _hl_parts[0]
-                    _hook_target_pool   = _hl_parts[1] if len(_hl_parts) > 1 else ""
-                    _hook_side          = _hl_parts[2] if len(_hl_parts) > 2 else "agent"
-                    _hook_origin_pool   = _hl_parts[3] if len(_hl_parts) > 3 else ""  # Arc 14 Fase C
-                    _hook_human_seg     = _hl_parts[4] if len(_hl_parts) > 4 else ""   # F5
-
-                    # G7 Slice B: segment_wrapup é fim-de-SEGMENTO (transfer) — NÃO
-                    # arma contadores de close. Não DECR hook_pending/posatt:active,
-                    # não dispara _close_contact_layer/_destroy_conference. Só aplica a
-                    # disposição ao segmento, limpa wrap_up_pending e fecha o painel
-                    # de wrap-up da origem (posatt_segment_complete). O contato segue
-                    # pelo destino (re-rota já em voo).
-                    _is_segment_wrapup = (completed_hook_type == "segment_wrapup")
-
-                    if _is_segment_wrapup:
-                        remaining_hooks = 0
-                    else:
-                        remaining_hooks = await redis_client.decr(
-                            f"session:{session_id}:hook_pending:{completed_hook_type}"
-                        )
-                    logger.info(
-                        "Hook agent completed: session=%s conference=%s hook=%s pool=%s side=%s remaining=%d",
-                        session_id, conference_id, completed_hook_type, _hook_target_pool,
-                        _hook_side, remaining_hooks,
-                    )
-
-                    # Arc 14 Fase B: publish targeted session.closed for this segment.
-                    # Read the participant SET registered by fire_pool_hooks (fixed-side)
-                    # and by process_routed on hook-agent join.
-                    # recipients=[...] → only those agents tear down their session view.
-                    # The broadcast session.closed (reason=conference_destroyed) from
-                    # _destroy_conference() still fires as the global cleanup signal.
-                    try:
-                        _pset_key = (
-                            f"session:{session_id}:posatt:{conference_id}:participants"
-                        )
-                        _raw_pids = await redis_client.smembers(_pset_key)
-                        _recipients = [
-                            (p.decode() if isinstance(p, bytes) else p)
-                            for p in (_raw_pids or [])
-                        ]
-                        if _recipients:
-                            await redis_client.publish(
-                                f"agent:events:{session_id}",
-                                json.dumps({
-                                    "type":       "session.closed",
-                                    "session_id": session_id,
-                                    "reason":     "posatt_segment_complete",
-                                    "recipients": _recipients,
-                                }),
-                            )
-                            await redis_client.delete(_pset_key)
-                            logger.info(
-                                "posatt segment closed: session=%s conf=%s hook=%s "
-                                "recipients=%s",
-                                session_id, conference_id, completed_hook_type, _recipients,
-                            )
-                        else:
-                            logger.debug(
-                                "posatt segment closed: no participants SET found — "
-                                "session=%s conf=%s", session_id, conference_id,
-                            )
-                    except Exception as _tgt_exc:
-                        logger.warning(
-                            "Could not publish posatt targeted session.closed: "
-                            "session=%s — %s", session_id, _tgt_exc,
-                        )
-
-                    # Arc 14 Fase C: wrap_up_pending cleanup.
-                    # When the agent-side (wrap-up) segment completes, delete the flag
-                    # so the routing-engine can allocate new contacts to this agent.
-                    # Use origin_pool from hook_conf (4th field) to derive instance_id:
-                    # human-{origin_pool} — same key written by fire_pool_hooks.
-                    if _hook_side == "agent" and completed_hook_type in ("on_human_end", "segment_wrapup"):
-                        try:
-                            if _hook_origin_pool and tenant_id:
-                                _wup_iid = f"human-{_hook_origin_pool}"
-                                _wp_key = (
-                                    f"{tenant_id}:instance:{_wup_iid}:wrap_up_pending"
-                                )
-                                await redis_client.delete(_wp_key)
-                                logger.info(
-                                    "wrap_up_pending cleared: session=%s instance=%s",
-                                    session_id, _wup_iid,
-                                )
-                            else:
-                                logger.warning(
-                                    "wrap_up_pending: no origin_pool in hook_conf — "
-                                    "key not deleted: session=%s", session_id,
-                                )
-                        except Exception as _wup_exc:
-                            logger.warning(
-                                "Could not clear wrap_up_pending: session=%s — %s",
-                                session_id, _wup_exc,
-                            )
-
-                        # ── F5 (grão segmento): wrap-up completou ──────────────
-                        # A disposição coletada está no pipeline_state do PRÓPRIO
-                        # agente que completou (results.wrapup_classificacao/resumo)
-                        # — sem depender de ContextStore. Atribui ao segmento humano
-                        # que ESTE on_human_end serviu (_hook_human_seg do hook_conf).
-                        if _hook_human_seg:
-                            _wp_results = (((agent_result or {}).get("pipeline_state")) or {}).get("results") or {}
-                            _wp_cls = str(_wp_results.get("wrapup_classificacao", "") or "")
-                            _wp_res = str(_wp_results.get("wrapup_resumo", "") or "")
-                            # F7: motivo de escalação normalizado (só presente quando escalado).
-                            _wp_esc = str(_wp_results.get("wrapup_escalation_reason", "") or "")
-                            if _wp_cls:
-                                _spawn(_apply_wrapup_to_segment(
-                                    redis_client, session_id, _hook_human_seg, _wp_cls, _wp_res, _wp_esc,
-                                ))
-
-                    # Arc 14 Fase E: when a customer-side hook (NPS) completes,
-                    # DECR posatt:customer_active and close the customer WS when
-                    # the counter reaches 0 (all NPS/survey segments finished).
-                    # In the no-customer-hook path, _close_contact_layer() fires
-                    # immediately in the agent_done handler above.
-                    if _hook_side == "customer":
-                        # F10.3b: o NPS de segmento é gravado pelo PRÓPRIO agente de
-                        # NPS via survey_record(grain=segment) — caminho unificado em
-                        # session_signal. O bridge não deriva mais nps_score aqui
-                        # (legado _apply_nps_to_segment/segments.nps_score removido).
-                        try:
-                            _cust_remaining = await redis_client.decr(
-                                f"session:{session_id}:posatt:customer_active"
-                            )
-                            logger.info(
-                                "posatt:customer_active DECR: session=%s conf=%s "
-                                "hook=%s remaining=%d",
-                                session_id, conference_id, completed_hook_type,
-                                _cust_remaining,
-                            )
-                            if _cust_remaining <= 0:
-                                _spawn(
-                                    _close_contact_layer(redis_client, session_id)
-                                )
-                        except Exception as _ca_exc:
-                            logger.warning(
-                                "Could not DECR posatt:customer_active: session=%s — %s",
-                                session_id, _ca_exc,
-                            )
-
-                    # Arc 14: dispatch post_human BEFORE DECRing posatt:active so that
-                    # fire_pool_hooks() INCRs posatt:active for each new segment FIRST.
-                    _dispatched_post = False
-                    if remaining_hooks <= 0 and completed_hook_type == "on_human_end":
-                        _ph_pool = _ph_tenant = _ph_customer = ""
-                        try:
-                            _ph_raw = await redis_client.get(f"session:{session_id}:meta")
-                            if _ph_raw:
-                                _ph_meta     = json.loads(_ph_raw)
-                                _ph_pool     = _ph_meta.get("pool_id", "")
-                                _ph_tenant   = (
-                                    _ph_meta.get("tenant_id", "")
-                                    or _ph_meta.get("tenant", "")
-                                )
-                                _ph_customer = (
-                                    _ph_meta.get("customer_id", session_id) or session_id
-                                )
-                        except Exception as _ph_exc:
-                            logger.debug(
-                                "Could not read meta for post_human check: "
-                                "session=%s — %s", session_id, _ph_exc,
-                            )
-                        if http and _ph_pool and _ph_tenant:
-                            try:
-                                _ph_config = await get_pool_config(
-                                    http, _ph_tenant, _ph_pool
-                                )
-                                _post_human_list = (
-                                    ((_ph_config or {}).get("hooks") or {})
-                                    .get("post_human", [])
-                                )
-                                if _post_human_list:
-                                    # fire_pool_hooks INCRs posatt:active for each post_human hook
-                                    _spawn(fire_pool_hooks(
-                                        http=http,
-                                        redis_client=redis_client,
-                                        session_id=session_id,
-                                        pool_id=_ph_pool,
-                                        tenant_id=_ph_tenant,
-                                        customer_id=_ph_customer,
-                                        hook_type="post_human",
-                                    ))
-                                    _spawn(_hook_timeout_guard(
-                                        redis_client, session_id, "post_human",
-                                    ))
-                                    logger.info(
-                                        "post_human hooks dispatched: session=%s pool=%s count=%d "
-                                        "(timeout guard scheduled: %ds)",
-                                        session_id, _ph_pool, len(_post_human_list),
-                                        _HOOK_TIMEOUT_S,
-                                    )
-                                    _dispatched_post = True
-                            except Exception as _ph_exc2:
-                                logger.warning(
-                                    "Could not check post_human hooks: session=%s — %s",
-                                    session_id, _ph_exc2,
-                                )
-
-                    # Arc 14: DECR posatt:active for this completing hook segment.
-                    # Done AFTER dispatching post_human so INCRs precede this DECR.
-                    # G7 Slice B: segment_wrapup nunca fez INCR posatt:active e NÃO pode
-                    # fechar o contato (segue pelo destino) — pula DECR + _destroy.
-                    _posatt_remaining = -1
-                    if not _is_segment_wrapup:
-                        try:
-                            _posatt_remaining = await redis_client.decr(
-                                f"session:{session_id}:posatt:active"
-                            )
-                            logger.info(
-                                "posatt:active DECR: session=%s conference=%s hook=%s remaining=%d",
-                                session_id, conference_id, completed_hook_type, _posatt_remaining,
-                            )
-                        except Exception as _pa_exc:
-                            logger.warning(
-                                "Could not DECR posatt:active: session=%s — %s",
-                                session_id, _pa_exc,
-                            )
-
-                        # Destroy conference when all posatt segments finished AND no new
-                        # segments were just dispatched (post_human dispatch adds more INCRs).
-                        # _close_contact_layer() already closed the customer WS immediately.
-                        if _posatt_remaining <= 0 and not _dispatched_post:
-                            _spawn(
-                                _destroy_conference(redis_client, session_id)
-                            )
-
-                    # G7 Fatia 2b/3 — conclusão de um segment_wrapup do fan-out de
-                    # customer-disconnect: DECR contact_close_pending (via marcador
-                    # close_arming por-conferência, idempotente). Quando zera E não há
-                    # posatt:active pendente → fecha o contato (deferido até aqui para
-                    # que TODOS os humanos recebessem wrap-up). segment_wrapup de
-                    # transfer/peer-continuação não tem o marcador → no-op.
-                    if _is_segment_wrapup:
-                        try:
-                            _arming = await redis_client.getdel(
-                                f"session:{session_id}:close_arming:{conference_id}"
-                            )
-                            if _arming:
-                                _ccp_rem = await redis_client.decr(
-                                    f"session:{session_id}:contact_close_pending"
-                                )
-                                logger.info(
-                                    "contact_close_pending DECR: session=%s conf=%s remaining=%d",
-                                    session_id, conference_id, _ccp_rem,
-                                )
-                                if _ccp_rem <= 0:
-                                    # Todos os wrap-ups de peer terminaram. _close_contact_layer
-                                    # é idempotente (contact_close_fired NX) e _destroy_conference
-                                    # se auto-guarda em posatt:active — então, na ordem âncora-por-
-                                    # último, o _destroy aqui adia e a conclusão da âncora
-                                    # (posatt→0) o re-dispara. Robusto em qualquer ordem.
-                                    logger.info(
-                                        "Fan-out complete (contact_close_pending=0) — closing "
-                                        "contact: session=%s", session_id,
-                                    )
-                                    _spawn(
-                                        _close_contact_layer(redis_client, session_id)
-                                    )
-                                    _spawn(
-                                        _destroy_conference(redis_client, session_id)
-                                    )
-                        except Exception as _ccp_exc:
-                            logger.warning(
-                                "Could not process contact_close_pending: session=%s — %s",
-                                session_id, _ccp_exc,
-                            )
-
-            except Exception as exc:
-                logger.warning(
-                    "Hook completion detection error: session=%s conference=%s — %s",
-                    session_id, conference_id, exc,
-                )
-
-            # ── G2 fix (native inline): SREM + deferred on_human_end dispatch ──────
-            # For plughub-native specialists the skill flow runs inline inside
-            # activate_native_agent — runtime.ts agent_done is never called, so
-            # conference_agent_completed is never published to Kafka and the Kafka
-            # handler's G2 block (line ~2500) never executes.
-            # We must do the SREM + deferred hook check here, synchronously, after
-            # the skill flow returns.
-            if native_instance_id and not _is_hook_agent:
-                try:
-                    await redis_client.srem(
-                        f"session:{session_id}:active_ai_specialists", native_instance_id,
-                    )
-                    _native_rem_specs = await redis_client.scard(
-                        f"session:{session_id}:active_ai_specialists"
-                    )
-                    if _native_rem_specs == 0:
-                        _native_pend_raw = await redis_client.getdel(
-                            f"session:{session_id}:pending_on_human_end"
-                        )
-                        if _native_pend_raw:
-                            _npd = json.loads(
-                                _native_pend_raw if isinstance(_native_pend_raw, str)
-                                else _native_pend_raw.decode()
-                            )
-                            _npd_pool     = _npd.get("pool_id", "")
-                            _npd_tenant   = _npd.get("tenant_id", "")
-                            _npd_customer = _npd.get("customer_id", session_id)
-                            _npd_h_inst   = _npd.get("human_instance_id")
-                            _npd_cust_pid = _npd.get("customer_participant_id")
-                            logger.info(
-                                "All native specialists done — dispatching deferred on_human_end: "
-                                "session=%s pool=%s", session_id, _npd_pool,
-                            )
-                            if http and _npd_pool and _npd_tenant:
-                                _npd_pool_cfg = await get_pool_config(
-                                    http, _npd_tenant, _npd_pool
-                                )
-                                _npd_hooks_cfg = (_npd_pool_cfg or {}).get("hooks") or {}
-                                _npd_hooks      = _npd_hooks_cfg.get("on_human_end", [])
-                                # G7 Fase 3b: NPS migrou para on_contact_end.
-                                _npd_contact    = _npd_hooks_cfg.get("on_contact_end", [])
-                                if _npd_hooks or _npd_contact:
-                                    await _write_pre_hook_context(
-                                        redis_client, _npd_tenant, session_id,
-                                        close_origin="agent_closed",
-                                        human_instance_id=_npd_h_inst,
-                                        customer_participant_id=_npd_cust_pid,
-                                    )
-                                    if _npd_hooks:
-                                        _spawn(fire_pool_hooks(
-                                            http=http, redis_client=redis_client,
-                                            session_id=session_id,
-                                            pool_id=_npd_pool,
-                                            tenant_id=_npd_tenant,
-                                            customer_id=_npd_customer,
-                                            hook_type="on_human_end",
-                                            human_instance_id=_npd_h_inst or "",
-                                        ))
-                                        _spawn(_hook_timeout_guard(
-                                            redis_client, session_id, "on_human_end",
-                                        ))
-                                    if _npd_contact:
-                                        _spawn(fire_pool_hooks(
-                                            http=http, redis_client=redis_client,
-                                            session_id=session_id,
-                                            pool_id=_npd_pool,
-                                            tenant_id=_npd_tenant,
-                                            customer_id=_npd_customer,
-                                            hook_type="on_contact_end",
-                                            human_instance_id=_npd_h_inst or "",
-                                        ))
-                                        _spawn(_hook_timeout_guard(
-                                            redis_client, session_id, "on_contact_end",
-                                        ))
-                                    logger.info(
-                                        "contact-end hooks dispatched (native deferred): "
-                                        "session=%s pool=%s on_human_end=%d on_contact_end=%d",
-                                        session_id, _npd_pool, len(_npd_hooks), len(_npd_contact),
-                                    )
-                                else:
-                                    _spawn(
-                                        _trigger_contact_close(redis_client, session_id)
-                                    )
-                            else:
-                                _spawn(
-                                    _trigger_contact_close(redis_client, session_id)
-                                )
-                except Exception as _g2n_exc:
-                    logger.warning(
-                        "G2 native: could not process deferred on_human_end: "
-                        "session=%s — %s", session_id, _g2n_exc,
-                    )
+        _native_run = {
+            "session_id":         session_id,
+            "tenant_id":          tenant_id,
+            "customer_id":        customer_id,
+            "pool_id":            pool_id,
+            "agent_type_id":      agent_type_id,
+            "conference_id":      conference_id,
+            "native_instance_id": native_instance_id,
+            "native_snapshot":    native_snapshot,
+            "part_role":          _part_role,
+            "part_seg_id":        _part_seg_id,
+            "part_seq_idx":       _part_seq_idx,
+            "part_parent_seg":    _part_parent_seg,
+            "part_joined_iso":    _part_joined_iso,
+            "is_hook_agent":      bool(_is_hook_agent),
+        }
+        if agent_result.get("outcome") == "awaiting_input":
+            # DUR-01 — estacionou: o segmento segue ABERTO (o atendimento não acabou,
+            # só a execução). A instância continua da conversa (afinidade) e a marca
+            # `ai_completing` fica de pé, para o fechamento do contato não devolvê-la
+            # como se o fluxo tivesse morrido. Quem fecha é o acordar que terminar.
+            await _park_native_run(redis_client, _native_run, {
+                "skills":       skills,
+                "webhook_pool": _is_webhook_pool,
+            })
+            return
+        await _finish_native_segment(http, redis_client, _native_run, agent_result)
 
     elif framework == "human":
         # O `routing.assigned` para o plano de mídia é escrito DENTRO de activate_human_agent
@@ -7625,6 +7884,14 @@ async def process_contact_event(
                     for _ in range(n_waiting):
                         await redis_client.lpush(closed_key, reason)
                     await redis_client.expire(closed_key, 300)
+                # DUR-01: menu ESTACIONADO não tem BLPOP para desbloquear — sem acordá-lo,
+                # o sinal ficava na lista e o segmento aberto até o TTL da sessão.
+                _acordadas = await wake_all_parked_runs(redis_client, session_id, "closed")
+                if _acordadas:
+                    logger.info(
+                        "DUR-01 fechamento acordou %d conversa(s) estacionada(s): session=%s",
+                        _acordadas, session_id,
+                    )
             except Exception as exc:
                 logger.warning("Could not push session:closed: session=%s — %s", session_id, exc)
 
@@ -9237,6 +9504,7 @@ async def dispatch_mention_command(
         payload = json.dumps({"_mention_trigger_step": trigger_step})
         try:
             await redis_client.lpush(result_key, payload)
+            _spawn(wake_parked_run(redis_client, session_id, instance_id or "_default_", "mention"))
             logger.info(
                 "mention_command dispatch: trigger_step=%s session=%s key=%s",
                 trigger_step, session_id, result_key,
@@ -9251,6 +9519,7 @@ async def dispatch_mention_command(
         payload = json.dumps({"_mention_terminate": True})
         try:
             await redis_client.lpush(result_key, payload)
+            _spawn(wake_parked_run(redis_client, session_id, instance_id or "_default_", "mention"))
             logger.info(
                 "mention_command dispatch: terminate session=%s key=%s",
                 session_id, result_key,
@@ -10376,6 +10645,10 @@ async def process_inbound(
                     # campo iam para o stdout do bridge. Log é destino, e o
                     # invariante de `masked-input.md` diz "nunca em logs".
                     await redis_client.lpush(result_key, reply_text)
+                    # DUR-01: se a conversa está estacionada, a resposta a acorda. A ordem
+                    # LPUSH → acordar é a que o Lua do engine protege: ou este acordar acha
+                    # o lock livre, ou quem o segura acha a resposta antes de estacionar.
+                    _spawn(wake_parked_run(redis_client, session_id, agent_key, "reply"))
                     _log_text, _ = redact_customer_reply(
                         reply_text,
                         msg_type      = msg_type,
@@ -10551,6 +10824,15 @@ async def _cleanup_stale_completing_at_startup(redis_client: aioredis.Redis) -> 
                 continue
             session_id  = parts[1]
             instance_id = parts[3]
+            # DUR-01: conversa ESTACIONADA não morreu com o processo anterior — nenhuma
+            # corrotina a segurava. Devolver a instância aqui fecharia um atendimento vivo;
+            # quem a devolve é o acordar que terminar o fluxo.
+            if await redis_client.exists(_parked_run_key(session_id, instance_id)):
+                logger.info(
+                    "Startup cleanup: session=%s inst=%s está ESTACIONADA — mantida",
+                    session_id, instance_id,
+                )
+                continue
             try:
                 # Read snapshot before _restore_instance() deletes it.
                 snap_raw = await redis_client.get(
@@ -10873,9 +11155,10 @@ async def run() -> None:
         skills_dir=SKILLS_DIR or None,
     )
 
-    global _EXECUTE_HTTP
+    global _EXECUTE_HTTP, _SHARED_HTTP
     async with aiohttp.ClientSession() as http, _make_execute_http() as execute_http:
         _EXECUTE_HTTP = execute_http   # PRD-03: o /execute não disputa o conector do `http`
+        _SHARED_HTTP  = http           # DUR-01: o acordar parte de quem não recebe o `http`
             # ALW-02 — transporte do carregador de config do ContextStore (mapa + catalogo de
         # tipos), registrado UMA vez no boot.
         #
@@ -10947,6 +11230,9 @@ async def run() -> None:
         # without publishing a ContactClosedEvent and repairs pool counters.
         watchdog_task = _spawn(_session_watchdog(redis_client))
 
+        # DUR-01 — acorda o menu estacionado cujo prazo venceu (sai por `on_timeout`).
+        deadline_task = _spawn(_menu_deadline_scanner(redis_client, BOOTSTRAP_TENANT_IDS))
+
         try:
             async for msg in consumer:
                 _spawn(_dispatch(msg.value, msg.topic, http, redis_client, bootstrap))
@@ -10959,6 +11245,11 @@ async def run() -> None:
             watchdog_task.cancel()
             try:
                 await watchdog_task
+            except asyncio.CancelledError:
+                pass
+            deadline_task.cancel()
+            try:
+                await deadline_task
             except asyncio.CancelledError:
                 pass
             await consumer.stop()

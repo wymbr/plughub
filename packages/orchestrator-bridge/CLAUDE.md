@@ -221,6 +221,31 @@ async def _restore_all_instances(redis_client, session_id: str) -> None:
     await redis_client.delete(f"session:{session_id}:human_agents")
 ```
 
+## Parked menu — `menu_wait: park` (DUR-01 F2, 2026-09-28)
+
+A pool with `menu_wait: park` (agent-registry column, editable on `/config/resources`) makes the
+PRIMARY AI agent's `menu` park instead of blocking: `/execute` returns `awaiting_input` right
+after the prompt, and no request, executor Redis connection or lock stays held while the
+customer thinks. Conference specialists and menus inside `begin_transaction` still block.
+
+| Piece | Where |
+|---|---|
+| Closing a segment (`agent_ready`/`agent_done`, `participant_left`, contact outcome, hooks) | `_finish_native_segment(http, redis, run, result)` — was the tail of `process_routed`; `run` carries what used to be its locals |
+| Parking | `process_routed` saves `{run, activation}` in `session:{sid}:parked_run:{instance_id}` (+ SET `session:{sid}:parked_runs`) and returns; the segment stays OPEN, `ai_completing` stays set |
+| Waking | `wake_parked_run(redis, sid, field, reason)` — `/execute` again with `wake_only`; `awaiting_input` = parked again; terminal = the call that DELETES the parked key closes the segment (exactly once); 412 = another execution holds it and will read the list |
+| Triggers | customer reply (`process_inbound`, after the LPUSH) · collect outcome · @mention signal · contact close (`wake_all_parked_runs`) · deadline (`_menu_deadline_scanner`, 1 s, `ZREM` of `{t}:menu:deadlines` is the claim) |
+| Survives a restart | `_cleanup_stale_completing_at_startup` skips parked conversations; the CrashDetector (routing-engine) skips `session:{c}:parked_run:{inst}` |
+
+`wake_only` makes the engine answer 409 `NOT_PARKED` instead of starting the flow from `entry` —
+a late wake after the conversation ended would otherwise greet the customer again. Parked key
+present but pipeline gone ⇒ the segment is closed as `failed`, logged ERROR.
+
+⚠️ A bridge crash between the deadline `ZREM` and the wake loses THAT deadline: the conversation
+stays parked until the customer answers or the contact closes — it never disappears.
+
+Tests: `tests/test_menu_park_wake.py` (11, mutation-checked). Measured live (10 conversations
+waiting on a menu): `block` 10 executor connections in BLPOP, `park` 0.
+
 ## HTTP timeout
 
 The bridge calls the skill-flow-engine HTTP endpoint to process inbound AI turns.

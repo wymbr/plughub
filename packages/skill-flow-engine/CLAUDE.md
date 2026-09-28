@@ -149,7 +149,12 @@ answer is judged exactly as before; nothing → parks again; deadline passed →
 | `run()` does not release the lock after parking | the park already did; with instance affinity the waker has the SAME `instance_id`, and a second release would delete its lock |
 | No activity flag / lock renewal while parked | no process is waiting; the CrashDetector must read `:parked` instead (F2) |
 
-Default is `block`; nothing sends `park` until the bridge does (F2). Tests against a REAL Redis:
+`run({ wakeOnly: true })` (body `wake_only`) is how the bridge WAKES a parked conversation: it
+only continues an `in_progress` pipeline and otherwise returns `error: "NOT_PARKED"` (409 on
+`/execute`) without executing anything — a late wake must never start the flow from `entry`.
+
+Default is `block`; the bridge sends `park` for pools with `menu_wait: park` (F2, see
+orchestrator-bridge `CLAUDE.md` § Parked menu). Tests against a REAL Redis:
 `src/__tests__/menu-park.test.ts` (13 cases, 6 mutations killed), run with
 `bash packages/skill-flow-engine/scripts/test-with-redis.sh` from inside WSL — without
 `REDIS_URL` that suite shows as SKIPPED. ADR: `docs/adr/adr-menu-durable-park.md`.

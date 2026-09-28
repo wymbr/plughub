@@ -173,6 +173,19 @@ construção lógica do bootstrap, não CPU. (b) só faria sentido junto com a a
 
 ## Fases
 
+> **F2 entregue em 2026-09-28**, com três ajustes ao desenho acima, todos medidos:
+> 1. **Só o agente PRINCIPAL estaciona.** Especialista de conferência tem o fechamento amarrado a
+>    contadores de conferência (`hook_pending`, `posatt:*`, `active_ai_specialists`) e continua
+>    bloqueando. No demo isso aparece: depois do primeiro menu, o `sac_ia` entra como especialista
+>    e bloqueia. Estender a eles fica com a F3.
+> 2. **O fechamento do segmento virou função** (`_finish_native_segment`): ele era o fim do
+>    `process_routed` e só rodava ali porque a requisição durava a conversa inteira.
+> 3. **A limpeza da subida do bridge também precisou pular a conversa estacionada**: ela supunha que
+>    toda conversa em curso morria com o processo. Hoje um restart deixa de derrubar o estacionado.
+> Mais a guarda `wake_only` no engine (409 `NOT_PARKED`), para um acordar atrasado não recomeçar o
+> fluxo. Medido ao vivo com 10 conversas esperando num menu: `block` 10 conexões do executor em
+> BLPOP, `park` 0; prazo vencido acordou as 4 conversas estacionadas no segundo certo.
+>
 > **F1 entregue em 2026-09-28** (engine + `menu_wait` no `/execute`), com o padrão `block`: nada em
 > produção estaciona até a F2. Chaves como construídas: `{t}:pipeline:{psid}:parked` (o que a D8
 > lê) e `{t}:menu:deadlines` (o que a D6 varre). Detalhe em `packages/skill-flow-engine/CLAUDE.md`

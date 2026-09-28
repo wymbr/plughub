@@ -88,6 +88,12 @@
       "pull": "Pull (agente puxa da fila)",
       "hint": "Push (padrão): o routing aloca o contato automaticamente. Pull: o contato aguarda na fila e um agente logado o retira (claim) explicitamente. Recomendado para assíncrono (e-mail, back-office, aprovação)."
     },
+    "menuWait": {
+      "label": "Espera da IA pela resposta do cliente",
+      "block": "Segurar (padrão)",
+      "park": "Estacionar",
+      "hint": "Como o agente de IA deste pool espera enquanto o cliente responde um menu. Segurar: a execução fica aberta a conversa inteira. Estacionar: a execução é liberada e a resposta do cliente a retoma — muito menos conexões ociosas em escala, e um reinício não perde a resposta. Menu dentro de transação mascarada sempre segura."
+    },
     "purpose": {
       "label": "Propósito do pool",
       "contact": "Contato de cliente",

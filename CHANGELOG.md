@@ -1,5 +1,49 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (5) — DUR-01 F2: o bridge acorda a conversa estacionada, e o pool escolhe estacionar
+
+**O que mudou.**
+
+- **Campo `menu_wait` do pool** (`block` padrão · `park`): coluna no agent-registry (migração
+  `20260928120000_pool_menu_wait`, `NOT NULL DEFAULT 'block'` — nada muda no ar), schema em
+  `@plughub/schemas`, rotas e seletor em `/config/resources` (en + pt-BR). Rollout pool a pool.
+- **O fechamento do segmento virou função.** As ~850 linhas do fim do `process_routed`
+  (conferência, `agent_ready`/`agent_done`, `participant_left`, desfecho do contato, hooks,
+  suspensão) só rodavam ali porque a requisição ao `/execute` durava a conversa inteira. Agora
+  são `_finish_native_segment(http, redis, run, result)`. Extração conferida por AST: as 18
+  variáveis livres eram exatamente as locais da ativação, nenhuma reatribuída, e toda linha
+  antiga continua presente.
+- **Estacionar** (`process_routed`): com o pool em `park` e agente PRINCIPAL, o `/execute`
+  volta `awaiting_input`; o contexto vai para `session:{sid}:parked_run:{instance}` e o
+  segmento fica aberto.
+- **Acordar** (`wake_parked_run`): quatro gatilhos, todos pelo bridge — resposta do cliente,
+  sinal de coleta e de @mention, fechamento do contato (`wake_all_parked_runs`) e prazo
+  (`_menu_deadline_scanner`, 1 s, o `ZREM` é o claim entre réplicas). Fecha o segmento só quem
+  APAGA o registro, então dois acordares simultâneos fecham uma vez; 412 não fecha nada.
+- **Engine: `wake_only`** → 409 `NOT_PARKED` em vez de começar o fluxo do `entry`; sem isso, um
+  acordar atrasado cumprimentaria o cliente de novo.
+- **Sobrevive a restart:** a limpeza da subida do bridge (que devolve a instância de toda
+  conversa em curso, supondo que morreu com o processo) e o CrashDetector passam a pular a
+  conversa estacionada — que nenhuma corrotina segurava.
+
+**Fora de propósito:** especialista de conferência continua bloqueando — o fechamento dele está
+amarrado a contadores de conferência que esta fatia não cobre. Fica com a F3.
+
+**Medido ao vivo** (pool `demo_ia` ligado em `park` só durante o teste, depois devolvido a
+`block`): com 10 conversas esperando num menu, **`block` tinha 10 conexões do executor em
+BLPOP, `park` 0**; 10/10 e 21/21 sessões em `flow_complete` com a mesma latência (turno p50
+24 × 26 ms); 4 conversas estacionadas abandonadas foram acordadas pela varredura no segundo do
+prazo e fecharam pelo ramo de timeout; estado final sem registro, prazo, lock ou instância
+ocupada sobrando. A tela grava o campo (escolhido na UI, lido `park` no registry).
+
+**Instrumentos.** `test_menu_park_wake.py` (11): não acorda sem registro · acorda como ACORDAR
+na mesma instância · termina e fecha uma vez · dois acordares simultâneos fecham uma vez · 412
+não fecha · pipeline sumido fecha como falha · sem sessão HTTP não perde a conversa · fechamento
+acorda todas · varredura acorda só o vencido e respeita o claim · `menu_wait` só estaciona
+declarado · a subida mantém a estacionada. Seis mutações, todas reprovam. CrashDetector: teste
+novo reprova sem o teste do registro. Engine: 345/345 (`wake_only`, 2 casos novos). Bridge:
+254 passaram. Gates de i18n verdes.
+
 ## 2026-09-28 (4) — DUR-01 F1: o `menu` sabe estacionar em vez de bloquear
 
 **Por quê.** Cada conversa esperando o cliente num `menu` segurava, dentro do executor, uma

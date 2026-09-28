@@ -88,6 +88,12 @@
       "pull": "Pull (agent pulls from queue)",
       "hint": "Push (default): the routing engine auto-allocates the contact. Pull: the contact waits in the queue and a logged-in agent claims it explicitly. Recommended for async (email, back-office, approval)."
     },
+    "menuWait": {
+      "label": "AI wait for customer reply",
+      "block": "Hold (default)",
+      "park": "Park",
+      "hint": "How this pool's AI agent waits while the customer answers a menu. Hold: the execution stays open for the whole conversation. Park: the execution is released and the customer's reply resumes it — far fewer idle connections at scale, and a restart does not lose the reply. Menus inside a masked transaction always hold."
+    },
     "purpose": {
       "label": "Pool purpose",
       "contact": "Customer contact",
