@@ -222,12 +222,16 @@ async def _restore_all_instances(redis_client, session_id: str) -> None:
     await redis_client.delete(f"session:{session_id}:human_agents")
 ```
 
-## Parked menu — `menu_wait: park` (DUR-01 F2, 2026-09-28)
+## Parked menu (DUR-01, 2026-09-28)
 
-A pool with `menu_wait: park` (agent-registry column, editable on `/config/resources`) makes the
-AI agent's `menu` park instead of blocking: `/execute` returns `awaiting_input` right
-after the prompt, and no request, executor Redis connection or lock stays held while the
-customer thinks. Only menus inside `begin_transaction` still block.
+Every AI agent's `menu` wait the bridge can wake PARKS: `/execute` is called with `menu_wait:
+park` (`MENU_WAIT_PARK`) and returns `awaiting_input` right after the prompt, so no request,
+executor Redis connection or lock stays held while the customer thinks. It is not a pool
+choice any more — the `pool.menu_wait` field used for the F2 rollout was removed in F4. What
+still blocks: menus inside `begin_transaction` (the engine refuses to park there) and the
+YAML-fallback activation in `process_routed` (`skills=[]`), which has no parked record and no
+`run` to close by. `test_toda_ativacao_que_o_bridge_sabe_acordar_estaciona` fails if a new
+`activate_native_agent` call site forgets `menu_wait`.
 
 Since F3 (2026-09-28) four kinds park, and the parked record's `kind` picks how the segment
 closes: `native` (primary **and** conference specialist) → `_finish_native_segment` · `queue`

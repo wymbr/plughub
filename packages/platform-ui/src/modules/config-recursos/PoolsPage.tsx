@@ -752,7 +752,6 @@ const PoolsPage: React.FC = () => {
     agent_kind:        '' as '' | 'human' | 'ai',
     dispatch_mode:     'push' as 'push' | 'pull',
     // DUR-01 — como a IA espera o cliente num menu (block = segura · park = estaciona).
-    menu_wait:         'block' as 'block' | 'park',
     purpose:           'contact' as 'contact' | 'internal',
     // ADR internal-work-queue: espelho da fila `{pool}-int` (wrap-up author-bound).
     internal_queue_enabled: false,
@@ -930,7 +929,7 @@ const PoolsPage: React.FC = () => {
   const handleOpenCreate = () => {
     setEditingPool(null)
     setFormData({
-      pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', menu_wait: 'block', purpose: 'contact',
+      pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', purpose: 'contact',
       internal_queue_enabled: false,
       channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: [], context_visibility_allow_tags: [],
@@ -952,7 +951,6 @@ const PoolsPage: React.FC = () => {
       description:     pool.description || '',
       agent_kind:        pool.agent_kind ?? '',
       dispatch_mode:     (pool.dispatch_mode as 'push' | 'pull') ?? 'push',
-      menu_wait:         pool.menu_wait === 'park' ? 'park' : 'block',
       purpose:         (pool.purpose as 'contact' | 'internal') ?? 'contact',
       internal_queue_enabled: pool.internal_queue_enabled ?? false,
       channel_types:     pool.channel_types,
@@ -1105,7 +1103,6 @@ const PoolsPage: React.FC = () => {
         // fatia 3 — o campo não governa mais nada (ver TODO § drop da coluna).
         ...(formData.agent_kind ? { agent_kind: formData.agent_kind } : {}),
         dispatch_mode:     formData.dispatch_mode,
-        menu_wait:         formData.menu_wait,
         purpose:           formData.purpose,
         internal_queue_enabled: formData.internal_queue_enabled,
         ...(formData.max_reply_time_ms !== null && { max_reply_time_ms: formData.max_reply_time_ms }),
@@ -1499,20 +1496,6 @@ const PoolsPage: React.FC = () => {
               ]}
             />
             <p className="text-xs text-muted-light mt-0.5">{t('pools.dispatch.hint')}</p>
-          </div>
-
-          {/* ── Espera da IA num menu (DUR-01) ───────────────────────────────── */}
-          <div>
-            <Select
-              label={t('pools.menuWait.label')}
-              value={formData.menu_wait}
-              onChange={e => setFormData({ ...formData, menu_wait: e.target.value as 'block' | 'park' })}
-              options={[
-                { value: 'block', label: t('pools.menuWait.block') },
-                { value: 'park',  label: t('pools.menuWait.park') },
-              ]}
-            />
-            <p className="text-xs text-muted-light mt-0.5">{t('pools.menuWait.hint')}</p>
           </div>
 
           {/* ── Purpose (E2f — contato de cliente × trabalho interno) ─────────── */}

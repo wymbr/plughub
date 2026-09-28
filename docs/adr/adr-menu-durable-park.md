@@ -173,6 +173,21 @@ construção lógica do bootstrap, não CPU. (b) só faria sentido junto com a a
 
 ## Fases
 
+> **F4 entregue em 2026-09-28 — a ficha fecha.** Estacionar deixou de ser escolha do pool: o bridge
+> pede `park` em toda ativação que sabe acordar (`MENU_WAIT_PARK`), e o campo `pool.menu_wait` saiu
+> inteiro (coluna, schema, rotas, tela e i18n — migração `20260928180000_pool_menu_wait_drop`).
+> **A prova da tabela abaixo não vale como foi escrita, e o motivo é uma premissa errada da D5:** o
+> bridge **não** é o único que chama o `/execute`. Há mais três chamadores, e nenhum sabe acordar uma
+> conversa estacionada: o avaliador do routing-engine (`evaluation_consumer`), a delegação `assist`
+> dentro do skill-flow-service e o fallback YAML do próprio bridge (registry sem resposta). Por isso
+> o engine continua com o parâmetro `menu_wait`, agora com outro sentido: **pedir `park` é declarar
+> que sabe acordar**. Quem não declara bloqueia, como antes. Medido: o avaliador não tem `menu`
+> (`agente_avaliacao_v1`, 0 steps) e o workflow é proibido de ter por perfil; o que pode bloquear
+> fora de transação é a delegação `assist` e o fallback YAML, os dois nomeados. Um site novo de
+> ativação no bridge sem `menu_wait` reprova em `test_toda_ativacao_que_o_bridge_sabe_acordar_estaciona`.
+> Medido ao vivo, sem pool nenhum configurado: 10/10 conversas no `demo_ia` com pico de BLPOP do
+> executor **0**; agente de fila estacionado (`kind=queue`), limpo no fechamento.
+>
 > **F3 entregue em 2026-09-28**, com dois ajustes ao desenho:
 > 1. **O aviso tem tópico próprio, `menu.wake`, e não viaja em `conversations.inbound`** como a D5
 >    dizia: o `inbound` é consumido também pelo routing-engine, que trataria o aviso como contato

@@ -100,7 +100,7 @@ Violating this invariant would create two simultaneous executions advancing the 
 
 ## Parked queue agent — `menu.wake` (DUR-01 F3, 2026-09-28)
 
-With the queue pool in `menu_wait: park`, the `LPUSH __agent_available__` / `queue_timeout` to the
+Since DUR-01 the queue agent's wait PARKS, so the `LPUSH __agent_available__` / `queue_timeout` to the
 queue agent's menu no longer unblocks anybody: its wait is parked, not in a BLPOP. So every such
 LPUSH (`kafka_listener._drain_queue_for_agent`, `main._emit_queue_timeout`,
 `main._periodic_queue_drain`) is followed by `publish_menu_wake` (`menu_wake.py`): topic

@@ -338,14 +338,30 @@ async def test_menu_wake_ilegivel_nao_acorda_nada(monkeypatch):
     assert chamados == []
 
 
-@pytest.mark.asyncio
-async def test_pool_menu_wait_so_estaciona_quando_declarado(monkeypatch):
-    cfg = AsyncMock()
-    monkeypatch.setattr(bridge_mod, "get_pool_config", cfg)
-    for valor, esperado in [({"menu_wait": "park"}, "park"), ({"menu_wait": "block"}, "block"),
-                            ({}, "block"), (None, "block")]:
-        cfg.return_value = valor
-        assert await bridge_mod._pool_menu_wait(object(), "t", "p") == esperado
+def test_toda_ativacao_que_o_bridge_sabe_acordar_estaciona():
+    """
+    DUR-01 F4: estacionar deixou de ser escolha do pool. Toda chamada a
+    `activate_native_agent` declara `menu_wait` — exceto o fallback YAML
+    (`skills=[]`), que não tem registro de estacionamento nem fechamento por `run` e
+    por isso continua bloqueando. Um site novo sem `menu_wait` reprova aqui, em vez de
+    voltar a segurar uma conexão do executor por conversa sem ninguém perceber.
+    """
+    import ast
+    import inspect
+    arvore = ast.parse(inspect.getsource(bridge_mod))
+    sem, com = [], []
+    for n in ast.walk(arvore):
+        if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "activate_native_agent":
+            kws = {k.arg: ast.unparse(k.value) for k in n.keywords}
+            if "menu_wait" in kws:
+                assert "MENU_WAIT_PARK" in kws["menu_wait"], kws["menu_wait"]
+                com.append(n.lineno)
+            else:
+                sem.append(kws.get("skills"))
+    assert sem == ["[]"], f"ativação sem menu_wait fora do fallback YAML: {sem}"
+    assert len(com) >= 6
+    assert bridge_mod.MENU_WAIT_PARK == "park"
+    assert not hasattr(bridge_mod, "_pool_menu_wait")
 
 
 @pytest.mark.asyncio

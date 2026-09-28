@@ -153,8 +153,9 @@ answer is judged exactly as before; nothing → parks again; deadline passed →
 only continues an `in_progress` pipeline and otherwise returns `error: "NOT_PARKED"` (409 on
 `/execute`) without executing anything — a late wake must never start the flow from `entry`.
 
-Default is `block`; the bridge sends `park` for pools with `menu_wait: park` (F2, see
-orchestrator-bridge `CLAUDE.md` § Parked menu). Tests against a REAL Redis:
+Default is `block`, and asking for `park` means the CALLER can wake the conversation: the
+bridge always asks since F4 (see orchestrator-bridge `CLAUDE.md` § Parked menu); the `assist`
+delegation in skill-flow-service and the bridge's YAML fallback do not, and still block. Tests against a REAL Redis:
 `src/__tests__/menu-park.test.ts` (13 cases, 6 mutations killed), run with
 `bash packages/skill-flow-engine/scripts/test-with-redis.sh` from inside WSL — without
 `REDIS_URL` that suite shows as SKIPPED. ADR: `docs/adr/adr-menu-durable-park.md`.

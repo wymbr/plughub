@@ -99,7 +99,6 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         webhook_skill_id:        body.webhook_skill_id ?? null,
         max_concurrent_sessions: body.max_concurrent_sessions ?? null,
         dispatch_mode:           body.dispatch_mode ?? "push",
-        menu_wait:               body.menu_wait ?? "block",
         purpose:                 body.purpose ?? "contact",
         internal_queue_enabled:  body.internal_queue_enabled ?? false,
         max_reply_time_ms:       body.max_reply_time_ms ?? null,
@@ -295,7 +294,6 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.sla_target_ms           !== undefined && { sla_target_ms:           body.sla_target_ms }),
         ...(body.webhook_skill_id        !== undefined && { webhook_skill_id:        body.webhook_skill_id }),
         ...(body.dispatch_mode           !== undefined && { dispatch_mode:           body.dispatch_mode }),
-        ...(body.menu_wait               !== undefined && { menu_wait:               body.menu_wait }),
         ...(body.purpose               !== undefined && { purpose:                 body.purpose }),
         ...(body.internal_queue_enabled  !== undefined && { internal_queue_enabled:  body.internal_queue_enabled }),
         // Campos limpáveis via PUT null (schema .nullable()): escalares aceitam

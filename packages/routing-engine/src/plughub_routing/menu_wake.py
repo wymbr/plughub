@@ -2,8 +2,8 @@
 menu_wake.py — avisa o bridge de que o agente de fila recebeu um sinal (DUR-01 F3).
 
 O routing-engine sinaliza o agente de fila com `LPUSH menu:result:{sid}` (`__agent_available__`
-quando um humano libera, `__queue_timeout__` quando o teto de espera vence). Com o pool de
-fila em `menu_wait: park`, ninguém está bloqueado naquela lista: a conversa está ESTACIONADA
+quando um humano libera, `__queue_timeout__` quando o teto de espera vence). Desde a DUR-01
+a espera da fila ESTACIONA, então ninguém está bloqueado naquela lista: a conversa está parada
 e só o bridge a acorda. Este aviso vai no tópico `menu.wake` (schema `MenuWakeEventSchema`,
 `@plughub/schemas`), SEMPRE depois do `LPUSH`, com a sessão como chave de partição.
 

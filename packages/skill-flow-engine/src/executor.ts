@@ -65,8 +65,10 @@ export interface StepContext {
 
   /**
    * DUR-01 — como o `menu` espera o cliente. `block` (padrão): BLPOP dentro do processo.
-   * `park`: devolve a requisição e é acordado pela resposta. Quem pede é o lançador
-   * (pool a pool); o step ainda BLOQUEIA dentro de transação ou com escopo mascarado
+   * `park`: devolve a requisição e é acordado pela resposta. Quem pede é o LANÇADOR, e
+   * pedir é declarar que sabe acordar: o bridge pede sempre (DUR-01 F4); a delegação
+   * `assist` e o fallback YAML do bridge não pedem, porque não têm quem os acorde. O step
+   * ainda BLOQUEIA dentro de transação ou com escopo mascarado
    * vivo, porque esses valores só existem em memória.
    */
   menuWait?:      "block" | "park"

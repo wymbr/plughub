@@ -173,8 +173,6 @@ export interface Pool {
   webhook_skill_id?: string | null
   /** Frente 1: modo de despacho da fila — "push" (auto-aloca, default) | "pull" (agente puxa). */
   dispatch_mode?: 'push' | 'pull'
-  /** DUR-01: como a IA espera o cliente num menu — "block" (segura, default) | "park" (estaciona). */
-  menu_wait?: 'block' | 'park'
   /**
    * E2f: atende CONTATO de cliente ou trabalho INTERNO da plataforma (wrap-up
    * destacado, hooks)? Pools `internal` saem das contagens de contato e das médias

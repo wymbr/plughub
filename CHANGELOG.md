@@ -1,5 +1,41 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (7) — DUR-01 F4: estacionar é o modo, não uma opção do pool — e a ficha fecha
+
+**O que mudou.**
+
+- **O bridge pede `park` em toda ativação que sabe acordar** (`MENU_WAIT_PARK`): agente
+  principal, especialista, fila, retomada webhook e os três acordares. Saiu `_pool_menu_wait`,
+  e com ela uma consulta ao registry por ativação.
+- **O campo `pool.menu_wait` saiu inteiro:** coluna (migração
+  `20260928180000_pool_menu_wait_drop`), schema, rotas do agent-registry, seletor em
+  `/config/resources` e as chaves `pools.menuWait` dos dois locales. Campo de config que não muda
+  nada é o valor plausível: a tela diria `block` e a conversa estacionaria.
+
+**A premissa do ADR estava errada, e a prova foi reescrita.** A D5 dizia que o bridge é o único
+chamador do `/execute`, e a F4 previa provar com um `grep` restringindo o BLPOP do `menu` à
+transação. Há mais três chamadores, e nenhum sabe acordar uma conversa estacionada:
+
+- o avaliador do routing-engine (`evaluation_consumer`);
+- a delegação `assist` dentro do skill-flow-service;
+- o fallback YAML do próprio bridge.
+
+Por isso o parâmetro `menu_wait` do engine fica, com outro sentido: **pedir `park` é declarar que
+sabe acordar**. Medido: o avaliador não tem `menu` e o workflow é proibido de ter, então o que ainda
+pode bloquear fora de transação é a delegação `assist` e o fallback YAML, os dois nomeados no ADR e
+nos `CLAUDE.md`.
+
+**Medido ao vivo, sem nenhum pool configurado.** `demo_ia`: 10/10 conversas em `flow_complete`, com
+pico de BLPOP do executor **0** (amostrado a cada 0,5 s pelo IP do skill-flow-service). O agente de
+fila, que estava em `block`, estacionou (`kind=queue`, BLPOP 0) e foi limpo no fechamento. Estado
+final sem registro, prazo, lock nem instância ocupada. A migração foi aplicada no boot do registry,
+e o pool volta sem o campo.
+
+**Instrumentos.** `test_toda_ativacao_que_o_bridge_sabe_acordar_estaciona` percorre o AST do bridge
+e reprova se alguma chamada a `activate_native_agent` não declarar `menu_wait` (a única isenta é o
+fallback YAML, `skills=[]`). A retomada webhook tem assertiva de `menu_wait == "park"`. Bridge: 259
+testes passaram. Gate de i18n (chaves duplicadas) verde.
+
 ## 2026-09-28 (6) — DUR-01 F3: quem responde de fora do bridge também acorda, e estacionam fila, retomada e especialista
 
 **Por quê.** Na F2 só o bridge acordava a conversa estacionada. Três escritores ficavam de fora e,

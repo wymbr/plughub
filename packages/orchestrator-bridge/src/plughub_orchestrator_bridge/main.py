@@ -5856,7 +5856,7 @@ async def _finish_native_segment(
 
 # ── DUR-01 F2 — conversa ESTACIONADA num `menu` ───────────────────────────────
 #
-# Com o pool em `menu_wait: park`, o `/execute` volta com `awaiting_input` assim que o
+# O `/execute` volta com `awaiting_input` assim que o
 # menu manda o prompt: nenhuma requisição, conexão Redis ou lock fica preso esperando o
 # cliente. O que o fim do `process_routed` precisaria para fechar o segmento vai para
 # `session:{sid}:parked_run:{campo}` (campo = instance_id, o MESMO do `menu:waiting`),
@@ -5879,22 +5879,12 @@ def _parked_runs_set(session_id: str) -> str:
     return f"session:{session_id}:parked_runs"
 
 
-async def _pool_menu_wait(http: aiohttp.ClientSession, tenant_id: str, pool_id: str) -> str:
-    """
-    `park` só quando o pool o declara. Registry fora ⇒ `block`, DITO: a conversa segue
-    funcionando como sempre, mas o pool que pediu para estacionar deixa de estacionar —
-    e isso aparece no log, nunca em silêncio.
-    """
-    if not (http and tenant_id and pool_id):
-        return "block"
-    cfg = await get_pool_config(http, tenant_id, pool_id)
-    if cfg is None:
-        logger.warning(
-            "DUR-01 menu_wait do pool %s ilegível (registry sem resposta) — este contato "
-            "BLOQUEIA a espera do menu no executor em vez de estacionar", pool_id,
-        )
-        return "block"
-    return "park" if cfg.get("menu_wait") == "park" else "block"
+# DUR-01 F4 — estacionar deixou de ser escolha do pool: é o modo de TODA espera de `menu`
+# que o bridge sabe acordar (agente nativo, especialista, fila, retomada webhook). O campo
+# `pool.menu_wait` saiu. O engine continua bloqueando só onde não pode estacionar — dentro
+# de `begin_transaction` (D2) — e para quem chama o `/execute` sem declarar `park`, porque
+# não sabe acordar: a delegação `assist` do skill-flow-service e o fallback YAML daqui.
+MENU_WAIT_PARK = "park"
 
 
 async def _park_native_run(redis_client: aioredis.Redis, run: dict, activation: dict) -> None:
@@ -5964,7 +5954,7 @@ async def wake_parked_run(
             instance_id=run["native_instance_id"],
             webhook_pool=True,
             pool_id=run["pool_id"],
-            menu_wait="park", wake_only=True,
+            menu_wait=MENU_WAIT_PARK, wake_only=True,
         )
     elif fila:
         # Os MESMOS parâmetros da ativação original do agente de fila (`process_queued`).
@@ -5977,7 +5967,7 @@ async def wake_parked_run(
             extra_context={"pool_id": run["pool_id"]},
             segment_id=run["q_seg_id"],
             pool_id=run["flow_pool_id"],
-            menu_wait="park", wake_only=True,
+            menu_wait=MENU_WAIT_PARK, wake_only=True,
         )
     else:
         result = await activate_native_agent(
@@ -5990,7 +5980,7 @@ async def wake_parked_run(
             segment_id=run["part_seg_id"],
             webhook_pool=bool(act.get("webhook_pool")),
             pool_id=run["pool_id"],
-            menu_wait="park", wake_only=True,
+            menu_wait=MENU_WAIT_PARK, wake_only=True,
         )
     outcome = result.get("outcome")
     if result.get("not_parked"):
@@ -6830,14 +6820,11 @@ async def process_routed(
                     session_id, _mm_exc,
                 )
 
-        # DUR-01 — o pool decide se a espera do `menu` estaciona. Vale para o agente
+        # DUR-01 — a espera do `menu` estaciona. Vale para o agente
         # principal (F2) e para o especialista de conferência (F3): o fechamento dos dois
         # é o MESMO `_finish_native_segment`, com os contadores de conferência dentro, e
         # todo caminho que aborta um especialista esperando também acorda o estacionado.
         # Sem instância não há estacionamento (o registro é por instância).
-        _menu_wait = "block"
-        if native_instance_id:
-            _menu_wait = await _pool_menu_wait(http, tenant_id, pool_id)
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
             session_id=session_id, customer_id=customer_id,
@@ -6848,7 +6835,7 @@ async def process_routed(
             segment_id=_part_seg_id,
             webhook_pool=_is_webhook_pool,
             pool_id=pool_id,
-            menu_wait=_menu_wait if _menu_wait == "park" else "",
+            menu_wait=MENU_WAIT_PARK if native_instance_id else "",
         )
 
         _native_run = {
@@ -7316,14 +7303,12 @@ async def process_queued(
         joined_at=_q_joined_iso,
     ))
 
-    # Activate the queue agent — this call blocks for the entire wait duration
-    # because the skill flow contains a menu step with timeout_s=0.
-    # It returns only when the queue agent's skill flow completes (either via
-    # '__agent_available__' signal or customer disconnect / max_wait_s timeout).
+    # Activate the queue agent. Its flow waits in a menu with timeout_s=0; since DUR-01
+    # that wait PARKS (`awaiting_input`), and the '__agent_available__' / queue_timeout
+    # signal or the customer disconnect wakes it (`menu.wake`, contact close).
     # extra_context exposes pool_id and session_id so the YAML's invoke step can
     # dynamically call conversation_escalate with the correct target pool.
-    # DUR-01 F3: quem decide estacionar é o pool que EXECUTA o fluxo de fila.
-    _q_menu_wait = await _pool_menu_wait(http, tenant_id, _flow_pool_id)
+    # DUR-01: a espera da fila estaciona; o `menu.wake` do routing-engine a acorda.
     agent_result = await activate_native_agent(
         http=http, redis_client=redis_client,
         session_id=session_id, customer_id=customer_id,
@@ -7344,7 +7329,7 @@ async def process_queued(
         # enquanto o valor era o do pool de destino: doc e código discordavam, e
         # foi a doc que estava certa sobre a intenção.
         pool_id=_flow_pool_id,
-        menu_wait=_q_menu_wait if _q_menu_wait == "park" else "",
+        menu_wait=MENU_WAIT_PARK,
     )
 
     _q_run = {
@@ -9862,7 +9847,7 @@ async def _finish_resume_segment(
     contato e devolução da instância (`agent_ready` → `agent_done`).
 
     DUR-01 F3: era o fim do `_handle_webhook_session_resumed`, e só rodava ali porque
-    a requisição ao `/execute` durava a janela inteira. Com o pool em `park`, a janela
+    a requisição ao `/execute` durava a janela inteira. Estacionando, a janela
     retomada pode estacionar num `menu` e terminar numa execução posterior.
     """
     session_id          = rrun["session_id"]
@@ -10177,8 +10162,7 @@ async def _handle_webhook_session_resumed(
 
     # Re-activate skill flow with resume context (webhook_pool=True wires
     # persistSuspendWebhook in skill-flow-service for any subsequent suspend steps)
-    # DUR-01 F3: a janela retomada também estaciona, se o pool pedir.
-    _r_menu_wait = await _pool_menu_wait(http, tenant_id, pool_id)
+    # DUR-01: a janela retomada também estaciona.
     agent_result = await activate_native_agent(
         http=http,
         redis_client=redis_client,
@@ -10191,7 +10175,7 @@ async def _handle_webhook_session_resumed(
         webhook_pool=True,
         resume_context=resume_context,
         pool_id=pool_id,   # fatia 1: $.config persists across suspend/resume for webhook skills
-        menu_wait=_r_menu_wait if _r_menu_wait == "park" else "",
+        menu_wait=MENU_WAIT_PARK,
     )
 
     _ai_outcome = (agent_result or {}).get("outcome", "")
