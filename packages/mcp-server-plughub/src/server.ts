@@ -81,6 +81,7 @@ import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-f
 import { decideLedgerRehydration, type LedgerCandidate } from "./lib/ledger-rehydration"
 import { decideFormTaskClose }  from "./lib/form-task-close"
 import { poolsDaSessao, type ScopeRedis } from "./lib/session-scope"
+import { publishMenuWake }       from "./lib/menu-wake"
 import {
   HUMAN_LIVENESS_TTL_S, HUMAN_SWEEP_INTERVAL_MS, livenessKey, sweepAllowed, sweepHumanGhosts,
   type LeaveStatus, type SweepRedis,
@@ -3191,6 +3192,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
             : `menu:result:${sessionId}`
           console.log(`[menu_submit] LPUSH ${resultKey} [value] (explicit agent_key)`)
           await redis.lpush(resultKey, resultText)
+          await publishMenuWake(kafka, { tenant_id: menuTenantId, session_id: String(sessionId),
+                                         field: explicitAgentKey, reason: "menu_submit" })
           pushed = true
         }
         if (!pushed && waitingHash && Object.keys(waitingHash).length > 0) {
@@ -3207,6 +3210,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
                   : `menu:result:${sessionId}`
                 console.log(`[menu_submit] LPUSH ${resultKey} [value] (agents_only match)`)
                 await redis.lpush(resultKey, resultText)
+                await publishMenuWake(kafka, { tenant_id: menuTenantId, session_id: String(sessionId),
+                                               field: agentKey, reason: "menu_submit" })
                 pushed = true
                 break
               }
@@ -3217,6 +3222,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
                   : `menu:result:${sessionId}`
                 console.log(`[menu_submit] LPUSH ${resultKey} [value] (visibility includes ${agentPid})`)
                 await redis.lpush(resultKey, resultText)
+                await publishMenuWake(kafka, { tenant_id: menuTenantId, session_id: String(sessionId),
+                                               field: agentKey, reason: "menu_submit" })
                 pushed = true
                 break
               }
@@ -4658,6 +4665,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
               ? `menu:result:${targetSessionId}:${targetAgentKey}`
               : `menu:result:${targetSessionId}`
             await redis.lpush(resultKey, msgText)
+            await publishMenuWake(kafka, { tenant_id: tenantDaMascara, session_id: targetSessionId,
+                                           field: targetAgentKey, reason: "agent_reply" })
           } catch { /* non-fatal — hook agent will timeout instead */ }
 
           // 4. Publish to analytics (ClickHouse persistence) for hook agent responses too

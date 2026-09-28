@@ -36,6 +36,19 @@ import pytest
 import plughub_orchestrator_bridge.main as bridge_mod
 
 
+@pytest.fixture(autouse=True)
+def _menu_wait_block(monkeypatch):
+    """
+    DUR-01 F3: a retomada pergunta ao registry se o pool estaciona o menu. Estes testes
+    são do contrato da retomada BLOQUEANTE; o `http` falso deles não responde `GET`, e a
+    consulta cairia em `block` pelo caminho da falha — com aviso de registry fora. O modo
+    é declarado aqui; o estacionamento tem suíte própria (`test_menu_park_wake.py`).
+    """
+    async def _block(*_a, **_k):
+        return "block"
+    monkeypatch.setattr(bridge_mod, "_pool_menu_wait", _block)
+
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 
 TENANT     = "tenant_test"

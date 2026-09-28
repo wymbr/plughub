@@ -50,6 +50,7 @@ runs a continuous event loop consuming from `conversations.events` and `conversa
 |---|---|
 | `conversations.inbound` | Normalised inbound messages (text, MenuSubmitEvent, etc.) |
 | `conversations.events` | `contact_closed`, `agent.activated`, and other lifecycle events |
+| `menu.wake` | `menu_wake` — wake a parked menu (DUR-01 F3, `MenuWakeEventSchema`) |
 
 ## Kafka topics produced
 
@@ -224,16 +225,22 @@ async def _restore_all_instances(redis_client, session_id: str) -> None:
 ## Parked menu — `menu_wait: park` (DUR-01 F2, 2026-09-28)
 
 A pool with `menu_wait: park` (agent-registry column, editable on `/config/resources`) makes the
-PRIMARY AI agent's `menu` park instead of blocking: `/execute` returns `awaiting_input` right
+AI agent's `menu` park instead of blocking: `/execute` returns `awaiting_input` right
 after the prompt, and no request, executor Redis connection or lock stays held while the
-customer thinks. Conference specialists and menus inside `begin_transaction` still block.
+customer thinks. Only menus inside `begin_transaction` still block.
+
+Since F3 (2026-09-28) four kinds park, and the parked record's `kind` picks how the segment
+closes: `native` (primary **and** conference specialist) → `_finish_native_segment` · `queue`
+(queue agent, `process_queued`) → `_finish_queue_segment` · `resume` (webhook session resumed,
+`_handle_webhook_session_resumed`) → `_finish_resume_segment`. A human ending a conference
+also wakes every member of `session:{sid}:active_ai_specialists`.
 
 | Piece | Where |
 |---|---|
 | Closing a segment (`agent_ready`/`agent_done`, `participant_left`, contact outcome, hooks) | `_finish_native_segment(http, redis, run, result)` — was the tail of `process_routed`; `run` carries what used to be its locals |
 | Parking | `process_routed` saves `{run, activation}` in `session:{sid}:parked_run:{instance_id}` (+ SET `session:{sid}:parked_runs`) and returns; the segment stays OPEN, `ai_completing` stays set |
 | Waking | `wake_parked_run(redis, sid, field, reason)` — `/execute` again with `wake_only`; `awaiting_input` = parked again; terminal = the call that DELETES the parked key closes the segment (exactly once); 412 = another execution holds it and will read the list |
-| Triggers | customer reply (`process_inbound`, after the LPUSH) · collect outcome · @mention signal · contact close (`wake_all_parked_runs`) · deadline (`_menu_deadline_scanner`, 1 s, `ZREM` of `{t}:menu:deadlines` is the claim) |
+| Triggers | customer reply (`process_inbound`, after the LPUSH) · collect outcome · @mention signal · contact close (`wake_all_parked_runs`) · deadline (`_menu_deadline_scanner`, 1 s, `ZREM` of `{t}:menu:deadlines` is the claim) · **`menu.wake` topic** (`process_menu_wake`): writers outside the bridge — mcp-server `menu_submit` / hook-agent reply, routing-engine `__agent_available__` / `queue_timeout` — publish it AFTER their LPUSH, so a lost notice still leaves the answer in the list for the deadline wake |
 | Survives a restart | `_cleanup_stale_completing_at_startup` skips parked conversations; the CrashDetector (routing-engine) skips `session:{c}:parked_run:{inst}` |
 
 `wake_only` makes the engine answer 409 `NOT_PARKED` instead of starting the flow from `entry` —
@@ -243,7 +250,7 @@ present but pipeline gone ⇒ the segment is closed as `failed`, logged ERROR.
 ⚠️ A bridge crash between the deadline `ZREM` and the wake loses THAT deadline: the conversation
 stays parked until the customer answers or the contact closes — it never disappears.
 
-Tests: `tests/test_menu_park_wake.py` (11, mutation-checked). Measured live (10 conversations
+Tests: `tests/test_menu_park_wake.py` (15, mutation-checked). Measured live (10 conversations
 waiting on a menu): `block` 10 executor connections in BLPOP, `park` 0.
 
 ## HTTP timeout

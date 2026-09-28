@@ -44,6 +44,7 @@ from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
 from .routing_config import routing_config, session_config
 from . import mute_queue
+from .menu_wake import publish_menu_wake
 from plughub_tasks import disparar
 
 if TYPE_CHECKING:
@@ -801,6 +802,9 @@ class LifecycleEventHandler:
                 await self._instances._redis.lpush(
                     f"menu:result:{contact.session_id}", "__agent_available__"
                 )
+                # DUR-01: se o agente de fila está estacionado, só o bridge o acorda.
+                await publish_menu_wake(self._producer, tenant_id, contact.session_id,
+                                        "agent_available")
                 logger.info(
                     "Queue drain: signalled queue agent for session=%s pool=%s tenant=%s "
                     "(agent=%s became ready)",

@@ -173,6 +173,28 @@ construção lógica do bootstrap, não CPU. (b) só faria sentido junto com a a
 
 ## Fases
 
+> **F3 entregue em 2026-09-28**, com dois ajustes ao desenho:
+> 1. **O aviso tem tópico próprio, `menu.wake`, e não viaja em `conversations.inbound`** como a D5
+>    dizia: o `inbound` é consumido também pelo routing-engine, que trataria o aviso como contato
+>    novo. `MenuWakeEventSchema` (`@plughub/schemas/menu-wake.ts`), chave = `session_id`. Produtores:
+>    mcp-server (`menu_submit` do Console, resposta de agente de hook) e routing-engine
+>    (`__agent_available__` e `queue_timeout` do agente de fila); consumidor: o bridge, que chama o
+>    mesmo `wake_parked_run`. O aviso vem **depois** do `LPUSH`, então se ele se perder a resposta
+>    continua na lista e o prazo acorda a conversa.
+> 2. **Estacionam também o agente de FILA, a RETOMADA de sessão webhook e os ESPECIALISTAS**, cada
+>    um com o seu fechamento (`_finish_queue_segment`, `_finish_resume_segment`,
+>    `_finish_native_segment`), escolhido pelo `kind` gravado no registro. A retomada entrou porque
+>    era ela, e não o especialista, que segurava os BLPOPs que a F2 viu no demo. O especialista é
+>    acordado também quando o humano encerra a conferência.
+> Medido ao vivo: agente de fila estacionado com BLPOP 0; o `menu.wake` o acordou, ele avisou o
+> cliente e estacionou de novo; o fechamento acordou a fila estacionada e o segundo aviso de
+> fechamento bateu no `wake_only` (409), sem recomeçar a saudação. `demo_ia` em `park`: pico de
+> BLPOP do executor **0** ao longo de conversas inteiras, 10/10 duas vezes, p95 igual ao `block`.
+> **O mesmo teste achou um defeito antigo e sem relação com o estacionamento**: o scan de instâncias
+> do bridge (`{t}:instance:*`) lia a chave auxiliar `…:reap_cooldown` (valor `1`) como instância, e a
+> subida do bridge entrava em crash-loop enquanto ela vivesse, derrubando as conversas em curso.
+> Corrigido junto (`instance_bootstrap._scan_instances_from_redis`).
+>
 > **F2 entregue em 2026-09-28**, com três ajustes ao desenho acima, todos medidos:
 > 1. **Só o agente PRINCIPAL estaciona.** Especialista de conferência tem o fechamento amarrado a
 >    contadores de conferência (`hook_pending`, `posatt:*`, `active_ai_specialists`) e continua

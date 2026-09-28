@@ -304,3 +304,30 @@ class TestHeartbeatSelfHeal:
         # TTL renewed on the instance key instead of a rewrite
         expired_keys = [c.args[0] for c in redis.expire.call_args_list if c.args]
         assert f"{TENANT}:instance:{INST}" in expired_keys
+
+
+# ─── TestScanSkipsAuxiliaryKeys (2026-09-28) ─────────────────────────────────
+
+class TestScanSkipsAuxiliaryKeys:
+    """
+    `{t}:instance:*` também casa as chaves auxiliares da instância. Medido: o
+    `{t}:instance:{iid}:reap_cooldown` do routing-engine vale "1", virava o inteiro 1
+    no scan, e o `current.get("source")` do reconcile derrubava a subida do bridge.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auxiliares_e_valores_nao_objeto_ficam_fora(self):
+        store = {
+            f"{TENANT}:instance:{INST}": json.dumps({"instance_id": INST, "status": "ready"}),
+            f"{TENANT}:instance:{INST}:reap_cooldown": "1",
+            f"{TENANT}:instance:{INST}:wrap_up_pending": "1",
+            f"{TENANT}:instance:estranho-001": "7",
+        }
+        redis = MagicMock()
+        redis.scan = AsyncMock(return_value=(0, [k.encode() for k in store]))
+        redis.get  = AsyncMock(side_effect=lambda k: store.get(k))
+
+        found = await make_bootstrap(redis)._scan_instances_from_redis(TENANT)
+
+        assert set(found) == {INST}
+        assert all(isinstance(v, dict) for v in found.values())

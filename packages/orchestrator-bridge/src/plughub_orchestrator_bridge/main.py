@@ -131,6 +131,8 @@ TOPIC_EVENTS            = "conversations.events"
 TOPIC_REGISTRY_CHANGED  = "registry.changed"
 TOPIC_CONFIG_CHANGED    = "config.changed"
 TOPIC_PARTICIPANTS      = "conversations.participants"
+# DUR-01 F3 — chegou algo para um menu que pode estar estacionado (Console, agente de fila).
+TOPIC_MENU_WAKE         = "menu.wake"
 TOPIC_LIFECYCLE         = "agent.lifecycle"
 GROUP_ID                = "orchestrator-bridge"
 
@@ -5940,19 +5942,56 @@ async def wake_parked_run(
         return "busy"
     parked = json.loads(raw if isinstance(raw, str) else raw.decode())
     run, act = parked["run"], parked["activation"]
+    kind = run.get("kind") or "native"
+    fila = kind == "queue"
 
-    result = await activate_native_agent(
-        http=http, redis_client=redis_client,
-        session_id=session_id, customer_id=run["customer_id"],
-        agent_type_id=run["agent_type_id"], tenant_id=run["tenant_id"],
-        skills=act.get("skills") or [],
-        instance_id=run["native_instance_id"],
-        conference_id=run["conference_id"],
-        segment_id=run["part_seg_id"],
-        webhook_pool=bool(act.get("webhook_pool")),
-        pool_id=run["pool_id"],
-        menu_wait="park", wake_only=True,
-    )
+    async def fechar(resultado: dict) -> None:
+        if fila:
+            await _finish_queue_segment(redis_client, run, resultado)
+        elif kind == "resume":
+            await _finish_resume_segment(redis_client, run, resultado)
+        else:
+            await _finish_native_segment(http, redis_client, run, resultado)
+
+    if kind == "resume":
+        # Os MESMOS parâmetros da janela retomada (`_handle_webhook_session_resumed`), sem
+        # o `resume_context`: ele já foi consumido, e o pipeline agora está `in_progress`.
+        result = await activate_native_agent(
+            http=http, redis_client=redis_client,
+            session_id=session_id, customer_id=run["customer_id"],
+            agent_type_id=run["agent_type_id"], tenant_id=run["tenant_id"],
+            skills=act.get("skills") or [],
+            instance_id=run["native_instance_id"],
+            webhook_pool=True,
+            pool_id=run["pool_id"],
+            menu_wait="park", wake_only=True,
+        )
+    elif fila:
+        # Os MESMOS parâmetros da ativação original do agente de fila (`process_queued`).
+        result = await activate_native_agent(
+            http=http, redis_client=redis_client,
+            session_id=session_id, customer_id=run["customer_id"],
+            agent_type_id=run["agent_type_id"], tenant_id=run["tenant_id"],
+            skills=act.get("skills") or [],
+            instance_id="", token_instance_id=run["q_participant"],
+            extra_context={"pool_id": run["pool_id"]},
+            segment_id=run["q_seg_id"],
+            pool_id=run["flow_pool_id"],
+            menu_wait="park", wake_only=True,
+        )
+    else:
+        result = await activate_native_agent(
+            http=http, redis_client=redis_client,
+            session_id=session_id, customer_id=run["customer_id"],
+            agent_type_id=run["agent_type_id"], tenant_id=run["tenant_id"],
+            skills=act.get("skills") or [],
+            instance_id=run["native_instance_id"],
+            conference_id=run["conference_id"],
+            segment_id=run["part_seg_id"],
+            webhook_pool=bool(act.get("webhook_pool")),
+            pool_id=run["pool_id"],
+            menu_wait="park", wake_only=True,
+        )
     outcome = result.get("outcome")
     if result.get("not_parked"):
         # O pipeline não está em andamento, mas o registro de estacionamento ainda
@@ -5966,7 +6005,7 @@ async def wake_parked_run(
             "DUR-01 conversa estacionada sem pipeline em andamento (status=%s): session=%s "
             "field=%s — segmento fechado como FALHA", result.get("status"), session_id, field,
         )
-        await _finish_native_segment(http, redis_client, run, {"outcome": "failed"})
+        await fechar({"outcome": "failed"})
         return "finished"
     if not outcome:
         return "busy"
@@ -5980,8 +6019,27 @@ async def wake_parked_run(
         "DUR-01 conversa acordada terminou: session=%s field=%s reason=%s outcome=%s",
         session_id, field, reason, outcome,
     )
-    await _finish_native_segment(http, redis_client, run, result)
+    await fechar(result)
     return "finished"
+
+
+async def process_menu_wake(msg: dict, redis_client: aioredis.Redis) -> str:
+    """
+    DUR-01 F3 — consumidor de `menu.wake`: quem escreveu em `menu:result` por fora do
+    bridge (Console, routing-engine) avisa, e o bridge acorda. Aviso para menu que não está
+    estacionado é inofensivo (`not_parked`). Aviso ilegível é DITO e descartado.
+    """
+    session_id = msg.get("session_id") or ""
+    field      = msg.get("field") or ""
+    if msg.get("event_type") != "menu_wake" or not session_id or not field:
+        logger.warning("menu.wake ilegível descartado: %s", str(msg)[:200])
+        return "invalid"
+    resultado = await wake_parked_run(redis_client, session_id, field, msg.get("reason") or "menu_wake")
+    logger.info(
+        "menu.wake: session=%s field=%s reason=%s → %s",
+        session_id, field, msg.get("reason"), resultado,
+    )
+    return resultado
 
 
 async def wake_all_parked_runs(redis_client: aioredis.Redis, session_id: str, reason: str) -> int:
@@ -6772,11 +6830,13 @@ async def process_routed(
                     session_id, _mm_exc,
                 )
 
-        # DUR-01 — o pool decide se a espera do `menu` estaciona. Só o agente PRINCIPAL:
-        # especialista de conferência (hooks, @mention) tem fechamento amarrado a
-        # contadores de conferência que a F2 não cobre, e continua bloqueando.
+        # DUR-01 — o pool decide se a espera do `menu` estaciona. Vale para o agente
+        # principal (F2) e para o especialista de conferência (F3): o fechamento dos dois
+        # é o MESMO `_finish_native_segment`, com os contadores de conferência dentro, e
+        # todo caminho que aborta um especialista esperando também acorda o estacionado.
+        # Sem instância não há estacionamento (o registro é por instância).
         _menu_wait = "block"
-        if not conference_id and native_instance_id:
+        if native_instance_id:
             _menu_wait = await _pool_menu_wait(http, tenant_id, pool_id)
         agent_result = await activate_native_agent(
             http=http, redis_client=redis_client,
@@ -6876,6 +6936,95 @@ async def process_routed(
 
 
 # ── Process conversations.queued — Queue Agent Pattern ────────────────────────
+
+async def _finish_queue_segment(
+    redis_client: aioredis.Redis,
+    qrun:         dict,
+    agent_result: dict,
+) -> None:
+    """
+    Fecha o segmento do AGENTE DE FILA depois que o fluxo dele TERMINOU (humano liberou,
+    teto de espera, desconexão): `participant_left` e a marca `queue:agent_active`.
+
+    DUR-01 F3: era o fim do `process_queued`, que esperava a fila INTEIRA dentro da
+    requisição ao `/execute` (o menu do agente de fila tem `timeout_s: 0`). Com o pool de
+    fila em `park`, a espera estaciona e o fluxo termina numa execução posterior — a que
+    o `menu.wake` do routing-engine dispara —, então o fechamento virou função.
+    """
+    session_id     = qrun["session_id"]
+    tenant_id      = qrun["tenant_id"]
+    pool_id        = qrun["pool_id"]
+    _flow_pool_id  = qrun["flow_pool_id"]
+    agent_type_id  = qrun["agent_type_id"]
+    _q_participant = qrun["q_participant"]
+    _q_seg_id      = qrun["q_seg_id"]
+    _q_joined_iso  = qrun["q_joined_iso"]
+    _q_joined_at   = datetime.fromisoformat(_q_joined_iso)
+
+    # ── Fase C: close the queue segment (wait window) ─────────────────────────
+    # outcome from the queue skill-flow: escalated_human (handoff to target).
+    # ABANDONO é detectado pela plataforma, nunca declarado pelo flow (contrato
+    # Fase A): se a sessão fechou enquanto a fila rodava (session:{id}:closed),
+    # o flow saiu via on_disconnect — mas seu complete step ainda reporta
+    # escalated_human. Override aqui: segmento de fila vira "abandoned".
+    # Deliberately NOT written to session:{id}:last_outcome — only primary
+    # segments drive session outcome.
+    _q_duration_ms = int(
+        (datetime.now(timezone.utc) - _q_joined_at).total_seconds() * 1000
+    )
+    _q_outcome = (agent_result or {}).get("outcome") or None
+    # SFE-02: o motivo do fluxo só vale junto com o desfecho DO FLUXO. Quando o override
+    # abaixo troca o outcome por `abandoned`, o motivo declarado descreveria o desfecho
+    # que foi substituído — então ele cai junto, em vez de contradizer a linha.
+    _q_issue = _flow_issue_status(agent_result)
+    try:
+        if await redis_client.exists(f"session:{session_id}:closed"):
+            _q_outcome = "abandoned"
+            _q_issue = None
+    except Exception:
+        pass
+    _q_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
+    _spawn(_publish_participant_event(
+        session_id=session_id,
+        tenant_id=tenant_id,
+        participant_id=_q_participant,
+        pool_id=_flow_pool_id,      # D10 — par do joined acima
+        agent_type_id=agent_type_id,
+        event_type="participant_left",
+        agent_type="native",
+        role="specialist",          # D12 — par do joined acima
+        segment_id=_q_seg_id,
+        joined_at=_q_joined_iso,
+        duration_ms=_q_duration_ms,
+        outcome=_q_outcome,
+        flow_id=_q_flow_id,
+        issue_status=_q_issue,
+        deploy_version=_flow_deploy_version(agent_result),
+    ))
+
+    # Clean up marker after the queue agent completes.
+    # Logado em INFO e com o resultado do DELETE (2026-08-18): com o SET do topo
+    # também em INFO, o par vira uma linha do tempo legível — e é ela que decide, na
+    # próxima ocorrência do Problema 34, entre "o marcador nunca foi escrito" e
+    # "alguém o apagou". `deleted=0` aqui significa que a chave JÁ não existia
+    # quando o dono dela veio limpá-la: isso é anomalia, não rotina.
+    try:
+        _deleted = await redis_client.delete(f"queue:agent_active:{session_id}")
+        logger.info(
+            "Queue agent marker DELETE: session=%s pool=%s deleted=%s",
+            session_id, pool_id, _deleted,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Queue agent marker não apagado: session=%s — %s: %s",
+            session_id, type(exc).__name__, exc,
+        )
+
+    logger.info(
+        "Queue agent completed: session=%s pool=%s outcome=%s wait_ms=%d",
+        session_id, pool_id, _q_outcome, _q_duration_ms,
+    )
+
 
 async def process_queued(
     msg: dict,
@@ -7173,6 +7322,8 @@ async def process_queued(
     # '__agent_available__' signal or customer disconnect / max_wait_s timeout).
     # extra_context exposes pool_id and session_id so the YAML's invoke step can
     # dynamically call conversation_escalate with the correct target pool.
+    # DUR-01 F3: quem decide estacionar é o pool que EXECUTA o fluxo de fila.
+    _q_menu_wait = await _pool_menu_wait(http, tenant_id, _flow_pool_id)
     agent_result = await activate_native_agent(
         http=http, redis_client=redis_client,
         session_id=session_id, customer_id=customer_id,
@@ -7193,71 +7344,29 @@ async def process_queued(
         # enquanto o valor era o do pool de destino: doc e código discordavam, e
         # foi a doc que estava certa sobre a intenção.
         pool_id=_flow_pool_id,
+        menu_wait=_q_menu_wait if _q_menu_wait == "park" else "",
     )
 
-    # ── Fase C: close the queue segment (wait window) ─────────────────────────
-    # outcome from the queue skill-flow: escalated_human (handoff to target).
-    # ABANDONO é detectado pela plataforma, nunca declarado pelo flow (contrato
-    # Fase A): se a sessão fechou enquanto a fila rodava (session:{id}:closed),
-    # o flow saiu via on_disconnect — mas seu complete step ainda reporta
-    # escalated_human. Override aqui: segmento de fila vira "abandoned".
-    # Deliberately NOT written to session:{id}:last_outcome — only primary
-    # segments drive session outcome.
-    _q_duration_ms = int(
-        (datetime.now(timezone.utc) - _q_joined_at).total_seconds() * 1000
-    )
-    _q_outcome = (agent_result or {}).get("outcome") or None
-    # SFE-02: o motivo do fluxo só vale junto com o desfecho DO FLUXO. Quando o override
-    # abaixo troca o outcome por `abandoned`, o motivo declarado descreveria o desfecho
-    # que foi substituído — então ele cai junto, em vez de contradizer a linha.
-    _q_issue = _flow_issue_status(agent_result)
-    try:
-        if await redis_client.exists(f"session:{session_id}:closed"):
-            _q_outcome = "abandoned"
-            _q_issue = None
-    except Exception:
-        pass
-    _q_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
-    _spawn(_publish_participant_event(
-        session_id=session_id,
-        tenant_id=tenant_id,
-        participant_id=_q_participant,
-        pool_id=_flow_pool_id,      # D10 — par do joined acima
-        agent_type_id=agent_type_id,
-        event_type="participant_left",
-        agent_type="native",
-        role="specialist",          # D12 — par do joined acima
-        segment_id=_q_seg_id,
-        joined_at=_q_joined_iso,
-        duration_ms=_q_duration_ms,
-        outcome=_q_outcome,
-        flow_id=_q_flow_id,
-        issue_status=_q_issue,
-        deploy_version=_flow_deploy_version(agent_result),
-    ))
-
-    # Clean up marker after the queue agent completes.
-    # Logado em INFO e com o resultado do DELETE (2026-08-18): com o SET do topo
-    # também em INFO, o par vira uma linha do tempo legível — e é ela que decide, na
-    # próxima ocorrência do Problema 34, entre "o marcador nunca foi escrito" e
-    # "alguém o apagou". `deleted=0` aqui significa que a chave JÁ não existia
-    # quando o dono dela veio limpá-la: isso é anomalia, não rotina.
-    try:
-        _deleted = await redis_client.delete(f"queue:agent_active:{session_id}")
-        logger.info(
-            "Queue agent marker DELETE: session=%s pool=%s deleted=%s",
-            session_id, pool_id, _deleted,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Queue agent marker não apagado: session=%s — %s: %s",
-            session_id, type(exc).__name__, exc,
-        )
-
-    logger.info(
-        "Queue agent completed: session=%s pool=%s outcome=%s wait_ms=%d",
-        session_id, pool_id, _q_outcome, _q_duration_ms,
-    )
+    _q_run = {
+        "kind":          "queue",
+        "session_id":    session_id,
+        "tenant_id":     tenant_id,
+        "customer_id":   customer_id,
+        "pool_id":       pool_id,
+        "flow_pool_id":  _flow_pool_id,
+        "agent_type_id": agent_type_id,
+        "native_instance_id": "",
+        "q_participant": _q_participant,
+        "q_seg_id":      _q_seg_id,
+        "q_joined_iso":  _q_joined_iso,
+    }
+    if agent_result.get("outcome") == "awaiting_input":
+        # DUR-01 F3 — a espera da fila estacionou: nenhum processo segura o cliente na
+        # fila. O `menu.wake` do routing-engine (humano liberou, teto de espera) ou o
+        # fechamento acorda; quem terminar o fluxo fecha o segmento.
+        await _park_native_run(redis_client, _q_run, {"skills": skills, "webhook_pool": False})
+        return
+    await _finish_queue_segment(redis_client, _q_run, agent_result)
 
 
 # ── G7 — ponto único de verdade: este fim de segmento é também fim de contato? ──
@@ -9166,6 +9275,16 @@ async def process_contact_event(
                                     "Sent abort signal to %d specialist(s): session=%s",
                                     _active_spec_count, session_id,
                                 )
+                                # DUR-01 F3: especialista ESTACIONADO não tem BLPOP para
+                                # desbloquear — acorda. Só os especialistas: acordar toda
+                                # conversa da sessão faria outra consumir o sinal deles.
+                                for _sp in await redis_client.smembers(
+                                    f"session:{session_id}:active_ai_specialists"
+                                ) or set():
+                                    _sp_field = _sp.decode() if isinstance(_sp, bytes) else _sp
+                                    _spawn(wake_parked_run(
+                                        redis_client, session_id, _sp_field, "agent_hangup",
+                                    ))
                             except Exception as _exc:
                                 logger.warning(
                                     "Could not send specialist abort signal: session=%s — %s",
@@ -9732,6 +9851,131 @@ def _wrapup_close_reason(decision: str, payload: dict) -> str:
     return "acw_expired"
 
 
+async def _finish_resume_segment(
+    redis_client: aioredis.Redis,
+    rrun:         dict,
+    agent_result: dict,
+) -> None:
+    """
+    Fecha a JANELA RETOMADA de um fluxo suspenso (delegate, suspend) depois que ela
+    TERMINOU: `participant_left` do segmento de resume, `last_outcome`, desfecho do
+    contato e devolução da instância (`agent_ready` → `agent_done`).
+
+    DUR-01 F3: era o fim do `_handle_webhook_session_resumed`, e só rodava ali porque
+    a requisição ao `/execute` durava a janela inteira. Com o pool em `park`, a janela
+    retomada pode estacionar num `menu` e terminar numa execução posterior.
+    """
+    session_id          = rrun["session_id"]
+    tenant_id           = rrun["tenant_id"]
+    pool_id             = rrun["pool_id"]
+    agent_type_id       = rrun["agent_type_id"]
+    instance_id         = rrun["native_instance_id"]
+    native_snapshot     = rrun["native_snapshot"]
+    _resume_participant = rrun["resume_participant"]
+    _resume_seg_id      = rrun["resume_seg_id"]
+    _resume_seq_idx     = rrun["resume_seq_idx"]
+    _resume_joined_iso  = rrun["resume_joined_iso"]
+    _resume_joined_at   = datetime.fromisoformat(_resume_joined_iso)
+    _ai_outcome         = (agent_result or {}).get("outcome", "")
+
+    # ── Close the resume segment (outcome = whatever this window resolved to) ──
+    _resume_duration_ms = int(
+        (datetime.now(timezone.utc) - _resume_joined_at).total_seconds() * 1000
+    )
+    _spawn(_publish_participant_event(
+        session_id=session_id, tenant_id=tenant_id,
+        participant_id=_resume_participant, pool_id=pool_id,
+        agent_type_id=agent_type_id, event_type="participant_left",
+        agent_type="native", role="primary",
+        segment_id=_resume_seg_id, sequence_index=_resume_seq_idx,
+        joined_at=_resume_joined_iso, duration_ms=_resume_duration_ms,
+        outcome=_ai_outcome or None,
+        flow_id=(((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or "",
+        issue_status=_flow_issue_status(agent_result),
+        deploy_version=_flow_deploy_version(agent_result),
+    ))
+
+    # ── Outcome de SESSÃO: a janela de resume é o último segmento primary ──────
+    # `_close_contact_layer` deriva o outcome da sessão do marcador
+    # `session:{id}:last_outcome` (o segmento é a fonte única; a sessão é derivada).
+    # `process_routed` grava esse marcador ao fim de cada ativação primary — mas o
+    # resume roda por AQUI, e não gravava. Consequência: sobrevivia o `suspended`
+    # da janela PRÉ-suspend, e a sessão fechava como `suspended` mesmo tendo
+    # resolvido — o que fazia o `business_outcome` da journey mentir.
+    # Espelha process_routed (mesmo marcador, mesmo TTL, agent_kind=ai). Um re-suspend
+    # regrava "suspended", que é o estado correto nesse caso.
+    if _ai_outcome:
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:last_outcome",
+                604800,
+                json.dumps({"outcome": _ai_outcome, "agent_kind": "ai"}),
+            )
+        except Exception as _lo_exc:
+            logger.warning(
+                "Could not write last_outcome on resume: session=%s — %s",
+                session_id, _lo_exc,
+            )
+
+    # ⚠️ Aqui dizia `if _ai_outcome != "suspended"`, e essa era a SEGUNDA casa da
+    # mesma decisão — divergindo do `process_routed` em `escalated_human`,
+    # `escalated_ai` e `transferred`. Um fluxo retomado que ESCALA fechava o
+    # contato 30 ms antes de a fila recebê-lo (medido; ver `contato_encerra_com`).
+    # A pergunta agora tem um juiz só.
+    if contato_encerra_com(_ai_outcome):
+        await _mark_contact_ended(redis_client, session_id)
+        _spawn(_trigger_contact_close(redis_client, session_id))
+
+    # Restore instance to pool (mirrors process_routed post-activation lifecycle).
+    # Gap-A fix: always land the mirror at ready, even when native_snapshot is None
+    # (the resume window can itself hit another suspend and the snapshot may have
+    # expired), so the mirror is never left busy after agent_done drops the SCARD.
+    # Runs unconditionally (incl. re-suspend) because agent_done is published
+    # unconditionally just below — the vaga is released either way (Arc 19).
+    await _release_native_instance_snapshot(
+        redis_client, tenant_id, instance_id, pool_id,
+        agent_type_id, native_snapshot,
+    )
+
+    # Publish agent_ready + agent_done for routing-engine capacity tracking
+    if _kafka_producer and instance_id:
+        _snap_pools = list(
+            (native_snapshot or {}).get("pools") or ([pool_id] if pool_id else [])
+        )
+        _snap_max = int(
+            (native_snapshot or {}).get("max_concurrent_sessions")
+            or (native_snapshot or {}).get("max_concurrent")
+            or 1
+        )
+        _spawn(_kafka_producer.send(
+            TOPIC_LIFECYCLE,
+            json.dumps({
+                "event":                   "agent_ready",
+                "tenant_id":               tenant_id,
+                "instance_id":             instance_id,
+                "agent_type_id":           agent_type_id,
+                "status":                  "ready",
+                "execution_model":         (native_snapshot or {}).get("execution_model", "stateless"),
+                "current_sessions":        0,
+                "max_concurrent_sessions": _snap_max,
+                "pools":                   _snap_pools,
+                "timestamp":               datetime.now(timezone.utc).isoformat(),
+            }).encode("utf-8"),
+        ))
+        _spawn(_kafka_producer.send(
+            TOPIC_LIFECYCLE,
+            json.dumps({
+                "event":           "agent_done",
+                "tenant_id":       tenant_id,
+                "instance_id":     instance_id,
+                "agent_type_id":   agent_type_id,
+                "pools":           _snap_pools,
+                "conversation_id": session_id,
+                "timestamp":       datetime.now(timezone.utc).isoformat(),
+            }).encode("utf-8"),
+        ))
+
+
 async def _handle_webhook_session_resumed(
     event: dict,
     redis_client: aioredis.Redis,
@@ -9933,6 +10177,8 @@ async def _handle_webhook_session_resumed(
 
     # Re-activate skill flow with resume context (webhook_pool=True wires
     # persistSuspendWebhook in skill-flow-service for any subsequent suspend steps)
+    # DUR-01 F3: a janela retomada também estaciona, se o pool pedir.
+    _r_menu_wait = await _pool_menu_wait(http, tenant_id, pool_id)
     agent_result = await activate_native_agent(
         http=http,
         redis_client=redis_client,
@@ -9945,48 +10191,16 @@ async def _handle_webhook_session_resumed(
         webhook_pool=True,
         resume_context=resume_context,
         pool_id=pool_id,   # fatia 1: $.config persists across suspend/resume for webhook skills
+        menu_wait=_r_menu_wait if _r_menu_wait == "park" else "",
     )
 
     _ai_outcome = (agent_result or {}).get("outcome", "")
 
-    # ── Close the resume segment (outcome = whatever this window resolved to) ──
-    _resume_duration_ms = int(
-        (datetime.now(timezone.utc) - _resume_joined_at).total_seconds() * 1000
-    )
-    _spawn(_publish_participant_event(
-        session_id=session_id, tenant_id=tenant_id,
-        participant_id=_resume_participant, pool_id=pool_id,
-        agent_type_id=agent_type_id, event_type="participant_left",
-        agent_type="native", role="primary",
-        segment_id=_resume_seg_id, sequence_index=_resume_seq_idx,
-        joined_at=_resume_joined_iso, duration_ms=_resume_duration_ms,
-        outcome=_ai_outcome or None,
-        flow_id=(((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or "",
-        issue_status=_flow_issue_status(agent_result),
-        deploy_version=_flow_deploy_version(agent_result),
-    ))
-
-    # ── Outcome de SESSÃO: a janela de resume é o último segmento primary ──────
-    # `_close_contact_layer` deriva o outcome da sessão do marcador
-    # `session:{id}:last_outcome` (o segmento é a fonte única; a sessão é derivada).
-    # `process_routed` grava esse marcador ao fim de cada ativação primary — mas o
-    # resume roda por AQUI, e não gravava. Consequência: sobrevivia o `suspended`
-    # da janela PRÉ-suspend, e a sessão fechava como `suspended` mesmo tendo
-    # resolvido — o que fazia o `business_outcome` da journey mentir.
-    # Espelha process_routed (mesmo marcador, mesmo TTL, agent_kind=ai). Um re-suspend
-    # regrava "suspended", que é o estado correto nesse caso.
-    if _ai_outcome:
-        try:
-            await redis_client.setex(
-                f"session:{session_id}:last_outcome",
-                604800,
-                json.dumps({"outcome": _ai_outcome, "agent_kind": "ai"}),
-            )
-        except Exception as _lo_exc:
-            logger.warning(
-                "Could not write last_outcome on resume: session=%s — %s",
-                session_id, _lo_exc,
-            )
+    # DUR-01 F3 — o que é da RETOMADA roda agora, estacione o fluxo ou não: o humano
+    # que reivindicou a tarefa ENTREGOU (H1), e a vaga dele volta. O que é do FIM do
+    # fluxo (segmento da IA, desfecho do contato, instância) vai para
+    # `_finish_resume_segment`. A ordem que o H1 exige — antes do fechamento do
+    # contato — continua valendo, porque o fechamento mora lá.
 
     # ── H1 (2026-07-29): fecha o segmento do CLAIMANTE humano com a duração REAL ──
     #
@@ -10103,26 +10317,6 @@ async def _handle_webhook_session_resumed(
                 session_id, _claimant_instance_id, _cl_pool, _cl_seg_id, _cl_duration_ms,
             )
 
-    # ⚠️ Aqui dizia `if _ai_outcome != "suspended"`, e essa era a SEGUNDA casa da
-    # mesma decisão — divergindo do `process_routed` em `escalated_human`,
-    # `escalated_ai` e `transferred`. Um fluxo retomado que ESCALA fechava o
-    # contato 30 ms antes de a fila recebê-lo (medido; ver `contato_encerra_com`).
-    # A pergunta agora tem um juiz só.
-    if contato_encerra_com(_ai_outcome):
-        await _mark_contact_ended(redis_client, session_id)
-        _spawn(_trigger_contact_close(redis_client, session_id))
-
-    # Restore instance to pool (mirrors process_routed post-activation lifecycle).
-    # Gap-A fix: always land the mirror at ready, even when native_snapshot is None
-    # (the resume window can itself hit another suspend and the snapshot may have
-    # expired), so the mirror is never left busy after agent_done drops the SCARD.
-    # Runs unconditionally (incl. re-suspend) because agent_done is published
-    # unconditionally just below — the vaga is released either way (Arc 19).
-    await _release_native_instance_snapshot(
-        redis_client, tenant_id, instance_id, pool_id,
-        agent_type_id, native_snapshot,
-    )
-
     # ── Devolve a vaga do CLAIMANTE humano (pull) ────────────────────────────────
     # O humano que reivindicou este item de pull ocupa uma vaga no semáforo
     # ("{session}::{conf}", posta por work_task_claim). Ele já entregou o form — a vaga
@@ -10181,43 +10375,24 @@ async def _handle_webhook_session_resumed(
             session_id, _claimant_instance_id, _claimant_pools,
         )
 
-    # Publish agent_ready + agent_done for routing-engine capacity tracking
-    if _kafka_producer and instance_id:
-        _snap_pools = list(
-            (native_snapshot or {}).get("pools") or ([pool_id] if pool_id else [])
-        )
-        _snap_max = int(
-            (native_snapshot or {}).get("max_concurrent_sessions")
-            or (native_snapshot or {}).get("max_concurrent")
-            or 1
-        )
-        _spawn(_kafka_producer.send(
-            TOPIC_LIFECYCLE,
-            json.dumps({
-                "event":                   "agent_ready",
-                "tenant_id":               tenant_id,
-                "instance_id":             instance_id,
-                "agent_type_id":           agent_type_id,
-                "status":                  "ready",
-                "execution_model":         (native_snapshot or {}).get("execution_model", "stateless"),
-                "current_sessions":        0,
-                "max_concurrent_sessions": _snap_max,
-                "pools":                   _snap_pools,
-                "timestamp":               datetime.now(timezone.utc).isoformat(),
-            }).encode("utf-8"),
-        ))
-        _spawn(_kafka_producer.send(
-            TOPIC_LIFECYCLE,
-            json.dumps({
-                "event":           "agent_done",
-                "tenant_id":       tenant_id,
-                "instance_id":     instance_id,
-                "agent_type_id":   agent_type_id,
-                "pools":           _snap_pools,
-                "conversation_id": session_id,
-                "timestamp":       datetime.now(timezone.utc).isoformat(),
-            }).encode("utf-8"),
-        ))
+    _r_run = {
+        "kind":               "resume",
+        "session_id":         session_id,
+        "tenant_id":          tenant_id,
+        "customer_id":        customer_id,
+        "pool_id":            pool_id,
+        "agent_type_id":      agent_type_id,
+        "native_instance_id": instance_id,
+        "native_snapshot":    native_snapshot,
+        "resume_participant": _resume_participant,
+        "resume_seg_id":      _resume_seg_id,
+        "resume_seq_idx":     _resume_seq_idx,
+        "resume_joined_iso":  _resume_joined_iso,
+    }
+    if _ai_outcome == "awaiting_input":
+        await _park_native_run(redis_client, _r_run, {"skills": skills, "webhook_pool": True})
+        return
+    await _finish_resume_segment(redis_client, _r_run, agent_result)
 
 
 # ── Process conversations.inbound — forward customer messages to human agent ──
@@ -11110,6 +11285,7 @@ async def run() -> None:
         TOPIC_EVENTS,
         TOPIC_REGISTRY_CHANGED,
         TOPIC_CONFIG_CHANGED,
+        TOPIC_MENU_WAKE,
         bootstrap_servers=KAFKA_BROKERS,
         group_id=GROUP_ID,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
@@ -11128,9 +11304,9 @@ async def run() -> None:
     logger.info("Kafka producer started (pool hooks)")
 
     logger.info(
-        "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s, %s, %s",
+        "✅ Orchestrator Bridge started — topics: %s, %s, %s, %s, %s, %s, %s",
         TOPIC_ROUTED, TOPIC_QUEUED, TOPIC_INBOUND, TOPIC_EVENTS,
-        TOPIC_REGISTRY_CHANGED, TOPIC_CONFIG_CHANGED,
+        TOPIC_REGISTRY_CHANGED, TOPIC_CONFIG_CHANGED, TOPIC_MENU_WAKE,
     )
     logger.info("   skill-flow-service: %s", SKILL_FLOW_URL)
     logger.info("   agent-registry:     %s", AGENT_REGISTRY_URL)
@@ -11337,6 +11513,8 @@ async def _dispatch_once(
         await process_inbound(payload, redis_client, http)
     elif topic == TOPIC_EVENTS:
         await process_contact_event(payload, redis_client, http)
+    elif topic == TOPIC_MENU_WAKE:
+        await process_menu_wake(payload, redis_client)
     elif topic == TOPIC_REGISTRY_CHANGED:
         # Agent Registry published a structural change (AgentType/Pool/Skill CRUD).
         entity_type = payload.get("entity_type", "?")

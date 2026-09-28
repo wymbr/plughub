@@ -893,10 +893,26 @@ class InstanceBootstrap:
             for key in keys:
                 key_str = key.decode() if isinstance(key, bytes) else key
                 instance_id = key_str[len(prefix):]
+                # O padrão também casa as chaves AUXILIARES da instância
+                # (`{t}:instance:{iid}:reap_cooldown`, `:wrap_up_pending`, `:sessions`…).
+                # Medido em 2026-09-28: `reap_cooldown` vale "1", o `json.loads` devolvia o
+                # INTEIRO 1, e o `current.get(...)` do reconcile derrubava a SUBIDA do
+                # bridge em loop (e abortava o reconcile do heartbeat a cada 15 s) enquanto
+                # a chave vivesse — sob carga, quase sempre. Id de instância não tem `:`, e
+                # o registro da instância é sempre um objeto: o resto não é instância.
+                if ":" in instance_id:
+                    continue
                 try:
                     raw = await self._redis.get(key_str)
                     if raw:
-                        result[instance_id] = json.loads(raw)
+                        payload = json.loads(raw)
+                        if isinstance(payload, dict):
+                            result[instance_id] = payload
+                        else:
+                            logger.warning(
+                                "Instance scan: %s não é um registro de instância "
+                                "(valor %r) — ignorado", key_str, str(raw)[:40],
+                            )
                 except Exception:
                     pass
             if cursor == 0:

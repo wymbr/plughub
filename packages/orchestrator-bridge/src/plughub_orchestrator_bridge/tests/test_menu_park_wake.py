@@ -246,6 +246,98 @@ async def test_varredura_acorda_so_o_vencido_e_so_uma_vez(monkeypatch):
     assert "s-futuro" in r.zsets["tenant_demo:menu:deadlines"]
 
 
+# ── F3 — agente de fila e `menu.wake` ─────────────────────────────────────────
+
+QRUN = {
+    "kind": "queue", "session_id": SID, "tenant_id": "tenant_demo", "customer_id": "cus",
+    "pool_id": "retencao_humano", "flow_pool_id": "fila_humano", "agent_type_id": "agente_fila_v1",
+    "native_instance_id": "", "q_participant": "queue-agent-x", "q_seg_id": "qseg-1",
+    "q_joined_iso": "2026-09-28T12:00:00+00:00",
+}
+
+
+@pytest.mark.asyncio
+async def test_fila_estaciona_no_campo_default_e_acorda_como_agente_de_fila(ambiente, monkeypatch):
+    """
+    O agente de fila roda SEM instância (campo `_default_`) e com parâmetros próprios:
+    token com a identidade sintética, `extra_context.pool_id` = DESTINO (o YAML escala
+    para lá), e o deploy do pool de FILA. Trocar qualquer um faria o acordar executar
+    outra coisa — ou escalar o cliente para a própria fila.
+    """
+    r, activate, finish = ambiente
+    fim_fila = AsyncMock()
+    monkeypatch.setattr(bridge_mod, "_finish_queue_segment", fim_fila)
+    await bridge_mod._park_native_run(r, dict(QRUN), {"skills": [], "webhook_pool": False})
+    assert await r.exists(bridge_mod._parked_run_key(SID, "_default_"))
+
+    activate.return_value = {"outcome": "escalated_human", "pipeline_state": {}}
+    assert await bridge_mod.wake_parked_run(r, SID, "_default_", "agent_available") == "finished"
+    kw = activate.await_args.kwargs
+    assert kw["instance_id"] == "" and kw["token_instance_id"] == "queue-agent-x"
+    assert kw["extra_context"] == {"pool_id": "retencao_humano"}
+    assert kw["pool_id"] == "fila_humano" and kw["segment_id"] == "qseg-1"
+    assert kw["wake_only"] is True
+    fim_fila.assert_awaited_once()
+    finish.assert_not_awaited()          # o fechamento do agente PRINCIPAL não é o da fila
+
+
+@pytest.mark.asyncio
+async def test_janela_retomada_acorda_sem_resume_context_e_fecha_como_retomada(ambiente, monkeypatch):
+    """
+    A janela retomada de um delegate/suspend estaciona num menu e acorda depois. O acordar
+    NÃO reenvia o `resume_context` (consumido: o pipeline está `in_progress`) e fecha pelo
+    fechamento DA RETOMADA — o do agente principal publicaria o segmento errado.
+    """
+    r, activate, finish = ambiente
+    fim_resume = AsyncMock()
+    monkeypatch.setattr(bridge_mod, "_finish_resume_segment", fim_resume)
+    rrun = {
+        "kind": "resume", "session_id": SID, "tenant_id": "tenant_demo", "customer_id": "cus",
+        "pool_id": "demo_ia", "agent_type_id": "skill_navegacao_v1", "native_instance_id": INST,
+        "native_snapshot": {}, "resume_participant": INST, "resume_seg_id": "rseg-1",
+        "resume_seq_idx": 1, "resume_joined_iso": "2026-09-28T12:00:00+00:00",
+    }
+    await bridge_mod._park_native_run(r, rrun, {"skills": [], "webhook_pool": True})
+    activate.return_value = {"outcome": "resolved", "pipeline_state": {}}
+    assert await bridge_mod.wake_parked_run(r, SID, INST, "reply") == "finished"
+    kw = activate.await_args.kwargs
+    assert "resume_context" not in kw
+    assert kw["webhook_pool"] is True and kw["wake_only"] is True and kw["instance_id"] == INST
+    fim_resume.assert_awaited_once()
+    finish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_menu_wake_acorda_o_campo_do_aviso(monkeypatch):
+    chamados: list[tuple] = []
+
+    async def fake_wake(redis_client, session_id, field, reason):
+        chamados.append((session_id, field, reason))
+        return "finished"
+
+    monkeypatch.setattr(bridge_mod, "wake_parked_run", fake_wake)
+    ev = {"event_type": "menu_wake", "tenant_id": "t", "session_id": SID,
+          "field": "_default_", "reason": "agent_available", "timestamp": "2026-09-28T12:00:00Z"}
+    assert await bridge_mod.process_menu_wake(ev, FakeRedis()) == "finished"
+    assert chamados == [(SID, "_default_", "agent_available")]
+
+
+@pytest.mark.asyncio
+async def test_menu_wake_ilegivel_nao_acorda_nada(monkeypatch):
+    chamados: list[tuple] = []
+
+    async def fake_wake(*a):
+        chamados.append(a)
+        return "finished"
+
+    monkeypatch.setattr(bridge_mod, "wake_parked_run", fake_wake)
+    for ev in [{"event_type": "menu_wake", "session_id": SID},            # sem campo
+               {"event_type": "outra_coisa", "session_id": SID, "field": INST},
+               {"event_type": "menu_wake", "field": INST}]:            # sem sessão
+        assert await bridge_mod.process_menu_wake(ev, FakeRedis()) == "invalid"
+    assert chamados == []
+
+
 @pytest.mark.asyncio
 async def test_pool_menu_wait_so_estaciona_quando_declarado(monkeypatch):
     cfg = AsyncMock()

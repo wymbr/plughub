@@ -10,7 +10,8 @@
 import { Kafka, Producer, logLevel } from "kafkajs"
 
 export interface KafkaProducer {
-  publish(topic: string, message: Record<string, unknown>): Promise<void>
+  /** `key` = chave de partição: eventos do mesmo objeto só têm ordem com ela. */
+  publish(topic: string, message: Record<string, unknown>, key?: string): Promise<void>
   disconnect(): Promise<void>
 }
 
@@ -38,14 +39,14 @@ export function createKafkaProducer(): KafkaProducer {
   }).catch(() => { /* broker indisponível no start — reconecta no primeiro publish */ })
 
   return {
-    async publish(topic, message) {
+    async publish(topic, message, key) {
       if (!connected) {
         await producer.connect()
         connected = true
       }
       await producer.send({
         topic,
-        messages: [{ value: JSON.stringify(message) }],
+        messages: [{ ...(key ? { key } : {}), value: JSON.stringify(message) }],
       })
     },
 

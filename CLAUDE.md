@@ -691,6 +691,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `sentiment.updated` | AI Gateway | analytics-api |
 | `evaluation.events` | evaluation-api (requested), session-replayer (requested), mcp-server-plughub (completed) | session-replayer + routing-engine (requested→avaliador); evaluation-api (completed→ingest, persiste result+instance); analytics-api → ClickHouse |
 | `workflow.events` | workflow-api | skill-flow-worker |
+| `menu.wake` | mcp-server-plughub (`menu_submit`, resposta de hook) · routing-engine (agente de fila) | orchestrator-bridge — acorda o `menu` estacionado (DUR-01 F3); publicado DEPOIS do `LPUSH`, chave `session_id` |
 | `collect.events` | workflow-api | analytics-api |
 | `session.signals` | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse |
 | `journey.merges` | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` (Journey J3) |
@@ -724,6 +725,7 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `speech.metrics` | `SpeechMetricsEventSchema` | `speech-metrics.ts` |
 | `audit.access` | `AuditAccessEventSchema` | `audit-access.ts` |
 | `media.calls` | `MediaCallEventSchema` | `media-calls.ts` |
+| `menu.wake` | `MenuWakeEventSchema` | `menu-wake.ts` |
 
 ---
 

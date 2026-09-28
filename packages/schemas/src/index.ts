@@ -805,6 +805,14 @@ export type {
   MediaCallEvent,
 } from "./media-calls"
 
+// ── menu.wake — chegou algo para um menu que pode estar estacionado (DUR-01 F3) ──
+export {
+  MENU_WAKE_REASONS,
+  MenuWakeEventSchema,
+} from "./menu-wake"
+
+export type { MenuWakeEvent } from "./menu-wake"
+
 // ── audit.access — acesso a dado pessoal servido fora da analytics-api (VOZ-36) ──
 export {
   AUDIT_ACCESS_RESULTS,

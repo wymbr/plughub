@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (6) — DUR-01 F3: quem responde de fora do bridge também acorda, e estacionam fila, retomada e especialista
+
+**Por quê.** Na F2 só o bridge acordava a conversa estacionada. Três escritores ficavam de fora e,
+com o pool em `park`, empurravam a resposta para uma lista que ninguém mais esperava em BLPOP: o
+`menu_submit` do Console e a resposta de agente de hook (mcp-server), e o `__agent_available__` /
+`queue_timeout` do agente de fila (routing-engine). Só o prazo os tirava dali.
+
+**O que mudou.**
+
+- **Tópico `menu.wake`** (`MenuWakeEventSchema`, `@plughub/schemas/menu-wake.ts`, criado no
+  `kafka-init`), chave `session_id`. Não viaja em `conversations.inbound` como o ADR previa: o
+  routing-engine consome esse tópico e trataria o aviso como contato novo.
+- **Produtores:** mcp-server (`lib/menu-wake.ts`, depois dos três `LPUSH` de `menu_submit` e do da
+  resposta de hook; o `publish` do Kafka passou a aceitar chave) e routing-engine (`menu_wake.py`,
+  depois dos três `LPUSH` ao agente de fila). O aviso vem **depois** do `LPUSH` e falha sem
+  propagar: a resposta já está na lista, e o prazo ainda acorda.
+- **Consumidor:** o bridge (`process_menu_wake` → `wake_parked_run`).
+- **Estacionam também** o agente de fila (`process_queued`), a retomada de sessão webhook e o
+  especialista de conferência. O registro grava o `kind` e cada um fecha pelo seu caminho:
+  `_finish_queue_segment` e `_finish_resume_segment` são extrações do fim de `process_queued` e
+  `_handle_webhook_session_resumed`, conferidas linha a linha contra o HEAD. O humano encerrando a
+  conferência acorda os especialistas estacionados.
+- **Defeito antigo corrigido no caminho** (`instance_bootstrap._scan_instances_from_redis`): o scan
+  `{t}:instance:*` casava as chaves auxiliares da instância. O `…:reap_cooldown` do routing-engine
+  vale `1`, virava o inteiro `1`, e `current.get("source")` derrubava o reconcile. Na subida, o
+  bridge entrava em crash-loop enquanto a chave vivesse; no heartbeat, abortava o reconcile a cada
+  15 s. Era a causa das falhas intermitentes logo depois de um restart que apareceram nos testes
+  desta fase. Agora chave com `:` depois do id e valor que não é objeto ficam fora, e o segundo caso
+  é logado.
+
+**Medido ao vivo.** Agente de fila em `park`: BLPOP 0; um `menu.wake` o acordou, ele avisou o
+cliente e estacionou de novo; o fechamento acordou a fila estacionada, e o segundo aviso de
+fechamento bateu no `wake_only` (409 `NOT_PARKED`) sem recomeçar a saudação. `demo_ia` em `park`:
+pico de BLPOP do executor **0** ao longo de conversas inteiras, 10/10 duas vezes, p95 igual ao do
+`block`. Com um `reap_cooldown` plantado, o bridge reiniciado sobe sem erro (antes: crash-loop).
+Pools devolvidos a `block`.
+
+**Instrumentos.** `test_menu_park_wake.py` 11 → 15 (fila, retomada, `menu.wake` válido e
+inválido); as mutações "fechar fila como nativo" e "varredura sem claim" reprovam. Bootstrap: teste
+novo, que reprova sem as duas guardas. Bridge: 259 passaram. mcp-server: 521 (3 novos). Routing:
+153 passaram (2 novos).
+
 ## 2026-09-28 (5) — DUR-01 F2: o bridge acorda a conversa estacionada, e o pool escolhe estacionar
 
 **O que mudou.**

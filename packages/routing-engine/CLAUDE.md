@@ -98,6 +98,16 @@ The CrashDetector must never re-queue a conversation whose engine lock is presen
 Violating this invariant would create two simultaneous executions advancing the same
 `pipeline_state`, corrupting the session with non-deterministic transitions.
 
+## Parked queue agent — `menu.wake` (DUR-01 F3, 2026-09-28)
+
+With the queue pool in `menu_wait: park`, the `LPUSH __agent_available__` / `queue_timeout` to the
+queue agent's menu no longer unblocks anybody: its wait is parked, not in a BLPOP. So every such
+LPUSH (`kafka_listener._drain_queue_for_agent`, `main._emit_queue_timeout`,
+`main._periodic_queue_drain`) is followed by `publish_menu_wake` (`menu_wake.py`): topic
+`menu.wake`, key `session_id`, field `_default_` (the queue agent runs without an instance). The
+bridge wakes the conversation. The notice goes AFTER the LPUSH and a failure is logged and
+returned, never raised — the signal is already in the list and the deadline scanner still wakes.
+
 ## Spec reference
 
 - 3.3  — routing dimensions and priority_score

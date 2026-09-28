@@ -39,6 +39,7 @@ from .http_api import start_http_api
 from .kafka_listener import run_listeners
 from .routing_config import routing_config, session_config
 from . import mute_queue
+from .menu_wake import publish_menu_wake
 from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.routing")
@@ -655,6 +656,7 @@ async def _emit_queue_timeout(
             result_key = f"menu:result:{session_id}"
             await redis_client.lpush(result_key, "__queue_timeout__")
             await redis_client.expire(result_key, 300)
+            await publish_menu_wake(producer, tenant_id, session_id, "queue_timeout")   # DUR-01
         except Exception as exc:
             logger.warning("queue timeout: could not signal queue agent session=%s — %s",
                            session_id, exc)
@@ -1522,6 +1524,8 @@ async def _periodic_queue_drain(
                         await redis_client.lpush(
                             f"menu:result:{session_id}", "__agent_available__"
                         )
+                        await publish_menu_wake(producer, tenant_id, session_id,   # DUR-01
+                                                "agent_available")
                         logger.info(
                             "Periodic drain: signalled queue agent session=%s pool=%s",
                             session_id, pool_id,
