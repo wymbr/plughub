@@ -66,7 +66,7 @@ As fichas abertas cuidam da **correção** do core e dos canais. O que separa o 
 
 ### Fase 1 — o core aguenta escala
 
-`PRD-03` (teto do bridge) · `DUR-01` (espera do `menu` por suspender/retomar — promovida de `adiado`) ·
+`PRD-03` (teto do bridge — paliativo feito em 2026-09-28) · `DUR-01` (espera do `menu` por suspender/retomar — promovida de `adiado`) ·
 `SFS-01` (executor sai de "harness de teste") · `PRD-04` (Redis) · `PRD-05` (Kafka, Postgres, ClickHouse,
 backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · `ALW-18` · `PRM-04`.
 

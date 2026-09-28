@@ -1485,6 +1485,27 @@ async def mint_session_token(
     return ""
 
 
+# PRD-03 — o `/execute` tem sessão HTTP PRÓPRIA, sem teto no conector.
+#
+# A requisição fica aberta a conversa inteira (o `menu` espera o cliente dentro dela), e
+# rodava no `ClientSession()` compartilhado, cujo conector padrão tem `limit=100`. Isso
+# era um SEGUNDO portão de admissão, escondido e na unidade errada: a 101ª conversa de IA
+# ficava esperando uma conexão livre — sem timeout (`total=None`), sem log, sem recusa —
+# e as chamadas de 5 s ao registry/config disputavam as mesmas 100 vagas, então o bridge
+# inteiro emperrava quando as conversas longas as ocupavam.
+#
+# Quem limita conversas simultâneas é a admissão (`{t}:admission:kind:ai`, na porta, com
+# recusa nomeada), não um pool de sockets. Por isso `limit=0`, e não um número maior:
+# qualquer teto aqui reabre o mesmo defeito em outra escala. A solução estrutural é a
+# DUR-01 (tirar a espera do `menu` da requisição aberta); isto é o paliativo.
+_EXECUTE_HTTP: aiohttp.ClientSession | None = None
+_EXECUTE_IN_FLIGHT = 0
+
+
+def _make_execute_http() -> aiohttp.ClientSession:
+    return aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=0, limit_per_host=0))
+
+
 async def activate_native_agent(
     http: aiohttp.ClientSession,
     redis_client: aioredis.Redis,
@@ -1628,6 +1649,10 @@ async def activate_native_agent(
     # else: primary agents (including webhook) use session_id directly — no suffix
 
     url = f"{SKILL_FLOW_URL}/execute"
+    # Sem a sessão dedicada (só em teste, que injeta o `http`), usa a recebida.
+    exec_http = _EXECUTE_HTTP or http
+    global _EXECUTE_IN_FLIGHT
+    _EXECUTE_IN_FLIGHT += 1
     try:
         # No HTTP timeout — the flow may contain menu steps with timeout_s = 0
         # (indefinite wait), so we must not impose an upper bound here.
@@ -1635,12 +1660,12 @@ async def activate_native_agent(
         # when the customer disconnects (session:closed LPUSH) or when a finite
         # timeout_s elapses. The execution lock on the skill-flow side prevents
         # two instances from advancing the pipeline_state simultaneously.
-        async with http.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=None)) as resp:
+        async with exec_http.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=None)) as resp:
             body = await resp.json()
             if resp.status == 200:
                 logger.info(
-                    "Native agent executed: session=%s skill=%s outcome=%s",
-                    session_id, skill_id, body.get("outcome"),
+                    "Native agent executed: session=%s skill=%s outcome=%s in_flight=%d",
+                    session_id, skill_id, body.get("outcome"), _EXECUTE_IN_FLIGHT,
                 )
                 return body
             elif resp.status == 412:
@@ -1654,7 +1679,10 @@ async def activate_native_agent(
                     session_id, resp.status, body,
                 )
     except Exception as exc:
-        logger.error("HTTP error calling skill-flow-service: session=%s — %s", session_id, exc)
+        logger.error("HTTP error calling skill-flow-service: session=%s in_flight=%d — %s",
+                     session_id, _EXECUTE_IN_FLIGHT, exc)
+    finally:
+        _EXECUTE_IN_FLIGHT -= 1
     return {}
 
 
@@ -10845,7 +10873,9 @@ async def run() -> None:
         skills_dir=SKILLS_DIR or None,
     )
 
-    async with aiohttp.ClientSession() as http:
+    global _EXECUTE_HTTP
+    async with aiohttp.ClientSession() as http, _make_execute_http() as execute_http:
+        _EXECUTE_HTTP = execute_http   # PRD-03: o /execute não disputa o conector do `http`
             # ALW-02 — transporte do carregador de config do ContextStore (mapa + catalogo de
         # tipos), registrado UMA vez no boot.
         #

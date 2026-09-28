@@ -583,3 +583,9 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 | MSK-05 | A exibição do dado DETECTADO é o `by_role` do `operator` em `/config/masking`, numa função só (`detectedDisplay` + gêmeo Python) usada pela rede do engine, pelo token do `message_send`, pelo net-pass do gateway e pelo quality-ingest | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (19) |
 | MSK-06 | A fala do CLIENTE passa pela rede de texto livre no Console (ao vivo e histórico), no stream (com o original em `original_content`), no ClickHouse e no log; o fluxo continua recebendo o valor cru | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (20) |
 | MSK-07 | O texto que o atendente humano digita no Console passa pela mesma `maskMessageContent` do `message_send`: token + original no stream, token nos agentes e no ClickHouse, exibição sem envelope ao cliente, cru só ao fluxo | 2026-09-25 | `CHANGELOG.md` § 2026-09-25 (21) |
+
+## `docs/product/producao-v1.md` — versão de produção v1
+
+| id | tarefa | data | ancora |
+|---|---|---|---|
+| PRD-03 | O `/execute` do bridge sai do conector compartilhado (teto padrão de 100, sem timeout nem log) para uma sessão HTTP própria sem teto; quem limita conversas é a admissão. Conversas em voo contadas no log. Paliativo: a espera do `menu` continua na requisição aberta até a `DUR-01` | 2026-09-28 | `CHANGELOG.md` § 2026-09-28 (3) |

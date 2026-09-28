@@ -1,5 +1,40 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (3) — PRD-03: o `/execute` do bridge não tem mais teto escondido de 100 conversas
+
+**O defeito.** O bridge chama `POST {SKILL_FLOW_URL}/execute` com `ClientTimeout(total=None)`,
+e a requisição fica aberta a conversa inteira — o `menu` espera o cliente dentro dela. Ela
+rodava no `aiohttp.ClientSession()` compartilhado do `run()`, cujo conector padrão tem
+`limit=100`. Resultado: um segundo portão de admissão, escondido e na unidade errada. A 101ª
+conversa de IA ficava esperando uma conexão livre sem timeout, sem log e sem recusa, e as
+chamadas de 5 s ao registry e à config-api disputavam as mesmas 100 vagas — com as conversas
+longas ocupando-as, o bridge inteiro emperrava.
+
+**O que mudou** (`orchestrator-bridge/main.py`).
+
+- `_make_execute_http()`: sessão própria para o `/execute`, com `TCPConnector(limit=0,
+  limit_per_host=0)`, aberta no `run()` ao lado da compartilhada. `limit=0` e não um número
+  maior: quem limita conversas simultâneas é a admissão (`{t}:admission:kind:ai`, na porta,
+  com recusa nomeada); qualquer teto aqui reabre o mesmo defeito em outra escala. Por isso
+  também não virou env — seria tuning de negócio escondido num pool de sockets.
+- `_EXECUTE_IN_FLIGHT`: conversas em voo, no log de cada fim de execução e de cada erro.
+- Sem a sessão dedicada (só em teste, que injeta o `http`), usa a recebida.
+
+**Instrumento.** `tests/test_execute_http_isolation.py` segura 150 requisições ABERTAS num
+servidor local e conta quantas chegaram: a sessão do `/execute` entrega 150; o **controle**
+com o conector padrão para em **100** (a testemunha de que o teste reprova). Mais: o `/execute`
+sai pela sessão dedicada e o resto pela compartilhada; o contador volta a zero na falha.
+Mutação (fábrica de volta ao `ClientSession()` e `/execute` pelo `http` recebido): 3 de 4
+reprovam. Suítes do bridge que tocam `activate_native_agent`: 39 verdes, rodadas na imagem.
+
+**No ar.** `build` + `up -d` do bridge; 16/16 sessões de webchat do harness (`PRD-02`)
+fecharam em `flow_complete` e o log mostra `in_flight` de 1 a 4.
+
+**O que NÃO muda.** A espera do `menu` continua segurando requisição, conexão Redis no
+executor e licença de IA — é a `DUR-01`. O teto real sob carga sai da rodada do `PRD-02`
+nas VMs; aqui a linha de base do defeito é o controle do teste (100), já que o conserto
+entrou antes da primeira rodada, a pedido do dono.
+
 ## 2026-09-28 (2) — SFE-08: o contrato de saída dos agentes de avaliação chega ao modelo inteiro
 
 **O defeito (medido na SFE-07, 2026-09-25).** Dois modos, a mesma causa — o contrato escrito
