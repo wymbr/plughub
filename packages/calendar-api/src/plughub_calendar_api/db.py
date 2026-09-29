@@ -436,6 +436,12 @@ async def db_delete_associations_for_entity(
     return int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
 
 
+async def db_get_association(pool: asyncpg.Pool, id: str) -> dict | None:
+    """AUT-63 — a posse da linha é conferida antes de editar ou apagar por id."""
+    row = await pool.fetchrow("SELECT * FROM calendar.calendar_associations WHERE id = $1", UUID(id))
+    return dict(row) if row else None
+
+
 async def db_delete_association(pool: asyncpg.Pool, id: str) -> bool:
     result = await pool.execute(
         "DELETE FROM calendar.calendar_associations WHERE id = $1", UUID(id)

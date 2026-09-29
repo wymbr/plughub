@@ -7,16 +7,22 @@ Endpoints:
   Calendars     — CRUD under /v1/calendars
   Associations  — CRUD under /v1/associations
   Engine        — read-only queries under /v1/engine
+
+Portão em TODA rota (AUT-63, 2026-09-29) — ver `_caller`. Antes, só a escrita tinha
+portão (e ele abria com `admin_token` vazio); leituras e motor respondiam ao anônimo pela
+borda, e as rotas por id não olhavam de quem era a linha.
 """
 from __future__ import annotations
 
+import hmac
+import json
 import logging
 from datetime import datetime
 from typing import Any
 
 import pytz
 from fastapi import APIRouter, Depends, HTTPException, Request
-from plughub_authz import enforce_write
+from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 from pydantic import BaseModel, Field
 
 from .db import (
@@ -27,6 +33,7 @@ from .db import (
     db_delete_associations_for_entity,
     db_delete_calendar,
     db_delete_holiday_set,
+    db_get_association,
     db_get_associations_for_engine,
     db_get_calendar,
     db_get_holiday_set,
@@ -50,7 +57,6 @@ from .engine import (
 )
 
 logger = logging.getLogger("plughub.calendar.router")
-router = APIRouter()
 
 
 def _pool(request: Request):
@@ -61,32 +67,103 @@ def _settings(request: Request):
     return request.app.state.settings
 
 
+async def _caller(request: Request) -> dict:
+    """Dependência do ROUTER (AUT-63, 2026-09-29): QUEM chama, antes do corpo e da rota.
+
+    Medido antes, pela borda pública (5174): `GET /v1/tenant-config` respondia 200 ao
+    anônimo, e listas, leituras por id e o motor inteiro (`is-open`, `next-open-slot`,
+    `add-business-duration`) também. A escrita tinha o `enforce_write`, que DESLIGAVA o
+    portão com `admin_token` vazio. E o calendário decide coisas de efeito: a janela em que
+    o outbound contata cliente, o `business_day_policy` das agendas, o prazo do `suspend`.
+
+    Portas, nesta ordem (o resultado fica em `request.state.caller`):
+      1. `X-Admin-Token` → `system` (seed/sistema; lê e escreve). Vazio FECHA a porta.
+      2. `X-Service-Token` → `service` (mailing, scheduler, evaluation, workflow,
+         skill-flow-service, mcp-server): SÓ LÊ e consulta o motor.
+      3. `Bearer` → `user`, com o tenant do TOKEN. `tenant_id` da query ou do corpo que
+         divergir dele é 403 `tenant_mismatch`. Ler não pede campo: Pools, Agendas,
+         Outbound e Campanhas escolhem calendário sem ter `config.calendars`.
+    """
+    st = _settings(request)
+    adm = request.headers.get("x-admin-token")
+    if adm and st.admin_token and hmac.compare_digest(adm, st.admin_token):
+        caller = {"kind": "system", "tenant": None, "claims": None}
+    else:
+        svc = request.headers.get("x-service-token")
+        if svc and st.service_token and hmac.compare_digest(svc, st.service_token):
+            caller = {"kind": "service", "tenant": None, "claims": None}
+        else:
+            token = bearer_from_header(request.headers.get("authorization"))
+            if not token:
+                raise HTTPException(401, "calendar-api exige credencial")
+            if not st.jwt_secret:
+                raise HTTPException(503, "calendar-api sem PLUGHUB_CALENDAR_JWT_SECRET — nao consigo verificar credencial")
+            claims = verify_user_jwt(token, st.jwt_secret)
+            if not claims:
+                raise HTTPException(401, "credencial invalida ou expirada")
+            tenant = str(claims.get("tenant_id") or "")
+            if not tenant:
+                raise HTTPException(401, "credencial sem tenant")
+            caller = {"kind": "user", "tenant": tenant, "claims": claims}
+            pedidos = [request.query_params.get("tenant_id")]
+            if "json" in (request.headers.get("content-type") or ""):
+                try:
+                    corpo = json.loads(await request.body() or b"null")
+                except (ValueError, UnicodeDecodeError):
+                    corpo = None
+                if isinstance(corpo, dict):
+                    pedidos.append(corpo.get("tenant_id"))
+            for pedido in pedidos:
+                if pedido and pedido != tenant:
+                    logger.warning("calendar RECUSA: sub=%s pediu tenant=%s com credencial de %s (%s)",
+                                   claims.get("sub"), pedido, tenant, request.url.path)
+                    raise HTTPException(403, "tenant_mismatch")
+    request.state.caller = caller
+    return caller
+
+
 def _require_calendars_write(request: Request) -> None:
+    """Escrita: sistema, ou usuário com `config.calendars` (read_write). Serviço NÃO escreve.
+
+    O que a escrita destrancada custava: a janela de contato do outbound é decidida por
+    `campaign.contact_calendar_id` (`db_contact_eligibility` consulta `is_open` deste
+    serviço). Reescrever um calendário ABRE a janela em que clientes podem ser contatados.
     """
-    Portao DUAL de escrita da config de calendario (admin-token OU Bearer + ABAC
-    `config.calendars` read_write), delegado ao verificador canonico.
-
-    Entra como DEPENDENCIA DE ROTA, nao no corpo do handler: as doze rotas de escrita
-    nao recebiam `request`, e alargar doze assinaturas para instalar um portao e doze
-    lugares onde alguem pode esquecer. No decorador ele fica greppavel, e uma rota de
-    escrita NOVA sem `_WRITE` salta aos olhos na revisao.
-
-    O que a escrita destrancada custava, para nao virar zelo abstrato: a janela de
-    contato do outbound e decidida por `campaign.contact_calendar_id`
-    (`db_contact_eligibility` consulta `is_open` deste servico). Apagar ou reescrever
-    um calendario anonimamente ABRE a janela em que clientes podem ser contatados.
-    """
-    settings = _settings(request)
-    enforce_write(
-        request     = request,
-        admin_token = settings.admin_token,
-        jwt_secret  = getattr(settings, "jwt_secret", ""),
-        module      = "config",
-        field       = "calendars",
-        what        = "escrita de config de calendario",
-    )
+    caller = request.state.caller
+    if caller["kind"] == "system":
+        return
+    if caller["kind"] == "service":
+        raise HTTPException(403, "credencial de servico so le o calendar-api")
+    if not abac_can(caller["claims"], "config", "calendars", "read_write"):
+        raise HTTPException(403, "forbidden: exige config.calendars (read_write)")
 
 
+def _visible(request: Request, row: dict | None) -> dict | None:
+    """Posse de linha por id: usuário só alcança linha do PRÓPRIO tenant ou da organização
+    (`tenant_id` nulo). As rotas por id não olhavam isso — com o grant, um usuário lia e
+    editava o calendário de outro tenant pelo id. Linha alheia vira 404, não 403: dizer
+    "existe, mas não é sua" confirmaria o id."""
+    if row is None:
+        return None
+    caller = request.state.caller
+    if caller["kind"] != "user":
+        return row
+    dono = row.get("tenant_id")
+    return row if (not dono or dono == caller["tenant"]) else None
+
+
+async def _own(request: Request, pool, getter, id: str, what: str) -> dict:
+    try:
+        row = await getter(pool, id)
+    except ValueError:
+        row = None   # id não-UUID: 404 limpo, não 500
+    row = _visible(request, row)
+    if not row:
+        raise HTTPException(404, f"{what} not found")
+    return row
+
+
+router = APIRouter(dependencies=[Depends(_caller)])
 _WRITE = Depends(_require_calendars_write)
 
 
@@ -131,15 +208,13 @@ async def create_holiday_set(
 
 
 @router.get("/v1/holiday-sets/{id}")
-async def get_holiday_set(id: str, pool=Depends(_pool)):
-    row = await db_get_holiday_set(pool, id)
-    if not row:
-        raise HTTPException(404, "holiday_set not found")
-    return row
+async def get_holiday_set(id: str, request: Request, pool=Depends(_pool)):
+    return await _own(request, pool, db_get_holiday_set, id, "holiday_set")
 
 
 @router.patch("/v1/holiday-sets/{id}", dependencies=[_WRITE])
-async def update_holiday_set(id: str, body: HolidaySetUpdate, pool=Depends(_pool)):
+async def update_holiday_set(id: str, body: HolidaySetUpdate, request: Request, pool=Depends(_pool)):
+    await _own(request, pool, db_get_holiday_set, id, "holiday_set")
     row = await db_update_holiday_set(pool, id, body.model_dump(exclude_none=True))
     if not row:
         raise HTTPException(404, "holiday_set not found")
@@ -147,7 +222,8 @@ async def update_holiday_set(id: str, body: HolidaySetUpdate, pool=Depends(_pool
 
 
 @router.delete("/v1/holiday-sets/{id}", status_code=204, dependencies=[_WRITE])
-async def delete_holiday_set(id: str, pool=Depends(_pool)):
+async def delete_holiday_set(id: str, request: Request, pool=Depends(_pool)):
+    await _own(request, pool, db_get_holiday_set, id, "holiday_set")
     deleted = await db_delete_holiday_set(pool, id)
     if not deleted:
         raise HTTPException(404, "holiday_set not found")
@@ -245,15 +321,13 @@ async def create_calendar(
 
 
 @router.get("/v1/calendars/{id}")
-async def get_calendar(id: str, pool=Depends(_pool)):
-    row = await db_get_calendar(pool, id)
-    if not row:
-        raise HTTPException(404, "calendar not found")
-    return row
+async def get_calendar(id: str, request: Request, pool=Depends(_pool)):
+    return await _own(request, pool, db_get_calendar, id, "calendar")
 
 
 @router.patch("/v1/calendars/{id}", dependencies=[_WRITE])
-async def update_calendar(id: str, body: CalendarUpdate, pool=Depends(_pool)):
+async def update_calendar(id: str, body: CalendarUpdate, request: Request, pool=Depends(_pool)):
+    await _own(request, pool, db_get_calendar, id, "calendar")
     row = await db_update_calendar(pool, id, body.model_dump(exclude_none=True))
     if not row:
         raise HTTPException(404, "calendar not found")
@@ -261,7 +335,8 @@ async def update_calendar(id: str, body: CalendarUpdate, pool=Depends(_pool)):
 
 
 @router.delete("/v1/calendars/{id}", status_code=204, dependencies=[_WRITE])
-async def delete_calendar(id: str, pool=Depends(_pool)):
+async def delete_calendar(id: str, request: Request, pool=Depends(_pool)):
+    await _own(request, pool, db_get_calendar, id, "calendar")
     deleted = await db_delete_calendar(pool, id)
     if not deleted:
         raise HTTPException(404, "calendar not found")
@@ -310,7 +385,8 @@ async def create_association(body: AssociationCreate, pool=Depends(_pool)):
 
 
 @router.patch("/v1/associations/{id}", dependencies=[_WRITE])
-async def update_association(id: str, body: AssociationUpdate, pool=Depends(_pool)):
+async def update_association(id: str, body: AssociationUpdate, request: Request, pool=Depends(_pool)):
+    await _own(request, pool, db_get_association, id, "association")
     row = await db_update_association(pool, id, body.model_dump(exclude_none=True))
     if not row:
         raise HTTPException(404, "association not found")
@@ -344,7 +420,8 @@ async def delete_entity_associations(
 
 
 @router.delete("/v1/associations/{id}", status_code=204, dependencies=[_WRITE])
-async def delete_association(id: str, pool=Depends(_pool)):
+async def delete_association(id: str, request: Request, pool=Depends(_pool)):
+    await _own(request, pool, db_get_association, id, "association")
     deleted = await db_delete_association(pool, id)
     if not deleted:
         raise HTTPException(404, "association not found")
@@ -446,13 +523,14 @@ async def engine_next_open_slot(
 # reuse the same engine functions — the engine stays the sole "when" authority.
 
 async def _load_engine_data_by_calendar(
-    pool, calendar_id: str
+    pool, calendar_id: str, request: Request,
 ) -> tuple[list[dict] | None, dict[str, list]]:
     try:
         cal = await db_get_calendar(pool, calendar_id)
     except ValueError:
         # Non-UUID id → treat as not found (clean 404, not a 500).
         cal = None
+    cal = _visible(request, cal)   # AUT-63: calendário de outro tenant = não encontrado
     if not cal:
         return None, {}
     assoc = {
@@ -475,14 +553,14 @@ async def _load_engine_data_by_calendar(
 
 @router.get("/v1/engine/is-open-calendar")
 async def engine_is_open_calendar(
-    calendar_id: str, at: str | None = None, pool=Depends(_pool),
+    calendar_id: str, request: Request, at: str | None = None, pool=Depends(_pool),
 ) -> dict[str, Any]:
     at_dt: datetime | None = None
     if at:
         at_dt = datetime.fromisoformat(at)
         if at_dt.tzinfo is None:
             at_dt = pytz.UTC.localize(at_dt)
-    assocs, hols = await _load_engine_data_by_calendar(pool, calendar_id)
+    assocs, hols = await _load_engine_data_by_calendar(pool, calendar_id, request)
     if assocs is None:
         raise HTTPException(404, "calendar not found")
     status = get_open_status(assocs, hols, at_dt)
@@ -497,14 +575,14 @@ async def engine_is_open_calendar(
 
 @router.get("/v1/engine/next-open-slot-calendar")
 async def engine_next_open_slot_calendar(
-    calendar_id: str, after: str | None = None, pool=Depends(_pool),
+    calendar_id: str, request: Request, after: str | None = None, pool=Depends(_pool),
 ) -> dict[str, Any]:
     after_dt: datetime | None = None
     if after:
         after_dt = datetime.fromisoformat(after)
         if after_dt.tzinfo is None:
             after_dt = pytz.UTC.localize(after_dt)
-    assocs, hols = await _load_engine_data_by_calendar(pool, calendar_id)
+    assocs, hols = await _load_engine_data_by_calendar(pool, calendar_id, request)
     if assocs is None:
         raise HTTPException(404, "calendar not found")
     nxt = next_open_slot(assocs, hols, after_dt)

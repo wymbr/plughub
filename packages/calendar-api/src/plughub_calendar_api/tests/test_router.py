@@ -99,7 +99,8 @@ class TestGetTenantConfig:
         self.settings = _make_settings()
         app.state.pool = self.pool
         app.state.settings = self.settings
-        self.client = TestClient(app, raise_server_exceptions=True)
+        self.client = TestClient(app, raise_server_exceptions=True,
+                                 headers=_WRITE_HEADERS)   # AUT-63: leitura também exige credencial
 
     def test_returns_default_when_no_config_row(self):
         """When tenant has no explicit config, returns platform default (America/Sao_Paulo)."""
@@ -380,3 +381,106 @@ class TestWriteGate:
             json={"tenant_id": "tenant-abc", "default_timezone": "America/Chicago"},
         )
         assert resp.status_code in (401, 403), resp.status_code
+
+
+# ── AUT-63 — leitura, motor, tenant e posse de linha ───────────────────────────
+import re as _re
+import jwt as _pyjwt
+from unittest.mock import patch as _patch
+
+_SECRET = "segredo-do-teste-aut63-com-32-bytes!!"
+_SVC = "svc-aut63"
+
+
+def _user(tenant="tenant-abc", **grants):
+    cfg = {"config": {f: {"access": a, "scope": []} for f, a in grants.items()}} if grants else {}
+    tok = _pyjwt.encode({"sub": "u1", "tenant_id": tenant, "module_config": cfg}, _SECRET, algorithm="HS256")
+    return {"Authorization": f"Bearer {tok}"}
+
+
+class TestCallerGate:
+    """AUT-63: leituras e motor respondiam ao anônimo pela borda; as rotas por id não
+    olhavam de quem era a linha. Um ramo por código, com os controles POSITIVOS."""
+
+    def setup_method(self):
+        self.pool = _make_pool()
+        app.state.pool = self.pool
+        app.state.settings = _make_settings(jwt_secret=_SECRET, service_token=_SVC)
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    def test_anonymous_read_is_401(self):
+        r = self.client.get("/v1/tenant-config", params={"tenant_id": "tenant-abc"})
+        assert r.status_code == 401
+
+    def test_anonymous_engine_is_401(self):
+        r = self.client.get("/v1/engine/is-open-calendar", params={"calendar_id": "x"})
+        assert r.status_code == 401
+
+    def test_user_reads_own_tenant_without_calendar_grant(self):
+        """Pools/Agendas/Outbound/Campanhas escolhem calendário sem ter config.calendars."""
+        self.pool.fetchrow = AsyncMock(return_value=None)
+        r = self.client.get("/v1/tenant-config", params={"tenant_id": "tenant-abc"}, headers=_user())
+        assert r.status_code == 200, r.text
+
+    def test_user_query_tenant_of_another_is_403(self):
+        r = self.client.get("/v1/tenant-config", params={"tenant_id": "outro"}, headers=_user())
+        assert r.status_code == 403
+        assert r.json()["detail"] == "tenant_mismatch"
+
+    def test_user_body_tenant_of_another_is_403(self):
+        r = self.client.patch("/v1/tenant-config", headers=_user(calendars="read_write"),
+                              json={"tenant_id": "outro", "default_timezone": "UTC"})
+        assert r.status_code == 403
+
+    def test_user_write_needs_calendars_grant(self):
+        r = self.client.patch("/v1/tenant-config", headers=_user(),
+                              json={"tenant_id": "tenant-abc", "default_timezone": "UTC"})
+        assert r.status_code == 403
+
+    def test_service_reads_engine(self):
+        cal = {"id": "c1", "tenant_id": "tenant-zz", "timezone": "UTC", "always_open": True,
+               "weekly_schedule": [], "holiday_set_ids": [], "exceptions": []}
+        with _patch("plughub_calendar_api.router.db_get_calendar", new=AsyncMock(return_value=cal)),              _patch("plughub_calendar_api.router.db_get_holidays_for_sets", new=AsyncMock(return_value=[])):
+            r = self.client.get("/v1/engine/is-open-calendar", params={"calendar_id": "c1"},
+                                headers={"X-Service-Token": _SVC})
+        assert r.status_code == 200, r.text
+
+    def test_service_does_not_write(self):
+        r = self.client.patch("/v1/tenant-config", headers={"X-Service-Token": _SVC},
+                              json={"tenant_id": "tenant-abc", "default_timezone": "UTC"})
+        assert r.status_code == 403
+
+    def test_calendar_of_another_tenant_by_id_is_404(self):
+        alheio = {"id": "c1", "tenant_id": "outro", "name": "x"}
+        with _patch("plughub_calendar_api.router.db_get_calendar", new=AsyncMock(return_value=alheio)):
+            r = self.client.get("/v1/calendars/c1", headers=_user())
+        assert r.status_code == 404
+
+    def test_org_scope_calendar_is_visible(self):
+        org = {"id": "c1", "tenant_id": None, "name": "org"}
+        with _patch("plughub_calendar_api.router.db_get_calendar", new=AsyncMock(return_value=org)):
+            r = self.client.get("/v1/calendars/c1", headers=_user())
+        assert r.status_code == 200
+
+    def test_patch_calendar_of_another_tenant_is_404_and_writes_nothing(self):
+        alheio = {"id": "c1", "tenant_id": "outro"}
+        upd = AsyncMock(return_value={"id": "c1"})
+        with _patch("plughub_calendar_api.router.db_get_calendar", new=AsyncMock(return_value=alheio)),              _patch("plughub_calendar_api.router.db_update_calendar", new=upd):
+            r = self.client.patch("/v1/calendars/c1", headers=_user(calendars="read_write"), json={"name": "y"})
+        assert r.status_code == 404
+        upd.assert_not_awaited()
+
+    def test_every_route_but_health_refuses_an_anonymous_caller(self):
+        """Censo HTTP sobre o OpenAPI, com PISO (censo de zero rotas passa por ausência)."""
+        abertas, n = [], 0
+        for path, ops in app.openapi()["paths"].items():
+            for method in ops:
+                if method not in {"get", "post", "put", "patch", "delete"} or path == "/v1/health":
+                    continue
+                n += 1
+                r = self.client.request(method.upper(), _re.sub(r"\{[^}]+\}", "x", path),
+                                        headers={"content-type": "application/json"}, content='"x"')
+                if r.status_code != 401:
+                    abertas.append(f"{method.upper()} {path} -> {r.status_code}")
+        assert n >= 20, f"censo varreu só {n} rotas"
+        assert not abertas, f"rotas que não recusam anônimo: {abertas}"

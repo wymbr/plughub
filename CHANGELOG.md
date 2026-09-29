@@ -1,5 +1,65 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (12) — AUT-63: a calendar-api exige credencial em toda rota, confere o tenant e a posse da linha por id
+
+**Medido antes, pela borda pública (5174):** listas de calendários, feriados e associações, leituras
+por id e o **motor inteiro** (`is-open`, `next-open-slot`, `add-business-duration`,
+`business-duration`) respondiam ao anônimo. A escrita tinha o `enforce_write`, que desligava o
+portão com `admin_token` vazio. E as rotas **por id** (`GET/PATCH/DELETE /v1/calendars/{id}`,
+`holiday-sets/{id}`, `associations/{id}`) não olhavam de quem era a linha: com o grant, um usuário
+lia e reescrevia o calendário de outro tenant pelo id.
+
+Não é config inerte. O calendário decide:
+- a **janela em que o outbound contata cliente**;
+- o `business_day_policy` das agendas;
+- o prazo de `suspend` com horário comercial.
+
+**O motor era aberto por decisão declarada** (*"consultado por chamadores internos sem
+credencial"*), o mesmo desenho que caiu na dialog-api. Ele também fechou, pelo mesmo motivo: a
+borda publicava `/v1/(calendars|holiday-sets|associations|engine)`.
+
+**O portão (`_caller`, dependência do ROUTER, antes do corpo):**
+- `X-Admin-Token` → sistema: lê e escreve. **Vazio fecha a porta**;
+- `X-Service-Token` → serviço: **só lê e consulta o motor**;
+- `Bearer` → usuário do **próprio** tenant:
+  - **ler não pede campo**: Pools, Agendas, Outbound e Campanhas escolhem calendário sem ter
+    `config.calendars`;
+  - **escrever pede `config.calendars`**;
+  - `tenant_id` da query ou do corpo divergente do token é 403 `tenant_mismatch`.
+
+**Posse por id (`_own` / `_visible`):** linha de **outro** tenant é **404**, não 403, porque dizer
+*"existe, mas não é sua"* confirmaria o id. Vale também para o motor por `calendar_id`. Linha da
+**organização** (`tenant_id` nulo) segue visível e editável por qualquer tenant; é a **CAL-02**,
+bloqueada pela CAL-01, porque o JWT não diz a que organização o usuário pertence.
+
+**Chamadores migrados no mesmo trabalho (seis de código):**
+- `mailing-api` e `scheduler-api`: o `CalendarClient` gêmeo ganhou `service_token`;
+- `evaluation-api`: o `is-open` da janela de despacho;
+- `workflow-api`: `calculate_deadline`, hoje sem chamador;
+- `skill-flow-service`: o prazo do `suspend`;
+- as quatro tools de calendário do mcp-server (`calendarHeaders`).
+
+Provado de dentro de cada container: com o token, 404 para calendário inexistente e 200 no motor;
+sem ele, 401. **Ponta a ponta:** o `smoke_outbound_fase3a` passou. Se o token do mailing falhasse, a
+consulta degradaria para janela ABERTA e o contato passaria, então o verde dele é a prova do
+caminho. **UI:** nada a mudar, e no navegador calendários e feriados responderam 200.
+
+**Achado de passagem (CAL-03):** dois dos três pontos da evaluation chamam
+`POST /v1/calendar/business-deadline`, **rota que não existe**. Todo prazo de contestação ou
+expiração em horário comercial cai no relógio de parede, sem log de defeito.
+
+**Instrumentos:**
+- `TestCallerGate` (12 casos). Contraprova: sem a dependência do router, 27 vermelhos; sem a
+  checagem de posse, os dois de id alheio ficam vermelhos;
+- o **`probe_config_service_write_gate`** afirmava o motor aberto (S5). Passou a afirmar o
+  contrário, e o S5b prova a porta do runtime;
+- a **varredura** (`_route_anon_sweep.py`) passou a disparar escrita sem id quando ela tem
+  parâmetro obrigatório de query além do `tenant_id`. A varredura o omite, então uma rota aberta
+  responde 422 sem executar. Foi o que tirou `DELETE /v1/associations/entity` de *"não medida"*, e
+  nenhuma outra rota mudou de classe;
+- as 13 linhas viraram `fechada`. calendar 78 · `probe_python_suites.sh` 16/16 (3 804) ·
+  `probe_internal_service_callers.sh` verde.
+
 ## 2026-09-29 (11) — AUT-62: a dialog-api exige credencial também na leitura, e o tenant do usuário é o do token
 
 **Decisão do dono, revertendo uma decisão declarada.** A leitura era **aberta de propósito**. O

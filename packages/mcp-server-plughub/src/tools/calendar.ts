@@ -13,6 +13,13 @@
 import { z }         from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 
+/** AUT-63 — a calendar-api exige credencial também no motor. Token lido a cada chamada;
+ *  vazio ⇒ 401 e a tool devolve o erro que já devolvia, nunca "funciona sem credencial". */
+function calendarHeaders(tenantId: string): Record<string, string> {
+  const token = process.env["CALENDAR_SERVICE_TOKEN"] ?? ""
+  return token ? { "x-tenant-id": tenantId, "x-service-token": token } : { "x-tenant-id": tenantId }
+}
+
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
 export interface CalendarDeps {
@@ -104,7 +111,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps): vo
 
       try {
         const resp = await fetch(`${calendarApiUrl}/v1/engine/is-open?${params}`, {
-          headers: { "x-tenant-id": tenantId },
+          headers: calendarHeaders(tenantId),
         })
         if (!resp.ok) {
           const body = await resp.text().catch(() => "")
@@ -146,7 +153,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps): vo
 
       try {
         const resp = await fetch(`${calendarApiUrl}/v1/engine/next-open-slot?${params}`, {
-          headers: { "x-tenant-id": tenantId },
+          headers: calendarHeaders(tenantId),
         })
         if (!resp.ok) {
           const body = await resp.text().catch(() => "")
@@ -182,7 +189,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps): vo
       try {
         const resp = await fetch(`${calendarApiUrl}/v1/engine/add-business-duration`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-tenant-id": tenantId },
+          headers: { "Content-Type": "application/json", ...calendarHeaders(tenantId) },
           body: JSON.stringify({
             tenant_id:   tenantId,
             entity_type: input.entity_type,
@@ -225,7 +232,7 @@ export function registerCalendarTools(server: McpServer, deps: CalendarDeps): vo
       try {
         const resp = await fetch(`${calendarApiUrl}/v1/engine/business-duration`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-tenant-id": tenantId },
+          headers: { "Content-Type": "application/json", ...calendarHeaders(tenantId) },
           body: JSON.stringify({
             tenant_id:   tenantId,
             entity_type: input.entity_type,

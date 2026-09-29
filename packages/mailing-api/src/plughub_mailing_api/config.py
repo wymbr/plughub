@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # calendar-api: contact-window gate (Fase 3a) — is-open by calendar_id. The engine
     # never re-models "when/open"; it asks calendar-api.
     calendar_api_url: str = "http://calendar-api:3700"
+    # AUT-63 — `X-Service-Token` do motor da calendar-api (== PLUGHUB_CALENDAR_SERVICE_TOKEN).
+    # Vazio ⇒ 401 e a janela de contato degrada para ABERTA, com WARNING.
+    calendar_service_token: str = ""
 
     # channel-gateway Identity Resolver: opt-out global gate (Fase 3b). The customer
     # cadastro is the single source of `do_not_contact`; outbound reads/writes it here.

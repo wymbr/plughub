@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     # Calendar API (for business-hours deadline calculation)
     calendar_api_url: str = "http://localhost:3700"
+    # AUT-63 — `X-Service-Token` do motor da calendar-api.
+    calendar_service_token: str = ""
 
     # Session Replayer (to fetch ReplayContext)
     session_replayer_url: str = "http://localhost:3300"  # mcp-server-plughub

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     # Downstream services
     # calendar-api: engine puro do "quando" (is_open / next_open_slot) — business_day_policy
     calendar_api_url:    str = "http://calendar-api:3700"
+    # AUT-63 — `X-Service-Token` do motor da calendar-api (== PLUGHUB_CALENDAR_SERVICE_TOKEN).
+    calendar_service_token: str = ""
     # channel-gateway: disparo do webhook do pool (Arc 19) — POST /v1/channels/webhook/pool/{id}
     channel_gateway_url: str = "http://channel-gateway:8010"
     # agent-registry: validação de pool webhook / metadados de pool

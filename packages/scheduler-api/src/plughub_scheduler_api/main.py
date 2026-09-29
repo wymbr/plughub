@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.state.pool           = pool
     app.state.settings       = settings
-    app.state.calendar_client = CalendarClient(settings.calendar_api_url)
+    app.state.calendar_client = CalendarClient(settings.calendar_api_url, service_token=settings.calendar_service_token)
 
     # Camada 1: poller + re-hydration; the dispatcher is the fire callback.
     scheduler = Scheduler(pool, settings)

@@ -9,7 +9,9 @@ mede a proposição de verdade — *"esta rota decide sem credencial?"* — e se
   escrita COM corpo    → corpo de tipo inválido (`"x"`): um guard de dependência responde
                          401/403 ANTES da validação; rota aberta responde 422 sem executar nada;
   escrita SEM corpo    → com id no caminho, disparada com id INEXISTENTE (nada a apagar);
-                         sem id no caminho, NÃO disparada (`nao_medida`): seria executar a ação.
+                         sem id mas com parâmetro OBRIGATÓRIO de query além do `tenant_id`,
+                         disparada SEM ele (aberta → 422, nada executa — AUT-63);
+                         sem nenhum dos dois, NÃO disparada (`nao_medida`): seria executar.
 
 Classes por rota:
   fechada     401/403 (ou 503 de guard sem segredo configurado)
@@ -57,7 +59,12 @@ def sweep(name: str, base: str) -> dict:
                 params = {"tenant_id": PROBE}
                 has_body = bool(op.get("requestBody"))
                 com_id = "{" in path
-                if method in WRITE and not has_body and (not com_id or any(d in path for d in NUNCA_DISPARAR)):
+                # AUT-63: um parâmetro obrigatório de query que a varredura OMITE impede a
+                # execução numa rota aberta (422) — então disparar é seguro. `tenant_id` não
+                # conta: a varredura o manda, e ele sozinho não impediria nada.
+                trava = any(prm.get("in") == "query" and prm.get("required") and prm.get("name") != "tenant_id"
+                            for prm in op.get("parameters") or [])
+                if method in WRITE and not has_body and (not (com_id or trava) or any(d in path for d in NUNCA_DISPARAR)):
                     out["routes"].append({"route": f"{method.upper()} {path}", "class": "nao_medida",
                                           "why": "escrita sem corpo e sem id no caminho — dispará-la seria executar a ação"})
                     continue

@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.state.pool     = pool
     app.state.settings = settings
-    app.state.calendar = CalendarClient(settings.calendar_api_url)
+    app.state.calendar = CalendarClient(settings.calendar_api_url, service_token=settings.calendar_service_token)
     if not settings.identity_service_token:
         logger.warning(
             "PLUGHUB_MAILING_IDENTITY_SERVICE_TOKEN vazio: o channel-gateway RECUSA as rotas de "

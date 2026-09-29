@@ -20,9 +20,12 @@ logger = logging.getLogger("plughub.mailing.calendar")
 
 
 class CalendarClient:
-    def __init__(self, base_url: str, timeout_s: float = 8.0) -> None:
+    def __init__(self, base_url: str, timeout_s: float = 8.0, service_token: str = "") -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
+        # AUT-63 — a calendar-api exige credencial também no motor. Vazio ⇒ 401, e cada
+        # consulta degrada pelo caminho (com WARNING) que já existia.
+        self.headers = {"X-Service-Token": service_token} if service_token else {}
 
     async def is_open_status(self, calendar_id: str, at: datetime) -> str | None:
         """Returns "open" | "closed" | "holiday", or None on error (degrade → open)."""
@@ -31,6 +34,7 @@ class CalendarClient:
                 r = await client.get(
                     f"{self.base_url}/v1/engine/is-open-calendar",
                     params={"calendar_id": calendar_id, "at": at.isoformat()},
+                    headers=self.headers,
                 )
                 r.raise_for_status()
                 return r.json().get("status")
@@ -48,6 +52,7 @@ class CalendarClient:
                 r = await client.get(
                     f"{self.base_url}/v1/engine/next-open-slot-calendar",
                     params={"calendar_id": calendar_id, "after": after.isoformat()},
+                    headers=self.headers,
                 )
                 r.raise_for_status()
                 raw = r.json().get("next_open")

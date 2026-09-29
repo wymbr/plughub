@@ -465,7 +465,11 @@ app.post("/execute", async (req: Request, res: Response) => {
                 `${CALENDAR_API_URL}/v1/engine/add-business-duration`,
                 {
                   method:  "POST",
-                  headers: { "Content-Type": "application/json" },
+                  // AUT-63 — o motor da calendar-api exige credencial de serviço.
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(process.env["CALENDAR_SERVICE_TOKEN"] ? { "x-service-token": process.env["CALENDAR_SERVICE_TOKEN"] } : {}),
+                  },
                   body:    JSON.stringify({
                     tenant_id:   params.tenant_id,
                     entity_type: "calendar",

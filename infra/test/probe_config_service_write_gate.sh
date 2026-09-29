@@ -29,10 +29,14 @@
 #   S4     quem NÃO tem o grant conseguir escrever                   → VERMELHO
 #          — e o código tem de ser 403, não 401: "não sei quem é" e "sei, e não pode"
 #          são estados diferentes, e colapsá-los foi divergência medida entre serviços
-#   S5/S9  a LEITURA/engine fechar junto                             → VERMELHO
-#          (é a testemunha do outro lado: workflow-api, scheduler-api, mailing-api,
-#          `form_get` e o survey web chamam sem credencial. Um portão que fecha a
-#          leitura "passa" no teste de segurança e quebra o produto em silêncio.)
+#   S5/S9  a LEITURA/engine responder ao ANÔNIMO                     → VERMELHO
+#   S5b/S9b a porta de SERVIÇO do runtime parar de ler                → VERMELHO
+#          (até a AUT-62/63, 2026-09-29, S5/S9 afirmavam o CONTRÁRIO: leitura aberta,
+#          porque workflow-api, scheduler-api, mailing-api, `form_get` e o survey web
+#          chamavam sem credencial. A borda publicava os prefixos; o dono decidiu fechar,
+#          e os chamadores passaram a mandar `X-Service-Token`. A testemunha do outro
+#          lado continua existindo — agora ela é o S5b/S9b: um portão que fechasse
+#          também o runtime "passaria" no teste de segurança e quebraria o produto.)
 #
 # INCONCLUSIVO é ramo próprio: sem serviço de pé ou sem login, o probe NÃO declara
 # verde — um verde por ausência de amostra é a família "teste que não pode reprovar".
@@ -93,7 +97,7 @@ OPER_JWT=$(login "operator@plughub.local" "changeme_operator")
                     || inc "login operator@ falhou — sem ele não há contraprova NEGATIVA"
 
 # ── calendar-api ──────────────────────────────────────────────────────────────
-head_ "CALENDAR-API — escrita fechada, engine aberto"
+head_ "CALENDAR-API — escrita fechada; leitura e motor fechados ao anônimo, abertos ao runtime (AUT-63)"
 
 s=$(status -X POST "$CAL/v1/calendars" "${JSONH[@]}" -d "$(cal_body anon)")
 if [ "$s" = "401" ]; then ok "S1 anônimo → 401 (media 201 antes do conserto)"
@@ -125,8 +129,13 @@ if [ -n "$OPER_JWT" ]; then
 else inc "S4 sem operator@ — contraprova negativa não exercida"; fi
 
 s=$(status "$CAL/v1/engine/is-open?tenant_id=$TENANT")
-if [ "$s" = "200" ] || [ "$s" = "422" ]; then ok "S5 engine anônimo → $s (aberto — workflow/scheduler/mailing chamam sem credencial)"
-else bad "S5 engine anônimo → $s — a LEITURA fechou junto; isto quebra o produto em silêncio"; fi
+if [ "$s" = "401" ]; then ok "S5 motor anônimo → 401 (era aberto até a AUT-63)"
+else bad "S5 motor anônimo → $s — o motor responde a qualquer um"; fi
+
+CAL_SVC="${PLUGHUB_CALENDAR_SERVICE_TOKEN:-changeme_calendar_service_token_demo}"
+s=$(status "$CAL/v1/engine/is-open?tenant_id=$TENANT&entity_type=pool&entity_id=probe" -H "X-Service-Token: $CAL_SVC")
+if [ "$s" = "200" ]; then ok "S5b motor por SERVIÇO → 200 (workflow/scheduler/mailing/evaluation chamam por aqui)"
+else bad "S5b motor por serviço → $s — o runtime não consulta o calendário; janela e prazo degradam"; fi
 
 [ -n "$CREATED" ] && curl -s -m 10 -X DELETE "$CAL/v1/calendars/$CREATED" -H "X-Admin-Token: $CAL_TOKEN" >/dev/null 2>&1
 
@@ -195,4 +204,4 @@ else bad "S10 só ${n:-0} form(s) — sinal de que o seed levou 401; DIALOG_ADMI
 echo
 if [ "$FAIL" -gt 0 ]; then echo "${RED}${BLD}GATE VERMELHO${RST} — $FAIL falha(s)"; exit 1; fi
 if [ "$INC" -gt 0 ]; then echo "${YLW}${BLD}INCONCLUSIVO${RST} — $INC cenário(s) não exercido(s)"; exit 0; fi
-echo "${GRN}${BLD}GATE VERDE${RST} — escrita fechada nos dois; leitura e engine intactos"
+echo "${GRN}${BLD}GATE VERDE${RST} — escrita fechada nos dois; anônimo fora; runtime lê pela porta de serviço"

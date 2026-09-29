@@ -669,6 +669,7 @@ services:
       MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
+      CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
       WORKFLOW_API_URL: http://workflow-api:3800
       DIALOG_API_URL: http://dialog-api:3760   # dialog primitive — form_get (survey + OTP)
       DIALOG_SERVICE_TOKEN: changeme_dialog_service_token_demo   # AUT-62 — leitura de runtime (== PLUGHUB_DIALOG_SERVICE_TOKEN)
@@ -872,6 +873,7 @@ services:
       CONFIG_API_URL: http://config-api:3600
       AI_GATEWAY_URL: http://ai-gateway:3200
       CALENDAR_API_URL: http://calendar-api:3700
+      CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
       CHANNEL_GATEWAY_URL: http://channel-gateway:8010
       PORT: "3460"
       SKILLS_DIR: /app/skills
@@ -1857,6 +1859,7 @@ services:
       # demo e a razao de este servico ter aceitado `POST /v1/calendars` anonimo ate
       # 2026-08-27. As rotas /v1/engine/* seguem abertas (chamadores internos).
       PLUGHUB_CALENDAR_ADMIN_TOKEN:   demo_calendar_admin_token
+      PLUGHUB_CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — porta de serviço: só lê e consulta o motor
       PLUGHUB_CALENDAR_JWT_SECRET:    changeme_auth_jwt_secret_demo_32c   # mesmo segredo da auth-api
     depends_on:
       postgres:
@@ -1891,6 +1894,7 @@ services:
       PLUGHUB_SCHEDULER_DATABASE_URL:        postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_SCHEDULER_REDIS_URL:           redis://redis:6379
       PLUGHUB_SCHEDULER_CALENDAR_API_URL:    http://calendar-api:3700
+      PLUGHUB_SCHEDULER_CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
       PLUGHUB_SCHEDULER_CHANNEL_GATEWAY_URL: http://channel-gateway:8010
       PLUGHUB_SCHEDULER_AGENT_REGISTRY_URL:  http://agent-registry:3300
     depends_on:
@@ -1917,6 +1921,7 @@ services:
     environment:
       PLUGHUB_MAILING_DATABASE_URL:     postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_MAILING_CALENDAR_API_URL: http://calendar-api:3700     # Fase 3a — portão de janela de contato
+      PLUGHUB_MAILING_CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
       PLUGHUB_MAILING_IDENTITY_API_URL: http://channel-gateway:8010  # Fase 3b — opt-out global (do_not_contact)
       PLUGHUB_MAILING_IDENTITY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo   # IDN-06 — == PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN
       PLUGHUB_MAILING_JWT_SECRET:    changeme_auth_jwt_secret_demo_32c   # AUT-60 — verifica o Bearer da tela
@@ -1975,6 +1980,7 @@ services:
       PLUGHUB_WORKFLOW_COLLECT_TOPIC:    collect.events
       PLUGHUB_WORKFLOW_JOURNEY_TOPIC:    journey.events
       PLUGHUB_WORKFLOW_CALENDAR_API_URL:      http://calendar-api:3700
+      PLUGHUB_WORKFLOW_CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
       PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL:   http://agent-registry:3300
       # ⚠️ FALTAVA (medido 2026-08-25) — e não era só problema de teste.
       # `channel_gateway_url` cai em `http://localhost:8010` (`config.py:40`), que
@@ -2151,6 +2157,7 @@ services:
       PLUGHUB_EVALUATION_KNOWLEDGE_SERVICE_TOKEN: changeme_knowledge_service_token_demo   # G-PROBE — publish de CalibrationNote no KB gateado
       PLUGHUB_EVALUATION_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
       PLUGHUB_EVALUATION_CALENDAR_API_URL:    http://calendar-api:3700
+      PLUGHUB_EVALUATION_CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
       PLUGHUB_EVALUATION_WORKFLOW_API_URL:    http://workflow-api:3800
       # Fase 4a — resume direto no channel-gateway (a workflow-api só reencaminhava).
       PLUGHUB_EVALUATION_CHANNEL_GATEWAY_URL: http://channel-gateway:8010

@@ -103,7 +103,7 @@ do Redis, broker) sem perder conversa — e o piloto.
 ## 5. Prioridade das fichas existentes
 
 **P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, ~~`ALW-18`~~ (fechada 2026-09-28), ~~`DUR-01`~~ (fechada 2026-09-28),
-~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), ~~`CAP-10`~~ (fechada 2026-09-29), `CAP-15`, ~~`AUT-20`~~ (fechada 2026-09-29), ~~`AUT-58`~~ (fechada 2026-09-29), `AUD-03` — e as portas abertas PELA BORDA que a AUT-58 mediu: ~~`AUT-59`~~ (evaluation; fechada 2026-09-29), ~~`AUT-60`~~ (mailing; fechada 2026-09-29), ~~`AUT-61`~~ (pricing; fechada 2026-09-29), ~~`AUT-62`~~ (dialog; fechada 2026-09-29), `AUT-63` (calendar), `AUT-64` (workflow), `AUT-69` (catálogo ABAC).
+~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), ~~`CAP-10`~~ (fechada 2026-09-29), `CAP-15`, ~~`AUT-20`~~ (fechada 2026-09-29), ~~`AUT-58`~~ (fechada 2026-09-29), `AUD-03` — e as portas abertas PELA BORDA que a AUT-58 mediu: ~~`AUT-59`~~ (evaluation; fechada 2026-09-29), ~~`AUT-60`~~ (mailing; fechada 2026-09-29), ~~`AUT-61`~~ (pricing; fechada 2026-09-29), ~~`AUT-62`~~ (dialog; fechada 2026-09-29), ~~`AUT-63`~~ (calendar; fechada 2026-09-29), `AUT-64` (workflow), `AUT-69` (catálogo ABAC).
 
 **P1 — necessário nos primeiros meses:** `AUT-65`, `AUT-66`, `AUT-67`, `AUT-68` (rotas abertas só na rede interna), `AUT-70` (serviços fora da varredura), `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,
 `USG-03`, `USG-04`, `AIG-02`, `AIG-01`, `KPI-01..05`, `AUD-01`, `AUD-02`, `CAP-07`, `CAP-08`, `CAP-14`,

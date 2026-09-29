@@ -37,15 +37,15 @@ class Settings(BaseSettings):
     # Background task: how often to check for window transitions (seconds)
     window_check_interval_s: int = 60
 
-    # Portao de ESCRITA (dual: admin-token de sistema OU Bearer + ABAC
-    # `config.calendars`). Vazio DESABILITA o portao — postura preservada, mas agora
-    # LOGADA em WARNING pelo `plughub_authz.enforce_write`.
-    #
-    # As rotas `/v1/engine/*` ficam ABERTAS de proposito: sao consultadas por
-    # workflow-api (`add-business-duration`), scheduler-api (`is-open-calendar`,
-    # `next-open-slot-calendar`) e mailing-api (janela de contato), todos chamadores
-    # internos sem credencial. Elas CALCULAM sobre a config; nao a alteram.
+    # Porta de SISTEMA (lê e escreve). Vazio FECHA a porta — até a AUT-63 (2026-09-29)
+    # desligava o portão inteiro. O motor (`/v1/engine/*`) era ABERTO por ser consultado
+    # por chamadores internos sem credencial; eles passaram a mandar `X-Service-Token`,
+    # porque a borda pública publicava o prefixo. Ver `router._caller`.
     admin_token: str = ""
+
+    # AUT-63 — porta de SERVIÇO, só leitura e motor (mailing, scheduler, evaluation,
+    # workflow, skill-flow-service, mcp-server). Vazio NÃO libera: só fecha a porta.
+    service_token: str = ""
 
     # Mesmo segredo HS256 da auth-api — valida o Bearer do caminho ABAC.
     jwt_secret:  str = ""

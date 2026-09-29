@@ -479,8 +479,10 @@ async def campaign_dispatch_open(
     when = at or datetime.now(tz=timezone.utc)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
+            from .config import settings as _cfg   # AUT-63: o motor exige credencial
             resp = await client.get(
                 f"{calendar_api_url}/v1/engine/is-open",
+                headers={"X-Service-Token": _cfg.calendar_service_token} if _cfg.calendar_service_token else {},
                 params={
                     "tenant_id":   tenant_id,
                     "entity_type": "evaluation_campaign",

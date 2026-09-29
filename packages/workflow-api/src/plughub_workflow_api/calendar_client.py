@@ -49,9 +49,12 @@ async def calculate_deadline(
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            from .config import get_settings   # AUT-63: o motor exige credencial
+            token = get_settings().calendar_service_token
             resp = await client.post(
                 f"{calendar_api_url}/v1/engine/add-business-duration",
                 json=payload,
+                headers={"X-Service-Token": token} if token else {},
             )
             resp.raise_for_status()
             data = resp.json()
