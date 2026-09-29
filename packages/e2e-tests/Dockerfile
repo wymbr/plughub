@@ -27,7 +27,6 @@ COPY packages/e2e-tests/package*.json packages/e2e-tests/
 COPY packages/e2e-tests/lib           packages/e2e-tests/lib
 COPY packages/e2e-tests/scenarios     packages/e2e-tests/scenarios
 COPY packages/e2e-tests/fixtures      packages/e2e-tests/fixtures
-COPY packages/e2e-tests/services      packages/e2e-tests/services
 COPY packages/e2e-tests/runner.ts     packages/e2e-tests/runner.ts
 COPY packages/e2e-tests/tsconfig.json packages/e2e-tests/tsconfig.json
 

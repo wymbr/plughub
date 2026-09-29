@@ -1,7 +1,7 @@
 {
   "name": "skill-flow-service",
   "version": "1.0.0",
-  "description": "Thin HTTP wrapper for @plughub/skill-flow-engine — E2E test harness only",
+  "description": "Skill Flow executor: HTTP service (/execute) that runs @plughub/skill-flow-engine for the orchestrator-bridge",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -10,8 +10,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@plughub/schemas":          "file:../../../schemas",
-    "@plughub/skill-flow-engine": "file:../../../skill-flow-engine",
+    "@plughub/schemas":          "file:../schemas",
+    "@plughub/skill-flow-engine": "file:../skill-flow-engine",
     "express": "^4.21.0",
     "ioredis": "^5.3.0",
     "js-yaml": "^4.1.0",

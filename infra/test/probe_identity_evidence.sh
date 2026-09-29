@@ -67,7 +67,7 @@ out = {
 }
 guardas = {
   "mcp writeContextTag": ("packages/mcp-server-plughub/src/tools/journey.ts", r"if \(isReservedIdentityTag\(tag\)\) throw new ReservedContextTagError"),
-  "skill-flow-service ContextStore.set": ("packages/e2e-tests/services/skill-flow-service/src/context-store.ts", r"if \(isReservedIdentityTag\(tag\)\)"),
+  "skill-flow-service ContextStore.set": ("packages/skill-flow-service/src/context-store.ts", r"if \(isReservedIdentityTag\(tag\)\)"),
   "sdk ContextStore.set": ("packages/sdk/src/context-store.ts", r"if \(isReservedIdentityTag\(tag\)\)"),
   "py write_context_tags": ("packages/py-contextstore/src/plughub_contextstore/writer.py", r"reservadas = sorted\(t for t in tags if is_reserved_identity_tag\(t\)\)"),
 }

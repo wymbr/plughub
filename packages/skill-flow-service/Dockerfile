@@ -9,11 +9,11 @@ COPY packages/schemas ./packages/schemas
 COPY packages/skill-flow-engine ./packages/skill-flow-engine
 
 # Copy the skill-flow-service
-COPY packages/e2e-tests/services/skill-flow-service ./packages/e2e-tests/services/skill-flow-service
+COPY packages/skill-flow-service ./packages/skill-flow-service
 
 # Fix workspace:* reference for schemas in skill-flow-service
-RUN sed -i 's|"@plughub/schemas": "workspace:\*"|"@plughub/schemas": "file:../../../schemas"|g' \
-    packages/e2e-tests/services/skill-flow-service/package.json
+RUN sed -i 's|"@plughub/schemas": "workspace:\*"|"@plughub/schemas": "file:../schemas"|g' \
+    packages/skill-flow-service/package.json
 
 # Fix workspace:* reference for schemas in skill-flow-engine
 RUN sed -i 's|"@plughub/schemas": "workspace:\*"|"@plughub/schemas": "file:../schemas"|g' \
@@ -29,11 +29,11 @@ RUN npm install && NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 # Build skill-flow-service
 # Add @plughub/skill-flow-engine as a local dependency via package.json
-WORKDIR /app/packages/e2e-tests/services/skill-flow-service
+WORKDIR /app/packages/skill-flow-service
 RUN node -e " \
   const fs = require('fs'); \
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); \
-  pkg.dependencies['@plughub/skill-flow-engine'] = 'file:../../../skill-flow-engine'; \
+  pkg.dependencies['@plughub/skill-flow-engine'] = 'file:../skill-flow-engine'; \
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2)); \
 "
 RUN npm install && NODE_OPTIONS="--max-old-space-size=4096" npm run build
@@ -48,7 +48,7 @@ WORKDIR /app
 
 COPY --from=builder /app/packages/schemas ./packages/schemas
 COPY --from=builder /app/packages/skill-flow-engine ./packages/skill-flow-engine
-COPY --from=builder /app/packages/e2e-tests/services/skill-flow-service ./packages/e2e-tests/services/skill-flow-service
+COPY --from=builder /app/packages/skill-flow-service ./packages/skill-flow-service
 
 # Make skill YAMLs available at /app/skills (SKILLS_DIR in docker-compose)
 COPY --from=builder /app/packages/skill-flow-engine/skills /app/skills
@@ -66,7 +66,7 @@ COPY --from=builder /app/packages/skill-flow-engine/skills /app/skills
 # contagem — o probe reportava "nenhum vermelho" com o arquivo inerte.
 COPY infra/test/fixtures ./infra/test/fixtures
 
-WORKDIR /app/packages/e2e-tests/services/skill-flow-service
+WORKDIR /app/packages/skill-flow-service
 
 EXPOSE 3400
 

@@ -363,7 +363,7 @@ services:
   skill-flow-service:
     build:
       context: .
-      dockerfile: packages/e2e-tests/services/skill-flow-service/Dockerfile
+      dockerfile: packages/skill-flow-service/Dockerfile
     container_name: full-skill-flow-service
     ports:
       - "3400:3400"

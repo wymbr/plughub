@@ -204,7 +204,7 @@ services:
   skill-flow-service:
     build:
       context: ../..
-      dockerfile: packages/e2e-tests/services/skill-flow-service/Dockerfile
+      dockerfile: packages/skill-flow-service/Dockerfile
     ports:
       - "3400:3400"
     environment:

@@ -31,7 +31,7 @@ BRIDGE="${BRIDGE_CONTAINER:-plughub-demo-orchestrator-bridge-1}"
 TENANT="${TENANT:-tenant_demo}"
 WF=packages/mcp-server-plughub/src/tools/workflow.ts
 LISTA=packages/schemas/src/session-bound-tools.ts
-SFS=packages/e2e-tests/services/skill-flow-service/src/index.ts
+SFS=packages/skill-flow-service/src/index.ts
 FALHA=0
 INCONCL=0
 

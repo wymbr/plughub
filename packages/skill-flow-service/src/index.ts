@@ -40,7 +40,7 @@ const MCP_SERVER_URLS: Record<string, string> = {
 
 // SKILLS_DIR: resolved relative to this file's location at runtime.
 // Default: packages/skill-flow-engine/skills (dev) or /app/skills (Docker).
-const _defaultSkillsDir = path.resolve(__dirname, "../../../../skill-flow-engine/skills")
+const _defaultSkillsDir = path.resolve(__dirname, "../../skill-flow-engine/skills")
 const SKILLS_DIR = process.env["SKILLS_DIR"] ?? _defaultSkillsDir
 
 // DELEGATION_JOB_TTL_S: how long the delegation Redis key lives (1h).

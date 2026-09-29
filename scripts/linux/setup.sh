@@ -102,7 +102,7 @@ BUILD_PACKAGES=(
   "packages/skill-flow-engine"
   "packages/mcp-server-plughub"
   "packages/agent-registry"
-  "packages/e2e-tests/services/skill-flow-service"
+  "packages/skill-flow-service"
 )
 
 INSTALL_ONLY_PACKAGES=(

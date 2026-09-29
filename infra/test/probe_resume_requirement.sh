@@ -58,7 +58,7 @@ muta() {  # $1 arquivo relativo · $2 âncora · $3 troca → imprime o censo da
   local d; d=$(mktemp -d)
   mkdir -p "$d/packages"
   for p in schemas/src agent-registry/src/routes agent-registry/src/lib skill-flow-engine/src/steps skill-flow-engine/skills \
-           e2e-tests/services/skill-flow-service/src channel-gateway/src/plughub_channel_gateway/adapters \
+           skill-flow-service/src channel-gateway/src/plughub_channel_gateway/adapters \
            channel-gateway/src/plughub_channel_gateway/identity mcp-server-plughub/src/tools; do
     mkdir -p "$d/packages/$p"; cp -r "packages/$p/." "$d/packages/$p/"
   done

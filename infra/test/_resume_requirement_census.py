@@ -49,7 +49,7 @@ eng_c = rd("packages/skill-flow-engine/src/steps/collect.ts")
 f["engine_repassa"] = [n for n, s in (("delegate", eng_d), ("collect", eng_c))
                        if "resolveResumeRequirement(step, ctx)" in s and "resume_requires: exigencia.value" in s]
 
-sfs = rd("packages/e2e-tests/services/skill-flow-service/src/index.ts")
+sfs = rd("packages/skill-flow-service/src/index.ts")
 f["sfs_repassa"] = sfs.count("resume_requires: params.resume_requires")
 
 wh = rd("packages/channel-gateway/src/plughub_channel_gateway/adapters/webhook.py")

@@ -417,6 +417,7 @@ plughub/
     mcp-server-knowledge/        ← Vector knowledge base for RAG agents — port 3401
     mcp-server-auth/             ← domain MCP: authentication and PIN validation (demo stub) — port 3150
     skill-flow-engine/           ← Skill Flow interpreter
+    skill-flow-service/          ← executor HTTP do Skill Flow (`/execute`), chamado pelo bridge — port 3460
     skill-flow-worker/           ← Kafka consumer, runs SkillFlow for workflow instances
     orchestrator-bridge/         ← reconciliação (instance_bootstrap), RegistrySyncer, pool hooks
     ai-gateway/                  ← LLM calls, sentiment, context extraction (Python)
@@ -478,6 +479,7 @@ plughub/
 | scheduler-api | Python | Python 3.11+ | FastAPI + asyncpg + Redis — port 3650 |
 | workflow-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3800 |
 | skill-flow-worker | TypeScript | Node 20+ | Kafka consumer + SkillFlowEngine bridge |
+| skill-flow-service | TypeScript | Node 20+ | Express + ioredis — executor do `/execute` (SFS-01: morava em `e2e-tests/services/` rotulado *harness*) |
 | channel-gateway | Python | Python 3.11+ | FastAPI + aiokafka + channel adapters |
 | pricing-api | Python | Python 3.11+ | FastAPI + asyncpg + openpyxl — port 3900 |
 | auth-api | Python | Python 3.11+ | FastAPI + asyncpg + bcrypt + python-jose — port 3200 |

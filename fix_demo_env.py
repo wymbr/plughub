@@ -59,7 +59,7 @@ patch(
 # ── 2. skill-flow-service dist/index.js — unwrap data.result ──────────────────
 print("\n[2] skill-flow-service/dist/index.js — unwrap AI Gateway ReasonResponse")
 
-DIST_JS = "packages/e2e-tests/services/skill-flow-service/dist/index.js"
+DIST_JS = "packages/skill-flow-service/dist/index.js"
 
 patch(
     DIST_JS,

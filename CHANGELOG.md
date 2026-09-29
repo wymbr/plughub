@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-28 (10) — SFS-01: o executor de skill-flow é pacote, não harness de teste
+
+**Decisão do dono.** O `skill-flow-service` executa todo `/execute` do bridge em qualquer compose
+(e, desde a DUR-01, o estacionamento do `menu`). Mesmo assim morava em
+`packages/e2e-tests/services/` e se descrevia, no próprio `package.json`, como *"E2E test harness
+only"*. Não era defeito de comportamento: era um rótulo que convidava a tratar como descartável o
+caminho que decide prazo de token e de sessão. Das duas saídas da ficha, a v1 não comportava a de
+"declarar que o demo roda o harness", porque não existe outro executor.
+
+**O que mudou.**
+
+- **O pacote foi para `packages/skill-flow-service/`**, com `git mv`, para o histórico acompanhar os
+  arquivos. A descrição passou a dizer o que ele é.
+- **Caminhos ajustados:**
+  - dependências `file:` e `package-lock.json`;
+  - Dockerfile (e o `WORKDIR` da imagem, agora `/app/packages/skill-flow-service`);
+  - o diretório default de skills;
+  - os quatro composes (`demo`, `full` e os dois do e2e) e o `scripts/linux/setup.sh`;
+  - três gates que liam o fonte pelo caminho antigo (`probe_identity_evidence`,
+    `probe_session_bound_resume`, `probe_resume_requirement` e o censo dele);
+  - o Dockerfile do e2e, que copiava uma pasta `services/` que ficou vazia;
+  - o `fix_demo_env.py`.
+- **`CLAUDE.md`**: o pacote entrou na estrutura do repositório e na tabela de stack.
+- **Docs históricos** que citam o caminho antigo ficaram como estão: registram quando foram escritos.
+
+**Medido.**
+- Imagem reconstruída pelo Dockerfile novo, saudável, com `WORKDIR` no caminho novo.
+- 5 de 5 conversas de webchat concluídas pela imagem nova.
+- `probe_ts_suites` verde: 1 399 testes TS executados a partir desta imagem.
+- `probe_identity_evidence` e `probe_session_bound_resume`: OK.
+- `probe_resume_requirement`: verde. ⚠️ Na primeira rodada a jornada de consulta reprovou; na
+  segunda passou inteira (6/6 e toda a cadeia). Nenhuma das duas rodadas mostrou relação com a
+  mudança de caminho, então fica registrado como instabilidade, não como causa.
+
 ## 2026-09-28 (9) — ALW-18: o histórico do Console é projeção do stream, e a lista paralela sai
 
 **Medido antes de consertar**, como a ficha pedia, nas 326 sessões vivas do demo. A lista
