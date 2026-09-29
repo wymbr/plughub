@@ -171,7 +171,11 @@ export class McpTestClient {
 
   async connect(): Promise<void> {
     const sseUrl = new URL(`${this.mcpServerUrl}/sse`);
-    const transport = new SSEClientTransport(sseUrl);
+    // CAP-10 — o transporte exige credencial de serviço; sem ela o servidor responde 401.
+    const token = process.env["MCP_INTERNAL_SERVICE_TOKEN"] ?? "";
+    const transport = new SSEClientTransport(sseUrl, {
+      requestInit: { headers: token ? { "x-service-token": token } : {} },
+    });
     await this.client.connect(transport);
     this.connected = true;
   }

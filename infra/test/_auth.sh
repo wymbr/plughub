@@ -167,6 +167,43 @@ plughub_gw_service_token() {
   printf '%s' "$t"
 }
 
+# CAP-10 (2026-09-29) — o transporte MCP (`/sse`, `/messages`) exige `x-service-token`
+# contra o `MCP_INTERNAL_SERVICE_TOKEN` do mcp-server. Mesmo contrato do token do
+# gateway acima: lido do PROPRIO container na hora (ou do env), vazio ⇒ INCONCLUSIVO —
+# um probe que recebe 401 no /sse fica esperando um `endpoint` que nunca chega, e o
+# vermelho sairia com cara de "o servidor nao responde".
+plughub_mcp_service_token() {
+  local t="${MCP_INTERNAL_SERVICE_TOKEN:-}"
+  [ -z "$t" ] && t=$(docker exec "${MCP_CONTAINER:-plughub-demo-mcp-server-plughub-1}" \
+                       printenv MCP_INTERNAL_SERVICE_TOKEN 2>/dev/null)
+  if [ -z "$t" ]; then
+    echo "INCONCLUSIVO: MCP_INTERNAL_SERVICE_TOKEN vazio (mcp-server no ar?)." >&2
+    exit 2
+  fi
+  printf '%s' "$t"
+}
+
+# O transporte, e so ele: `/api/*` do mesmo servidor confere o Bearer do usuario.
+_ph_mcp_transport_url() {
+  case "$1" in */sse|*/messages\?*|*/messages) return 0 ;; esac
+  return 1
+}
+
+# Shim para scripts que so falam com o transporte MCP (nao querem login).
+plughub_mcp_transport_shim() {
+  curl() {
+    local a u=""
+    for a in "$@"; do
+      case "$a" in http://*|https://*) u="$a" ;; esac
+    done
+    if _ph_mcp_transport_url "$u"; then
+      command curl -H "x-service-token: $(plughub_mcp_service_token)" "$@"
+    else
+      command curl "$@"
+    fi
+  }
+}
+
 _ph_gw_identity_url() {
   case "$1" in */v1/channels/webhook/identity/*|*/v1/channels/webhook/pending/*) return 0 ;; esac
   return 1
@@ -180,7 +217,9 @@ plughub_gw_service_shim() {
     for a in "$@"; do
       case "$a" in http://*|https://*) u="$a" ;; esac
     done
-    if _ph_gw_identity_url "$u"; then
+    if _ph_mcp_transport_url "$u"; then
+      command curl -H "x-service-token: $(plughub_mcp_service_token)" "$@"
+    elif _ph_gw_identity_url "$u"; then
       command curl -H "X-Service-Token: $(plughub_gw_service_token)" -H "X-Service-Name: probe" "$@"
     else
       command curl "$@"
@@ -194,6 +233,10 @@ plughub_auth_curl_shim() {
     for a in "$@"; do
       case "$a" in http://*|https://*) u="$a" ;; esac
     done
+    if _ph_mcp_transport_url "$u"; then
+      command curl -H "x-service-token: $(plughub_mcp_service_token)" "$@"
+      return
+    fi
     if _ph_gw_identity_url "$u"; then
       command curl -H "X-Service-Token: $(plughub_gw_service_token)" -H "X-Service-Name: probe" "$@"
       return

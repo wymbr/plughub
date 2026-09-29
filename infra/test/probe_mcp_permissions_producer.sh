@@ -130,6 +130,11 @@ done
 echo
 echo "══ atravessando a borda (agent_login + invoke, MCP sobre SSE) ══"
 
+# CAP-10 — o transporte MCP exige credencial de serviço; vazio ⇒ INCONCLUSIVO (exit 2).
+. "$HERE/_auth.sh"
+MCP_INTERNAL_SERVICE_TOKEN="$(plughub_mcp_service_token)" || exit 2
+export MCP_INTERNAL_SERVICE_TOKEN
+
 if [ "$NODE_RUNNER" = "host" ]; then
   OUT="$(node "$NODE_PROBE" 2>&1)"
 else
@@ -139,6 +144,7 @@ else
       -e REGISTRY_URL="$REGISTRY_URL_C" \
       -e MCP_SSE_URL="$MCP_SSE_URL_C" \
       -e TENANT_ID="$TENANT_ID" \
+      -e MCP_INTERNAL_SERVICE_TOKEN \
       -e AGENT_REGISTRY_SERVICE_TOKEN="${AGENT_REGISTRY_SERVICE_TOKEN:-changeme_agent_registry_service_token_demo}" \
       node:20 node "/repo/infra/test/$(basename "$NODE_PROBE")" 2>&1)"
 fi

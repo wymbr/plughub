@@ -24,7 +24,7 @@ async function main() {
   const client = new Client({ name: "probe-pid03", version: "0" })
   const put = (k, tag, value, at) => redis.hset(k, tag, JSON.stringify({ value, updated_at: at, source: "probe" }))
   try {
-    await client.connect(new SSEClientTransport(new URL(BASE + "/sse")))
+    await client.connect(new SSEClientTransport(new URL(BASE + "/sse"), { requestInit: { headers: { "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" } } })  /* CAP-10 */)
     const tokenDe = async sid => {
       const r = await fetch(BASE + "/internal/session-token", { method: "POST",
         headers: { "content-type": "application/json", "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" },

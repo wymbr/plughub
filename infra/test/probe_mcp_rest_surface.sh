@@ -113,7 +113,7 @@ GET /api/work_queue/list|gateada|requireJwtGrant agent_assist.atender read_only 
 GET /api/work_queue/pending|gateada|requireJwtGrant agent_assist.atender read_only leitura (CAP-12)
 GET /health|aberta-isenta|liveness do compose; exigir credencial acopla o boot da stack ao do emissor de token (mesma isencao do analytics-api)
 GET /internal/context-audit|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
-GET /sse|aberta-divida|transporte MCP, anonimo por construcao; NAO publicado pela borda (CAP-09/CAP-10)
+GET /sse|gateada|requireTransportCredential: x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, FALHA FECHADA (503 sem env) — CAP-10 2026-09-29; e NAO publicado pela borda
 POST /api/dialog/preview|gateada|verifyJwtPayload SEM campo, por decisao escrita no handler: funcao PURA sobre o corpo enviado (nao le store); um campo aqui seria segundo portao, mais grosseiro, sobre config.dialog_forms. Se passar a ler a forma do store, ganha portao de escopo ANTES
 POST /api/agent_done/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write escrita (CAP-12)
 POST /api/force-complete/:sessionId|gateada|requireJwtGrant agent_assist.supervisionar read_write
@@ -126,7 +126,7 @@ POST /api/work_queue/release/:sessionId|gateada|requireJwtGrant agent_assist.ate
 POST /internal/context-snapshot|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
 POST /internal/identity-evidence|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, FALHA FECHADA (503 sem env); a chegada autenticada por canal vira evidencia de posse (PID-09)
 POST /internal/session-token|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, FALHA FECHADA (503 sem env); unico emissor do token ligado a sessao (PID-01)
-POST /messages|aberta-divida|canal de escrita do transporte MCP; NAO publicado pela borda (CAP-09/CAP-10)
+POST /messages|gateada|requireTransportCredential, o mesmo portao do /sse: o sessionId da conexao nao e credencial — CAP-10 2026-09-29
 PUT /api/agent-pause|gateada|requireJwtGrant agent_assist.atender read_write
 PUT /api/agent-resume|gateada|requireJwtGrant agent_assist.atender read_write
 POST /api/agent-clear-pause|gateada|requireJwtGrant agent_assist.atender read_write
@@ -196,9 +196,15 @@ fi
 
 echo
 echo "── B · o transporte MCP atravessa a BORDA? ──"
-CT_BORDA=$(curl -s -m 6 -o /dev/null -w '%{content_type}' "$BORDA/sse" 2>/dev/null || echo "")
-CT_DIR=$(curl -s -m 3 -o /dev/null -w '%{content_type}' "$DIRETO/sse" 2>/dev/null || echo "")
-if [ -z "$CT_DIR" ]; then
+# CAP-10: o /sse exige credencial de serviço. As DUAS requisições a levam — sem ela a
+# direta devolveria 401 (a testemunha cairia) e a da borda não distinguiria "não
+# publica" de "publica e recusa". Com ela, só o content-type separa, como antes.
+MCP_TOK="${MCP_INTERNAL_SERVICE_TOKEN:-$(docker exec "${MCP_CONTAINER:-plughub-demo-mcp-server-plughub-1}" printenv MCP_INTERNAL_SERVICE_TOKEN 2>/dev/null)}"
+CT_BORDA=$(curl -s -m 6 -o /dev/null -w '%{content_type}' -H "x-service-token: $MCP_TOK" "$BORDA/sse" 2>/dev/null || echo "")
+CT_DIR=$(curl -s -m 3 -o /dev/null -w '%{content_type}' -H "x-service-token: $MCP_TOK" "$DIRETO/sse" 2>/dev/null || echo "")
+if [ -z "$MCP_TOK" ]; then
+  inc "MCP_INTERNAL_SERVICE_TOKEN ilegível (env ou container) — sem credencial, a testemunha do /sse não abre"
+elif [ -z "$CT_DIR" ]; then
   inc "mcp-server inalcançável em $DIRETO — sem testemunha de que /sse existe"
 elif ! echo "$CT_DIR" | grep -qi "event-stream"; then
   bad "TESTEMUNHA FALHOU: $DIRETO/sse não é event-stream (é '$CT_DIR') — o resto do ramo não vale"
@@ -381,11 +387,29 @@ else
 fi
 
 echo
+echo "── G · o TRANSPORTE exige credencial de serviço (CAP-10) ──"
+# Quatro medições e cada uma com a sua contraparte: um 401 universal passaria por
+# portão, e por isso o POST com a credencial CERTA tem de passar dele (404: a sessão
+# `x` não existe — o portão deixou entrar, o handler é que não achou a conexão).
+sse_code() { curl -s -m 3 -o /dev/null -w '%{http_code}' "$@" "$DIRETO/sse" 2>/dev/null; true; }
+msg_code() { curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+               -d '{}' "$@" "$DIRETO/messages?sessionId=probe_cap10_inexistente" 2>/dev/null; true; }
+if [ -z "$MCP_TOK" ]; then
+  inc "sem MCP_INTERNAL_SERVICE_TOKEN não há controle positivo — o ramo não distingue fechado de quebrado"
+else
+  c=$(sse_code);                                    [ "$c" = "401" ] && ok "/sse sem credencial → 401"           || bad "/sse sem credencial → $c (esperado 401)"
+  c=$(sse_code -H "x-service-token: errado_${MCP_TOK}"); [ "$c" = "401" ] && ok "/sse com credencial ERRADA → 401" || bad "/sse com credencial errada → $c (esperado 401)"
+  c=$(sse_code -H "x-service-token: $MCP_TOK");    [ "$c" = "200" ] && ok "/sse com a credencial → 200 (controle positivo)" || bad "/sse com a credencial → $c (esperado 200)"
+  c=$(msg_code);                                    [ "$c" = "401" ] && ok "/messages sem credencial → 401"      || bad "/messages sem credencial → $c (esperado 401)"
+  c=$(msg_code -H "x-service-token: $MCP_TOK");    [ "$c" = "404" ] && ok "/messages com a credencial passa do portão (404: sessão inexistente)" || bad "/messages com a credencial → $c (esperado 404)"
+fi
+
+echo
 echo "──────────────────────────────────────────────────────────"
 echo "  FAIL=$FAIL  INCONCLUSIVO=$INCONCL"
 if [ "$INCONCL" -gt 0 ]; then echo "⏭️  INCONCLUSIVO — não mediu tudo; isto NÃO é verde"; exit 3; fi
 if [ "$FAIL" -eq 0 ]; then
-  echo "✅ superfície estável — transporte fora da borda E fora da LAN; as 9 da CAP-12 fechadas"
+  echo "✅ superfície estável — transporte autenticado, fora da borda E fora da LAN; as 9 da CAP-12 fechadas"
   exit 0
 fi
 echo "❌ a superfície MUDOU sem a declaração acompanhar"

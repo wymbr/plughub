@@ -61,6 +61,8 @@ DC=${DC:-docker compose -f docker-compose.demo.yml}
 AUTH=${AUTH:-http://localhost:3202/auth}
 MCP=${MCP:-http://localhost:3100}
 TENANT=${TENANT:-tenant_demo}
+# CAP-10 — o transporte MCP exige credencial de serviço; o shim a anexa só em /sse e /messages.
+. "$(dirname "$0")/_auth.sh"; plughub_mcp_transport_shim
 OP_EMAIL=${OP_EMAIL:-operator@plughub.local}
 OP_PASS=${OP_PASS:-changeme_operator}
 

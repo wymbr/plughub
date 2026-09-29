@@ -52,7 +52,7 @@ if (process.argv.includes("--live")) {
   // SEM Authorization de propósito: se conectar, isso É a medição — o
   // `packages/mcp-server-plughub/CLAUDE.md` afirma que toda tool autentica por JWT
   // no header, e o probe compara essa afirmação com o que o transporte faz.
-  await c.connect(new SSEClientTransport(new URL(url)))
+  await c.connect(new SSEClientTransport(new URL(url), { requestInit: { headers: { "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" } } })  /* CAP-10 */)
   const { tools } = await c.listTools()
   await c.close().catch(() => {})
   console.log(JSON.stringify({

@@ -64,6 +64,19 @@ Default port: 3100.
   auto-serviço** — quem alcança a porta cunha um `session_token` assinado nomeando qualquer
   `skill_id`, então as 23 verificadas aceitam um token que qualquer um emite. A saída do dia
   do gatilho está nomeada no compose: `MCP_INTERNAL_SERVICE_TOKEN`, falhando FECHADO
+- ✅ **O transporte MCP exige credencial de serviço desde 2026-09-29 (CAP-10).** O gatilho
+  acima disparou com o plano da v1 (`docs/product/producao-v1.md`): instância dedicada com
+  réplicas, em Kubernetes ou compose multi-host, é deploy distribuído em qualquer das duas
+  — o mcp-server passa a ser alcançado pela rede. `GET /sse` e `POST /messages` conferem
+  `x-service-token` contra `MCP_INTERNAL_SERVICE_TOKEN` (`lib/transport-credential.ts`,
+  `requireTransportCredential`): ausente ou errado ⇒ **401**, env vazio ⇒ **503**, nunca
+  abre. O `sessionId` da conexão SSE não é credencial — o `/messages` tem o portão próprio.
+  Isso fecha o furo do `agent_login` auto-serviço: só quem tem o segredo de serviço alcança
+  a emissora. As 45 tools em dívida continuam dívida de defesa-em-profundidade (o
+  `session_token` por tool), agora atrás de um transporte autenticado. Único cliente de
+  produção: o `skill-flow-service`, que manda o header **só** para este servidor (nunca aos
+  MCP de domínio). O healthcheck do compose manda a credencial do próprio container e exige
+  200. Gate: ramo G do `infra/test/probe_mcp_rest_surface.sh`
 - ✅ **A ponte REST `/api/*` fechou em 2026-09-01 (CAP-12).** Das 25 rotas, **22
   gateiam**, 1 é isenta nomeada (`/health`, liveness do compose) e 2 são o transporte
   MCP, que a borda não publica. Antes disso, **nove rotas publicadas pela borda
@@ -85,8 +98,8 @@ Default port: 3100.
   Entram cliente, agente (humano pela instância `human-*`), supervisor e `system_notice`;
   ficam de fora fala transcrita, prompt de menu e mensagem dirigida sem o cliente. Nunca
   o `original_content`. Stream ilegível responde 500 nomeado, nunca `[]`
-- ⚠️ **A porta 3100 publica em LOOPBACK, e isso é o que mantém o transporte anônimo
-  fora de alcance.** Até 2026-09-01 os composes diziam `"3100:3100"` (= `0.0.0.0`), e
+- ⚠️ **A porta 3100 publica em LOOPBACK** — até a CAP-10 era o que mantinha o transporte
+  anônimo fora de alcance; hoje é a SEGUNDA camada, atrás da credencial de serviço. Até 2026-09-01 os composes diziam `"3100:3100"` (= `0.0.0.0`), e
   medido nesta máquina o IP de LAN **aceitava conexão** — qualquer aparelho na mesma
   rede alcançava o `/sse`, que não pede credencial e serve as 72 tools. *"A borda não
   publica o transporte"* era só METADE da resposta: a porta publicava sozinha.

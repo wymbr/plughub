@@ -993,6 +993,10 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   de confiar no verde. **Ramo legado morre CONTADO.**
 - **Injection guard**: `withGuard` (`mcp-server-plughub/src/infra/tool-guard.ts`) no registro das
   tools de `bpm.ts`/`workflow.ts`, e no `invoke` do `external-mcp`.
+- **O transporte MCP do mcp-server-plughub (`/sse`, `/messages`) exige credencial de SERVIÇO**
+  (`x-service-token` = `MCP_INTERNAL_SERVICE_TOKEN`, env vazio ⇒ 503) desde a CAP-10 — loopback
+  não é defesa num deploy distribuído, e `agent_login` é auto-serviço. Cliente novo manda o header;
+  o segredo nunca vai a MCP de domínio. Gate: ramo G do `probe_mcp_rest_surface.sh`.
 
 ---
 

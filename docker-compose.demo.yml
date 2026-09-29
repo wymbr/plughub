@@ -686,7 +686,11 @@ services:
       agent-registry:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"const r=require('http').get('http://localhost:3100/sse');r.on('response',s=>{s.destroy();process.exit(s.statusCode<500?0:1)});r.on('error',()=>process.exit(1));setTimeout(()=>{r.destroy();process.exit(1)},2000)\""]
+      # CAP-10: o /sse exige credencial de serviço, e o healthcheck manda a do PRÓPRIO
+      # container exigindo 200. Env ausente (503) ou errado (401) ⇒ UNHEALTHY, que é como a
+      # falta do segredo aparece no boot em vez de na 1ª tool — e checagem anônima não
+      # enche o log de recusas que esconderiam as de verdade.
+      test: ["CMD-SHELL", "node -e \"const r=require('http').get({host:'localhost',port:3100,path:'/sse',headers:{'x-service-token':process.env.MCP_INTERNAL_SERVICE_TOKEN||''}});r.on('response',s=>{s.destroy();process.exit(s.statusCode===200?0:1)});r.on('error',()=>process.exit(1));setTimeout(()=>{r.destroy();process.exit(1)},2000)\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -856,6 +860,9 @@ services:
       REDIS_URL: redis://redis:6379
       MCP_SERVER_URL: http://mcp-server-plughub:3100
       MCP_AUTH_URL:   http://mcp-server-auth:3150
+      # CAP-10 — credencial do transporte MCP (/sse, /messages). DEVE casar com o
+      # MCP_INTERNAL_SERVICE_TOKEN do mcp-server; vai só para ele, nunca ao mcp-server-auth.
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo
       # CTX-02 — sem esta env a AUDITORIA DE PLATEIA nao roda, e o censo de
       # runtime sai VAZIO (que nao e o mesmo que zero achados). E a primeira das
       # tres camadas que o CLAUDE.md documenta para o bridge: env ausente, porta
@@ -2363,6 +2370,7 @@ services:
       dockerfile: packages/e2e-tests/Dockerfile
     environment:
       MCP_SERVER_URL:           http://mcp-server-plughub:3100
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo   # CAP-10 — transporte MCP
       AGENT_REGISTRY_URL:       http://agent-registry:3300
       SKILL_FLOW_URL:           http://skill-flow-service:3460
       RULES_ENGINE_URL:         http://rules-engine:3201

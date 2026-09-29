@@ -38,6 +38,20 @@ const MCP_SERVER_URLS: Record<string, string> = {
   "mcp-server-auth":    MCP_AUTH_URL,
 }
 
+// CAP-10 — o transporte do mcp-server-plughub exige credencial de serviço. Ela vai SÓ
+// para ele: os servidores de domínio são outros processos, e mandar o segredo da casa a
+// quem não o confere é entregá-lo. Vazio não "abre" — o servidor recusa com 503.
+const MCP_INTERNAL_SERVICE_TOKEN = process.env["MCP_INTERNAL_SERVICE_TOKEN"] ?? ""
+if (!MCP_INTERNAL_SERVICE_TOKEN) {
+  console.error("[skill-flow-service] MCP_INTERNAL_SERVICE_TOKEN vazio — o mcp-server-plughub " +
+    "recusa o transporte, e nenhum step invoke/menu/notify chega às tools.")
+}
+function transportHeadersFor(serverUrl: string): Record<string, string> {
+  return serverUrl === MCP_SERVER_URL && MCP_INTERNAL_SERVICE_TOKEN
+    ? { "x-service-token": MCP_INTERNAL_SERVICE_TOKEN }
+    : {}
+}
+
 // SKILLS_DIR: resolved relative to this file's location at runtime.
 // Default: packages/skill-flow-engine/skills (dev) or /app/skills (Docker).
 const _defaultSkillsDir = path.resolve(__dirname, "../../skill-flow-engine/skills")
@@ -99,7 +113,9 @@ async function getMcpClientForUrl(serverUrl: string): Promise<Client> {
           { capabilities: {} }
         )
         const sseUrl = new URL(`${serverUrl}/sse`)
-        const transport = new SSEClientTransport(sseUrl)
+        const transport = new SSEClientTransport(sseUrl, {
+          requestInit: { headers: transportHeadersFor(serverUrl) },
+        })
         await client.connect(transport)
         entry.client = client
         console.log(`[skill-flow-service] MCP client connected to ${serverUrl}/sse (attempt ${attempt})`)

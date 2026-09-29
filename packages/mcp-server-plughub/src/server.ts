@@ -62,6 +62,7 @@ import type { DialogDeps }          from "./tools/dialog"
 import jwt                         from "jsonwebtoken"
 import { authorizeAgentWs, AGENT_WS_PROTOCOL } from "./lib/agent-ws-auth"
 import crypto                      from "crypto"
+import { judgeTransportCredential, TRANSPORT_CREDENTIAL_HEADER } from "./lib/transport-credential"
 import { signSessionBoundToken, sessionBoundTtlS } from "./infra/jwt"
 import { judgeArrivalEvidence } from "./lib/arrival-evidence"
 import { createRedisClient, keys } from "./infra/redis"
@@ -1362,8 +1363,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // cada GET /sse cria uma instância própria, mas compartilha os deps acima.
   const transports = new Map<string, SSEServerTransport>()
 
+  // CAP-10 — o transporte exige credencial de serviço, falhando FECHADO. Dito no boot
+  // também: sem o env, TODA chamada de tool do skill-flow-service é recusada.
+  if (!process.env["MCP_INTERNAL_SERVICE_TOKEN"]) {
+    console.error("[mcp-transport] MCP_INTERNAL_SERVICE_TOKEN não configurado — /sse e /messages " +
+      "RECUSAM (503): nenhum skill executa tool nenhuma até o env existir.")
+  }
+
   // GET /sse — cliente abre conexão SSE
   app.get("/sse", async (req: Request, res: Response) => {
+    if (!requireTransportCredential(req, res, "/sse")) return
     const transport = new SSEServerTransport("/messages", res)
 
     // Nova instância McpServer por conexão — exigência do SDK (Protocol.connect
@@ -1457,6 +1466,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
   // POST /messages — cliente envia mensagens MCP
   app.post("/messages", async (req: Request, res: Response) => {
+    // O sessionId do SSE não é credencial: sem este portão, quem soubesse (ou
+    // adivinhasse) o id de uma conexão aberta escreveria nela.
+    if (!requireTransportCredential(req, res, "/messages")) return
     const sessionId = req.query["sessionId"] as string | undefined
     if (!sessionId) {
       res.status(400).json({ error: "sessionId query parameter required" })
@@ -4874,3 +4886,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 }
 
+/**
+ * CAP-10 — portão do transporte MCP. Responde e devolve `false` quando recusa; o motivo
+ * vai ao log com o caminho e a origem, nunca o valor recebido.
+ */
+function requireTransportCredential(req: Request, res: Response, rota: string): boolean {
+  const veredito = judgeTransportCredential(
+    process.env["MCP_INTERNAL_SERVICE_TOKEN"], req.header(TRANSPORT_CREDENTIAL_HEADER),
+  )
+  if (veredito === "ok") return true
+  if (veredito === "not_configured") {
+    console.error(`[mcp-transport] ${rota} RECUSADO: MCP_INTERNAL_SERVICE_TOKEN não configurado`)
+    res.status(503).json({ error: "transport_token_not_configured" })
+    return false
+  }
+  console.warn(`[mcp-transport] ${rota} RECUSADO: credencial de serviço ausente ou errada ` +
+    `(origem ${req.socket.remoteAddress ?? "?"})`)
+  res.status(401).json({ error: "Unauthorized" })
+  return false
+}

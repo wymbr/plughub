@@ -30,7 +30,7 @@ async function token(redis, sid) {
 async function main() {
   const redis = new Redis(process.env.REDIS_URL || "redis://redis:6379")
   const client = new Client({ name: "probe-pid06", version: "0" })
-  await client.connect(new SSEClientTransport(new URL(BASE + "/sse")))
+  await client.connect(new SSEClientTransport(new URL(BASE + "/sse"), { requestInit: { headers: { "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" } } })  /* CAP-10 */)
   const chama = async (name, args) => {
     const r = await client.callTool({ name, arguments: args })
     let body = {}

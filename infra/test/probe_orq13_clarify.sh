@@ -34,6 +34,8 @@ set -uo pipefail
 
 MCP="${MCP:-http://localhost:3100}"
 TENANT="${TENANT:-tenant_demo}"
+# CAP-10 — o transporte MCP exige credencial de serviço; o shim a anexa só em /sse e /messages.
+. "$(dirname "$0")/_auth.sh"; plughub_mcp_transport_shim
 FORM="${FORM:-dialog_navegacao_atendimento_v1}"
 OUTPUT_KEY="${OUTPUT_KEY:-destino}"
 

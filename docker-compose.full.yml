@@ -277,7 +277,11 @@ services:
       agent-registry:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"const r=require('http').get('http://localhost:3100/sse');r.on('response',s=>{s.destroy();process.exit(s.statusCode<500?0:1)});r.on('error',()=>process.exit(1));setTimeout(()=>{r.destroy();process.exit(1)},2000)\""]
+      # CAP-10: o /sse exige credencial de serviço, e o healthcheck manda a do PRÓPRIO
+      # container exigindo 200. Env ausente (503) ou errado (401) ⇒ UNHEALTHY, que é como a
+      # falta do segredo aparece no boot em vez de na 1ª tool — e checagem anônima não
+      # enche o log de recusas que esconderiam as de verdade.
+      test: ["CMD-SHELL", "node -e \"const r=require('http').get({host:'localhost',port:3100,path:'/sse',headers:{'x-service-token':process.env.MCP_INTERNAL_SERVICE_TOKEN||''}});r.on('response',s=>{s.destroy();process.exit(s.statusCode===200?0:1)});r.on('error',()=>process.exit(1));setTimeout(()=>{r.destroy();process.exit(1)},2000)\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -370,6 +374,7 @@ services:
     environment:
       REDIS_URL:       redis://redis:6379
       MCP_SERVER_URL:  http://mcp-server-plughub:3100
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_full   # CAP-10 — transporte MCP (== mcp-server)
       AI_GATEWAY_URL:  http://ai-gateway:3200
       PORT:            "3400"
     depends_on:

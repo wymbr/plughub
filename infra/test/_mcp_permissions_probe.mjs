@@ -101,7 +101,7 @@ const apagarSkill = id =>
 
 async function comCliente(fn) {
   const client = new Client({ name: "cap06-probe", version: "1.0.0" }, { capabilities: {} })
-  await client.connect(new SSEClientTransport(new URL(MCP_SSE)))
+  await client.connect(new SSEClientTransport(new URL(MCP_SSE), { requestInit: { headers: { "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" } } })  /* CAP-10 */)
   try { return await fn(client) } finally { await client.close().catch(() => {}) }
 }
 

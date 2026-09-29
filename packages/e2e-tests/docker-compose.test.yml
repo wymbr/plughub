@@ -149,6 +149,7 @@ services:
       JWT_SECRET: test_e2e_secret_32chars
       KAFKA_BROKERS: kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
+      MCP_INTERNAL_SERVICE_TOKEN: test_e2e_mcp_internal_service_token   # CAP-10 — transporte MCP
     depends_on:
       redis:
         condition: service_healthy
@@ -464,6 +465,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       MCP_SERVER_URL: http://mcp-server-plughub:3100
+      MCP_INTERNAL_SERVICE_TOKEN: test_e2e_mcp_internal_service_token   # CAP-10 — == mcp-server
       AI_GATEWAY_URL: http://ai-gateway:3200
       PORT: "3400"
     depends_on:

@@ -37,6 +37,8 @@ set -uo pipefail
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MCP="${MCP:-http://localhost:3100}"
 TENANT="${TENANT:-tenant_demo}"
+# CAP-10 — o transporte MCP exige credencial de serviço; o shim a anexa só em /sse e /messages.
+. "$(dirname "$0")/_auth.sh"; plughub_mcp_transport_shim
 FORM="${FORM:-dialog_limite_roteiro}"
 # PID-04 (2026-09-14): o piloto `skill_limite_entrada_v1` foi substituído pela porta de
 # plataforma, que carrega o MESMO roteiro pela config do pool `limite_ia`.

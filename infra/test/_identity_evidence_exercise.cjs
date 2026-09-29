@@ -31,7 +31,7 @@ async function main() {
   await redis.set(`session:${SID}:meta`, JSON.stringify({ tenant_id: TENANT, pool_id: "probe_pid02" }), "EX", 300)
   const client = new Client({ name: "probe-pid02", version: "0" })
   try {
-    await client.connect(new SSEClientTransport(new URL(BASE + "/sse")))
+    await client.connect(new SSEClientTransport(new URL(BASE + "/sse"), { requestInit: { headers: { "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" } } })  /* CAP-10 */)
     const chama = async (name, args) => {
       const r = await client.callTool({ name, arguments: args })
       let body = {}

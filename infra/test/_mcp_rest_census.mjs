@@ -63,6 +63,8 @@ const CREDENCIAL = new Set([
   // renomeação — então o censo agora também devolve `unknown_guards` (abaixo), e o probe
   // reprova helper de guarda que não esteja nesta lista.
   "requireJwtGrant",
+  // CAP-10 (2026-09-29) — o portão do transporte MCP (`/sse`, `/messages`).
+  "requireTransportCredential",
 ])
 
 /**

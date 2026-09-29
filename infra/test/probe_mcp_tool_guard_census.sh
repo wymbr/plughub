@@ -213,6 +213,10 @@ fi
 
 echo
 echo "── B · tools/list no servidor NO AR ──"
+# CAP-10 — o transporte MCP exige credencial de serviço; vazio ⇒ INCONCLUSIVO (exit 2).
+. "$ROOT/infra/test/_auth.sh"
+MCP_INTERNAL_SERVICE_TOKEN="$(plughub_mcp_service_token)" || exit 2
+export MCP_INTERNAL_SERVICE_TOKEN
 LIVE_JSON="$(node "$CENSO" --live 2>&1)"
 if ! echo "$LIVE_JSON" | head -1 | grep -q '^{'; then
   echo "$LIVE_JSON" | head -3 | sed 's/^/     /'

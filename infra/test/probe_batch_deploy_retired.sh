@@ -143,6 +143,10 @@ print(sorted(x["skill_id"] for x in d)[0] if d else "")' 2>/dev/null)
   else falha "população: $OUTROS de $TOTAL registro(s) não vieram do promote"; fi
 fi
 
+# CAP-10 — o transporte MCP exige credencial de serviço; vazio ⇒ INCONCLUSIVO (exit 2).
+. "infra/test/_auth.sh"
+MCP_INTERNAL_SERVICE_TOKEN="$(plughub_mcp_service_token)" || exit 2
+export MCP_INTERNAL_SERVICE_TOKEN
 LIVE=$(node infra/test/_mcp_tool_guard_census.mjs --live 2>&1)
 if ! printf '%s' "$LIVE" | head -1 | grep -q '^{'; then
   incon "mcp-server inalcançável — tools/list não medido"

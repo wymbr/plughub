@@ -20,6 +20,8 @@ cd "$(dirname "$0")/../.." || exit 2
 RAIZ="$PWD"
 MCP="${MCP_URL:-http://localhost:3100}"
 TENANT="${PLUGHUB_TENANT_ID:-tenant_demo}"
+# CAP-10 — o transporte MCP exige credencial de serviço; o shim a anexa só em /sse e /messages.
+. "$(dirname "$0")/_auth.sh"; plughub_mcp_transport_shim
 REG_CT="${REG_CT:-plughub-demo-agent-registry-1}"
 FORMA="${FORMA:-dialog_probe_format_v1}"
 SCHEMAS_JS="/app/packages/agent-registry/node_modules/@plughub/schemas/dist/index.js"

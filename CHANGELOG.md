@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (2) — CAP-10: o transporte MCP exige credencial de serviço
+
+**Por que agora.** Em 2026-09-12 o dono decidiu que a resposta era TOPOLOGIA — a 3100 publica
+em loopback desde a CAP-13 — e deixou o gatilho escrito: *"a 3100 sair do loopback, ou o deploy
+virar distribuído"*. O plano da v1 (`producao-v1.md`) dispara o segundo: instância dedicada com
+réplicas (`PRD-06`), em Kubernetes ou compose multi-host (`PRD-01`), é deploy distribuído nas
+duas, e o mcp-server passa a ser alcançado pela rede. E o que a topologia escondia não era
+pequeno: `agent_login` é auto-serviço, então quem alcançasse a porta cunhava um
+`session_token` assinado para qualquer skill — fechar tool a tool não resolvia isso.
+
+**O que mudou.**
+- `GET /sse` e `POST /messages` conferem `x-service-token` contra `MCP_INTERNAL_SERVICE_TOKEN`
+  (a saída que a ficha já nomeava; mesma credencial das `/internal/*`). Sem ou errada ⇒ 401 com
+  a origem no log (nunca o valor); env vazio ⇒ 503, dito também no boot. O `/messages` tem o
+  portão próprio: o `sessionId` da conexão SSE não é credencial. Veredicto puro em
+  `lib/transport-credential.ts`.
+- `skill-flow-service`, o único cliente de produção, manda o header **só** ao
+  mcp-server-plughub — o segredo da casa nunca vai ao `mcp-server-auth` nem a outro MCP de
+  domínio. Env vazio é dito no boot.
+- Composes demo e full, os dois de e2e e o cliente da suíte e2e carregam o token.
+- O healthcheck do mcp-server manda a credencial do próprio container e exige **200**: env
+  ausente ou errado deixa o container UNHEALTHY no boot. A primeira versão aceitava `<500` e
+  enchia o log com uma recusa a cada checagem — ruído que esconderia recusa de verdade.
+- Probes: `_auth.sh` ganhou `plughub_mcp_service_token` e o shim do transporte (lido do
+  container na hora; vazio ⇒ INCONCLUSIVO); 6 probes de `curl`, 3 que rodam Node no host, 7
+  exercícios e os 3 scripts de dev do mcp-server passaram a mandar a credencial. `probe_mcp_rest_surface.sh`: `/sse` e `/messages`
+  viraram `gateada`, o ramo B leva a credencial nas duas pontas, e o ramo **G** novo mede as
+  quatro recusas com a contraparte (200 no `/sse`, 404 no `/messages` com a credencial certa).
+
+**Verificado.** `transport-credential.test.ts` 8 verdes. Ao vivo: ramo G todo verde; o
+`skill-flow-service` conecta de primeira; o `e2e-runner` com imagem antiga (sem header) foi
+recusado — 10 recusas, contêiner parado; conversa webchat real no `demo_ia` com menu, resposta
+e novo menu, zero recusas; `probe_session_bound_resume`, `probe_identity_evidence`,
+`probe_evidence_transport`, `probe_orq15_option_description` e `gate_form_by_node` verdes
+pelo transporte autenticado.
+
+**O que NÃO mudou.** As 45 tools sem `session_token` por tool continuam dívida de
+defesa-em-profundidade, agora atrás de um transporte autenticado. A publicação da 3100 no host
+(`CAP-15`) fica para o manifesto de produção. Achado de passagem, fora desta ficha: o
+`escalator` do rules-engine faz POST em `/tools/conversation_escalate`, rota que o mcp-server não
+tem, sem conferir o status — tarefa separada.
+
 ## 2026-09-29 (1) — PRM-04: o deploy que reduz a capacidade do pool deixa de ser o default e passa a ser dito
 
 **O defeito.** Em 2026-09-08 o primeiro deploy do `demo_ia` levou a capacidade de 10 para

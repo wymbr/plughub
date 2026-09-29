@@ -37,6 +37,8 @@ set -uo pipefail
 
 MCP="${MCP:-http://localhost:3100}"
 TENANT="${TENANT:-tenant_demo}"
+# CAP-10 — o transporte MCP exige credencial de serviço; o shim a anexa só em /sse e /messages.
+. "$(dirname "$0")/_auth.sh"; plughub_mcp_transport_shim
 REDIS_C="${REDIS_C:-plughub-demo-redis-1}"
 KAFKA_C="${KAFKA_C:-plughub-demo-kafka-1}"
 # ⚠️ `kafka:29092`, NUNCA `localhost:9092`. O broker anuncia PLAINTEXT como

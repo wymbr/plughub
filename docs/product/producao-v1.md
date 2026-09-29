@@ -81,7 +81,7 @@ backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · ~~
 
 ### Fase 3 — instância dedicada segura e operável
 
-`PRD-01` (segredos, TLS, borda com a allowlist dos sete prefixos) · `CAP-10`/`CAP-15` · `AUT-20` ·
+`PRD-01` (segredos, TLS, borda com a allowlist dos sete prefixos) · ~~`CAP-10`~~ (transporte MCP autenticado; fechada 2026-09-29)/`CAP-15` · `AUT-20` ·
 `AUT-58` · `CNS-25` · `AUD-03` (direitos do titular) · `PRD-07` (observabilidade, backup testado,
 runbook de atualização).
 
@@ -103,7 +103,7 @@ do Redis, broker) sem perder conversa — e o piloto.
 ## 5. Prioridade das fichas existentes
 
 **P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, ~~`ALW-18`~~ (fechada 2026-09-28), ~~`DUR-01`~~ (fechada 2026-09-28),
-~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), `CAP-10`, `CAP-15`, `AUT-20`, `AUT-58`, `AUD-03`.
+~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), ~~`CAP-10`~~ (fechada 2026-09-29), `CAP-15`, `AUT-20`, `AUT-58`, `AUD-03`.
 
 **P1 — necessário nos primeiros meses:** `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,
 `USG-03`, `USG-04`, `AIG-02`, `AIG-01`, `KPI-01..05`, `AUD-01`, `AUD-02`, `CAP-07`, `CAP-08`, `CAP-14`,

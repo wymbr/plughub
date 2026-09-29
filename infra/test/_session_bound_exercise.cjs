@@ -22,7 +22,7 @@ async function main() {
   const out = { casos: {}, detalhe: {} }
   const c = out.casos
   const client = new Client({ name: "probe-pid01", version: "0" })
-  await client.connect(new SSEClientTransport(new URL(BASE + "/sse")))
+  await client.connect(new SSEClientTransport(new URL(BASE + "/sse"), { requestInit: { headers: { "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" } } })  /* CAP-10 */)
   const chama = async (name, args) => {
     const r = await client.callTool({ name, arguments: args })
     let body = {}

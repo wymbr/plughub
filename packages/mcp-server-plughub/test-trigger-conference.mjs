@@ -106,7 +106,10 @@ async function main() {
   conf(`agent_type: ${AGENT_TYPE}  pool: ${POOL_ID}  identity: "${IDENTITY_TXT}"`)
   console.log()
 
-  const transport = new SSEClientTransport(new URL(`${MCP_URL}/sse`))
+  const transport = new SSEClientTransport(new URL(`${MCP_URL}/sse`), {
+    // CAP-10 — o transporte exige credencial de serviço.
+    requestInit: { headers: { "x-service-token": process.env.MCP_INTERNAL_SERVICE_TOKEN || "" } },
+  })
   const client    = new Client({ name: "conference-trigger", version: "1.0.0" })
   await client.connect(transport)
   ok("Conectado ao MCP server")
