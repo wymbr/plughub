@@ -1,5 +1,38 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (14) — AUT-69: o catálogo de módulos ABAC da auth-api deixa de ser público
+
+**Medido antes, pela borda (5174):** `GET /auth/modules` respondia 200 ao anônimo, com os 11
+módulos, cada campo, o domínio de acesso e os `role_defaults`. O docstring o declarava público
+(*"a UI precisa para renderizar formulários de permissão"*). Não dá acesso a nada, mas publica a
+estrutura que decide quem vê o quê. E, com `?tenant_id=X`, devolvia também os módulos de plugin
+registrados para **qualquer** tenant.
+
+**Quem lia (medido):**
+- a tela de Acesso (`AccessPage`, gateada por `config.users`), via `apiFetch`, que já manda Bearer;
+- o `_config_permissions_census.py` e os scripts `revoke_field.py` e `backfill_preset_fields.py`,
+  também com Bearer;
+- o `test_t8d_abac_rubrica.sh`, **anônimo**.
+
+Não há chamador interno de serviço.
+
+**O portão (`_catalog_reader`):**
+- Bearer com `config.users` **ou** `config.permissions` em leitura. O primeiro é quem abre a tela
+  de Acesso; o segundo é quem concede capacidade, e precisa do catálogo para isso;
+- o `tenant_id` da query tem de ser o do token (403 `tenant_mismatch`);
+- módulo de plugin de outro tenant, lido por id, é **404** (não confirma que existe).
+
+**Medido depois:** anônimo 401 na 3202 e na 5174, nas duas rotas; admin 200 com os 11 módulos;
+tenant divergente 403. O `test_t8d` passou a logar pelo seed e segue verde. O censo de permissões
+está verde. A tela de Acesso não foi aberta no navegador (o painel não desenhou nesta sessão); a
+chamada que ela faz foi repetida com o mesmo Bearer pela 5174 e respondeu 200.
+
+**Instrumentos:**
+- `TestModuleCatalogGate` (6 casos, com os dois controles positivos). Contraprova: com o leitor
+  deixando todo mundo passar, anônimo e Bearer-sem-grant ficam vermelhos;
+- as 2 linhas viraram `fechada`, e o `probe_route_anon_sweep` não tem mais dívida da AUT-69;
+- auth-api 101 testes.
+
 ## 2026-09-29 (13) — AUT-64: as 11 rotas abertas da workflow-api saíram, em vez de ganhar portão
 
 **A ficha mandava medir antes de fechar: o que não tivesse chamador sairia.** Nenhuma das 11

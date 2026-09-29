@@ -1194,6 +1194,8 @@ ponto em que a ordem do `py-authz` e a lista indexada da UI discordavam)*;
   que não vê nem edita; opcional para `admin`, sob pena de trancar o dono do tenant novo.
 - **Papel é PRESET DE NASCIMENTO, nunca portão.** `role_defaults` aplicado UMA vez, na criação; trocar
   o papel depois não reescreve grants, e múltiplos papéis rendem o MAIOR acesso por campo.
+- **O catálogo de módulos (`GET /auth/modules`) não é público** (AUT-69): exige Bearer com
+  `config.users` ou `config.permissions`, e o tenant é o do token. Ele descreve quem vê o quê.
 - **O menu tem um portão só, e ele é GRANT-FIRST.** Ausência de grants nunca é autorização — mesma
   inversão de `accessible_pools`, pela mesma razão.
 - **ESCOPO e CAPACIDADE são eixos distintos**, e um claim de escopo nunca concede capacidade.

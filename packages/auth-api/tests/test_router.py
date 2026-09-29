@@ -1132,3 +1132,57 @@ class TestTemplates:
             r = c.delete(f"/auth/templates/{uuid.uuid4()}",
                          headers=_perms_headers())
         assert r.status_code == 204
+
+
+# ─── TestModuleCatalogGate — AUT-69 ───────────────────────────────────────────
+# O catálogo de módulos ABAC era PÚBLICO e a borda o publicava. Agora: Bearer +
+# `config.users` OU `config.permissions` em leitura; o `tenant_id` da query é o do
+# token; módulo de plugin de outro tenant é 404.
+
+_MOD_PLATAFORMA = {
+    "module_id": "evaluation", "tenant_id": None, "label": "Avaliação", "icon": "x",
+    "nav_path": "/evaluation", "schema": {}, "active": True,
+    "registered_at": "", "updated_at": "",
+}
+_MOD_ALHEIO = {**_MOD_PLATAFORMA, "module_id": "plugin_x", "tenant_id": "outro_tenant"}
+
+
+class TestModuleCatalogGate:
+    def _list(self, c, headers, qs=""):
+        with patch("plughub_auth_api.router.db_mod.list_modules",
+                   new=AsyncMock(return_value=[_MOD_PLATAFORMA])):
+            return c.get(f"/auth/modules{qs}", headers=headers)
+
+    def test_anonimo_e_401(self, client):
+        c, _ = client
+        assert self._list(c, {}).status_code == 401
+        assert c.get("/auth/modules/evaluation").status_code == 401
+
+    def test_bearer_sem_grant_e_403(self, client):
+        c, _ = client
+        tok = _access_token(module_config={"config": {"calendars": {"access": "read_write", "scope": []}}})
+        assert self._list(c, {"Authorization": f"Bearer {tok}"}).status_code == 403
+
+    def test_controle_POSITIVO_config_users_le(self, client):
+        c, _ = client
+        r = self._list(c, _admin_headers("read_only"))
+        assert r.status_code == 200 and r.json()[0]["module_id"] == "evaluation"
+
+    def test_controle_POSITIVO_config_permissions_le(self, client):
+        c, _ = client
+        assert self._list(c, _perms_headers("read_only")).status_code == 200
+
+    def test_tenant_da_query_divergente_e_403(self, client):
+        c, _ = client
+        r = self._list(c, _admin_headers("read_only"), "?tenant_id=outro_tenant")
+        assert r.status_code == 403 and r.json()["detail"] == "tenant_mismatch"
+        assert self._list(c, _admin_headers("read_only"), "?tenant_id=tenant_test").status_code == 200
+
+    def test_modulo_de_outro_tenant_e_404_e_o_de_plataforma_200(self, client):
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.get_module",
+                   new=AsyncMock(return_value=_MOD_ALHEIO)):
+            assert c.get("/auth/modules/plugin_x", headers=_admin_headers("read_only")).status_code == 404
+        with patch("plughub_auth_api.router.db_mod.get_module",
+                   new=AsyncMock(return_value=_MOD_PLATAFORMA)):
+            assert c.get("/auth/modules/evaluation", headers=_admin_headers("read_only")).status_code == 200

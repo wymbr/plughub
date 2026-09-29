@@ -1006,8 +1006,8 @@ async def delete_template(template_id: str, request: Request) -> None:
 
 # ─── Module registry ──────────────────────────────────────────────────────────
 #
-# GET  /auth/modules                — lista módulos ativos (público, usado pela UI)
-# GET  /auth/modules/{module_id}    — detalhe do módulo
+# GET  /auth/modules                — lista módulos (Bearer + config.users|permissions, AUT-69)
+# GET  /auth/modules/{module_id}    — detalhe do módulo (idem)
 # POST /auth/modules                — registra/atualiza módulo (admin — para plugins)
 # PATCH /auth/modules/{module_id}/active — ativa/desativa módulo (admin)
 
@@ -1037,28 +1037,65 @@ def _module_to_dict(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _catalog_reader(request: Request, settings: Settings = Depends(_settings)) -> dict[str, Any]:
+    """Leitura do catálogo de módulos ABAC (AUT-69, 2026-09-29).
+
+    Era PÚBLICA por decisão declarada (*"a UI precisa para renderizar formulários de
+    permissão"*), e a borda (5174) a publicava: qualquer um lia a estrutura de campos e
+    presets que decide quem vê o quê, e, com `?tenant_id=`, os módulos de plugin de
+    qualquer tenant. A UI que precisa dela é a tela de Acesso, gateada por
+    `config.users`; quem concede capacidade (`config.permissions`) também precisa do
+    catálogo. Então: Bearer + qualquer um dos dois em leitura. Nenhum chamador interno
+    lê sem credencial (medido): o censo de permissões e os scripts já mandam Bearer.
+    """
+    claims = await _bearer_claims(request, settings)
+    if not (abac_can(claims, "config", "users", "read_only")
+            or abac_can(claims, "config", "permissions", "read_only")):
+        raise HTTPException(
+            status_code=403,
+            detail="forbidden: requires config.users or config.permissions (read_only)",
+        )
+    return claims
+
+
+def _catalog_row_visible(claims: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Módulo de plataforma (tenant nulo) ou do PRÓPRIO tenant do token."""
+    dono = row.get("tenant_id")
+    return not dono or dono == claims.get("tenant_id")
+
+
 @router.get("/modules", response_model=list[dict])
 async def list_modules(
     request: Request,
     tenant_id: str | None = None,
     active_only: bool = True,
+    claims: dict[str, Any] = Depends(_catalog_reader),
 ) -> list[dict]:
     """
     Lista módulos disponíveis.
     tenant_id=None → apenas módulos de plataforma (built-in).
-    tenant_id=X    → módulos de plataforma + módulos específicos do tenant X.
-    Público — não requer admin token (a UI precisa para renderizar formulários de permissão).
+    tenant_id=X    → módulos de plataforma + módulos específicos do tenant X, e X tem de
+                     ser o tenant do TOKEN (403 `tenant_mismatch`).
     """
+    if tenant_id and tenant_id != claims.get("tenant_id"):
+        logger.warning("modules RECUSA: sub=%s pediu tenant=%s com credencial de %s",
+                       claims.get("sub"), tenant_id, claims.get("tenant_id"))
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
     pool = _get_pool(request)
     rows = await db_mod.list_modules(pool, tenant_id=tenant_id, active_only=active_only)
     return [_module_to_dict(r) for r in rows]
 
 
 @router.get("/modules/{module_id}", response_model=dict)
-async def get_module(module_id: str, request: Request) -> dict:
+async def get_module(
+    module_id: str,
+    request: Request,
+    claims: dict[str, Any] = Depends(_catalog_reader),
+) -> dict:
     pool = _get_pool(request)
     row = await db_mod.get_module(pool, module_id)
-    if not row:
+    # Módulo de plugin de OUTRO tenant é 404, não 403 — não confirma que existe.
+    if not row or not _catalog_row_visible(claims, row):
         raise HTTPException(status_code=404, detail="Module not found")
     return _module_to_dict(row)
 

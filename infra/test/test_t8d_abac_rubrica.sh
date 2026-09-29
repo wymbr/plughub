@@ -20,7 +20,12 @@ for i in $(seq 1 30); do $CURL "$AUTH/health" >/dev/null 2>&1 && { echo "  ✓ n
 # Endpoint de LISTA (o que a tela de Access consome). NB: o router do auth-api tem
 # prefix="/auth" → os módulos ficam em /auth/modules (mesmo prefixo de /auth/login).
 # Robusto à forma: schema sob `permission_schema` ou `schema`, objeto ou string-JSON.
-M=$($CURL "$AUTH/auth/modules?tenant_id=$TENANT")
+# AUT-69 (2026-09-29): o catálogo exige Bearer com config.users|permissions.
+TOK=$($CURL -X POST "$AUTH/auth/login" -H 'content-type: application/json' \
+  -d "{\"email\":\"admin@plughub.local\",\"password\":\"changeme_admin\",\"tenant_id\":\"$TENANT\"}" \
+  | jq -r '.access_token // empty')
+[ -n "$TOK" ] || { echo "  ✗ login falhou — sem token não há o que medir"; exit 2; }
+M=$($CURL -H "Authorization: Bearer $TOK" "$AUTH/auth/modules?tenant_id=$TENANT")
 SCHEMA=$(echo "$M" | jq -c '
   ((. // []) | map(select(.module_id=="evaluation")) | .[0]) as $m
   | ($m.permission_schema // $m.schema) as $s
