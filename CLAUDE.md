@@ -1602,6 +1602,10 @@ endereça **POOL** — invariante S4) + `campaign_delivery` (estado por-campanha
   **`(pessoa, contexto)`**, nunca só pessoa.
 - **Agentes drenam via MCP e nunca tocam o DB** (`mailing_add` · `campaign_drain` ·
   `campaign_delivery_result`: wrappers finos, `isError` em não-2xx, auditados).
+- **Toda rota exige credencial, e o tenant é o do TOKEN** (AUT-60, 2026-09-29) — o `X-Tenant-ID`
+  sozinho era a credencial inteira. Tela = `outbound.configurar` (autoria) ou `operacao`
+  (leitura); **drain, resultado de entrega, elegibilidade e descadastro são SÓ SERVIÇO**
+  (`X-Service-Token`, as tools do mcp-server) — nenhuma tela os chama, e drenar é contatar.
 - **Pacing é a agenda recorrente**, não um laço no skill (tick drena ≤ `batch_size`). Idempotência:
   `UNIQUE(campaign_id, mailing_entry_id)` + `FOR UPDATE SKIP LOCKED` no claim.
 - **`contact_eligibility_check` é motor ÚNICO e agnóstico**, com precedência inegociável: `opt_out`

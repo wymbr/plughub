@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     # no gateway). Vazio ⇒ o gateway recusa, e o opt-out global deixa de ser LIDO.
     identity_service_token: str = ""
 
+    # AUT-60 (2026-09-29) — as rotas passaram a exigir credencial. Segredo do auth-api
+    # para verificar o Bearer da tela: VAZIO = o serviço não verifica ninguém e RECUSA
+    # (503) nomeando a env; nunca fica aberto por env não setada.
+    jwt_secret:    str = ""
+    # Porta ADITIVA para chamador sem usuário (mcp-server, seeds). Vazio NÃO libera nada:
+    # só fecha esta porta.
+    service_token: str = ""
+
     # Fase 4 — file import: cap on data rows per synchronous import (413 above it).
     import_max_rows: int = 5000
 

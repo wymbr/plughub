@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (9) — AUT-60: a mailing-api exige credencial em toda rota, e o tenant do usuário é o do token
+
+**Medido antes, pela borda pública (5174):** 22 de 23 rotas decidiam só com o `X-Tenant-ID`,
+header que qualquer um escreve. Com ele, `GET /v1/mailings` e `/v1/campaigns` devolviam as listas
+(as `entries` são contato de cliente). Sem credencial nenhuma, dava para escrever, drenar campanha
+(drenar é **contatar** cliente), checar elegibilidade e descadastrar.
+
+**Desenho da SCH-01 (scheduler-api), com o catálogo decidindo o mapa** (`infra/modules.yaml`,
+módulo `outbound`, grant-first):
+- **autoria** (mailings, entradas, importação, campanhas, políticas de contato) exige `configurar`
+  em escrita;
+- **leitura** (listas, entradas, entregas) aceita `configurar` **ou** `operacao`: quem monitora
+  entregas precisa ver a campanha;
+- **as quatro ações de AGENTE** (`drain`, resultado de entrega, elegibilidade, descadastro) são
+  **SÓ SERVIÇO**. O único chamador são as tools do mcp-server; nenhuma tela as chama, e dar a elas
+  um campo de usuário abriria à tela um efeito que nenhuma tela produz. Usuário com o grant máximo
+  recebe 403.
+
+O tenant do usuário é o do **token**. Uma diferença deliberada em relação à SCH-01: um
+`X-Tenant-ID` de usuário que divergir do token é 403 `tenant_mismatch` em vez de ser ignorado
+(regra da TNT-01). O serviço escolhe o tenant pelo header.
+
+**Uma segunda camada, e por quê.** O `_principal` decide DENTRO do handler, depois da validação do
+corpo, então o anônimo numa escrita receberia 422, que se lê como "rota aberta com corpo errado". A
+dependência de ROUTER `_exige_credencial` recusa credencial ausente ou inválida **antes** do corpo;
+capacidade e tenant continuam por rota. Ela também faz rota nova herdar a exigência. Contraprova,
+cada camada com a sua testemunha:
+- sem a dependência, só o censo HTTP fica vermelho;
+- com uma rota voltando ao `_tenant(x_tenant_id)`, cinco testes de capacidade e tenant ficam
+  vermelhos.
+
+**Chamadores migrados no mesmo trabalho:**
+- **mcp-server** (`outbound.ts`, o helper único das 5 tools): `MAILING_SERVICE_TOKEN`. Provado de
+  dentro do container: 200 com o token, 401 com token errado;
+- **`seed_outbound_demo.sh` e os 9 `smoke_outbound_*.sh`**: porta de serviço no array de headers.
+  `fase2` (governança) e `fase4` (importação) rodados, os dois OK;
+- **platform-ui**: nada a mudar. A tela já usava `apiFetch` e o tenant da sessão. Provado no
+  navegador: mailings, entradas, campanhas e entregas, todas 200.
+
+**Imagem:** passou a instalar `py-authz` e `.[dev]` (não trazia pytest). A suíte entrou no
+`probe_python_suites.sh` (**16** suítes, 3 771 verdes), e a GAT-07 caiu de quatro suítes fora para
+três.
+
+**Gate:** `probe_route_anon_sweep.sh` reprovou com 22 *"DÍVIDA FECHOU"* até as linhas virarem
+`fechada`; a dívida AUT-60 está zerada. A borda responde 401 a `/v1/mailings` e `/v1/campaigns` com
+o header. `probe_internal_service_callers.sh` verde.
+
+**Fora, e dito:** os dois campos de `outbound` são `scopable: false`, então quem opera outbound opera
+o tenant inteiro, sem recorte por pool da campanha. É o mesmo desenho da SCH-02 no scheduler; não
+foi aberta ficha nova porque não há pedido de escopo por pool em outbound.
+
 ## 2026-09-29 (8) — AUT-59: a evaluation-api exige chamador em toda rota, e o tenant do usuário é o do token
 
 **Medido antes, pela borda pública (5174), sem credencial nenhuma:** `GET /v1/evaluation/results`,

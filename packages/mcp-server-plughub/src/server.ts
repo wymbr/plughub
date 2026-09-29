@@ -170,6 +170,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const outboundDeps: OutboundDeps = {
     mailingApiUrl: process.env["MAILING_API_URL"]  ?? "http://localhost:3660",
+    serviceToken:  process.env["MAILING_SERVICE_TOKEN"] ?? "",   // AUT-60
     tenantId:      process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
   }
 
@@ -1406,6 +1407,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     })
     registerOutboundTools(mcpServer, {
       mailingApiUrl: process.env["MAILING_API_URL"]  ?? "http://mailing-api:3660",
+      serviceToken:  process.env["MAILING_SERVICE_TOKEN"] ?? "",   // AUT-60
       tenantId:      process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerCalendarTools(mcpServer, {

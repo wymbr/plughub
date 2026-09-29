@@ -25,7 +25,9 @@ set -euo pipefail
 
 TENANT="tenant_demo"
 MA="http://localhost:3660"
-ts=(-H "X-Tenant-ID: $TENANT")
+# AUT-60 — a mailing-api exige credencial; seeds e smokes entram pela porta de SERVIÇO.
+MAILING_SVC="${PLUGHUB_MAILING_SERVICE_TOKEN:-changeme_mailing_service_token_demo}"
+ts=(-H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $MAILING_SVC")
 jqid()  { sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
 seq_of() { python3 -c 'import sys,json;d=json.load(sys.stdin)["drained"];print(",".join(str(x["metadata"]["priority"]) for x in d))'; }
 STAMP=$(date +%s)

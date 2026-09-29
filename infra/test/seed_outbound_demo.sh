@@ -9,7 +9,9 @@ set -euo pipefail
 TENANT="tenant_demo"
 MA="http://localhost:3660"
 POOL="outbound_demo"
-ts=(-H "X-Tenant-ID: $TENANT")
+# AUT-60 — a mailing-api exige credencial; seeds e smokes entram pela porta de SERVIÇO.
+MAILING_SVC="${PLUGHUB_MAILING_SERVICE_TOKEN:-changeme_mailing_service_token_demo}"
+ts=(-H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $MAILING_SVC")
 
 # Extrai o PRIMEIRO campo "id":"..." (top-level) — "mailing_id"/"agenda_id" não casam
 # porque exigimos aspas coladas ao 'id'.

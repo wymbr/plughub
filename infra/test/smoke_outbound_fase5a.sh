@@ -42,7 +42,9 @@ SCHED_TOKEN=$(curl -s --max-time 20 -X POST "$AUTH_API/auth/login" -H 'Content-T
   -d "{\"email\":\"admin@plughub.local\",\"password\":\"changeme_admin\",\"tenant_id\":\"$TENANT\"}" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
 [ -n "$SCHED_TOKEN" ] || { echo "AVISO: login de admin falhou — as chamadas ao scheduler vao levar 401"; }
-ts=(-H "X-Tenant-ID: $TENANT" -H "Authorization: Bearer $SCHED_TOKEN")
+# AUT-60 — a mailing-api exige credencial; seeds e smokes entram pela porta de SERVIÇO.
+MAILING_SVC="${PLUGHUB_MAILING_SERVICE_TOKEN:-changeme_mailing_service_token_demo}"
+ts=(-H "X-Tenant-ID: $TENANT" -H "Authorization: Bearer $SCHED_TOKEN" -H "X-Service-Token: $MAILING_SVC")
 jqid() { sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
 STAMP=$(date +%s)
 N=3

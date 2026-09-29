@@ -12,6 +12,7 @@ dependencies    = [
     "httpx>=0.27.0",
     "python-multipart>=0.0.9",
     "openpyxl>=3.1.0",
+    "plughub-authz",   # AUT-60 — verificador canônico de JWT+ABAC
 ]
 
 [project.scripts]

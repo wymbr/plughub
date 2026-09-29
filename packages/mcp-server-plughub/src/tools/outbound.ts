@@ -22,6 +22,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 export interface OutboundDeps {
   mailingApiUrl: string   // e.g. http://mailing-api:3660
   tenantId:      string   // default tenant (overridden by input when provided)
+  /** AUT-60 — X-Service-Token da mailing-api (= PLUGHUB_MAILING_SERVICE_TOKEN lá). Vazio ⇒
+   *  a mailing-api responde 401 e a tool devolve isError: nunca "funciona sem credencial". */
+  serviceToken?: string
 }
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -116,11 +119,14 @@ function parseJsonObject(raw: string, field: string): Record<string, unknown> {
 }
 
 async function postJson(
-  url: string, tenantId: string, body: unknown,
+  url: string, tenantId: string, body: unknown, serviceToken: string,
 ): Promise<{ ok: boolean; status: number; data: unknown; text: string }> {
   const res = await fetch(url, {
     method:  "POST",
-    headers: { "Content-Type": "application/json", "x-tenant-id": tenantId },
+    headers: {
+      "Content-Type": "application/json", "x-tenant-id": tenantId,
+      ...(serviceToken ? { "x-service-token": serviceToken } : {}),
+    },
     body:    JSON.stringify(body),
   })
   const text = await res.text().catch(() => "")
@@ -133,6 +139,7 @@ async function postJson(
 
 export function registerOutboundTools(server: McpServer, deps: OutboundDeps): void {
   const { mailingApiUrl, tenantId: defaultTenantId } = deps
+  const serviceToken = deps.serviceToken ?? ""
 
   // ── mailing_add ─────────────────────────────────────────────────────────────
   server.tool(
@@ -172,7 +179,7 @@ export function registerOutboundTools(server: McpServer, deps: OutboundDeps): vo
 
       try {
         const url = `${mailingApiUrl}/v1/mailings/${encodeURIComponent(input.mailing_id)}/entries`
-        const r = await postJson(url, tenantId, body)
+        const r = await postJson(url, tenantId, body, serviceToken)
         if (!r.ok) {
           return mcpError("mailing_add_failed",
             `mailing-api responded ${r.status}: ${r.text.slice(0, 200)}`)
@@ -209,7 +216,7 @@ export function registerOutboundTools(server: McpServer, deps: OutboundDeps): vo
 
       try {
         const url = `${mailingApiUrl}/v1/campaigns/${encodeURIComponent(input.campaign_id)}/drain`
-        const r = await postJson(url, tenantId, body)
+        const r = await postJson(url, tenantId, body, serviceToken)
         if (!r.ok) {
           return mcpError("campaign_drain_failed",
             `mailing-api responded ${r.status}: ${r.text.slice(0, 200)}`)
@@ -248,7 +255,7 @@ export function registerOutboundTools(server: McpServer, deps: OutboundDeps): vo
 
       try {
         const url = `${mailingApiUrl}/v1/deliveries/${encodeURIComponent(input.delivery_id)}/result`
-        const r = await postJson(url, tenantId, body)
+        const r = await postJson(url, tenantId, body, serviceToken)
         if (!r.ok) {
           return mcpError("delivery_result_failed",
             `mailing-api responded ${r.status}: ${r.text.slice(0, 200)}`)
@@ -291,7 +298,7 @@ export function registerOutboundTools(server: McpServer, deps: OutboundDeps): vo
 
       try {
         const url = `${mailingApiUrl}/v1/contact/eligibility`
-        const r = await postJson(url, tenantId, body)
+        const r = await postJson(url, tenantId, body, serviceToken)
         if (!r.ok) {
           return mcpError("eligibility_check_failed",
             `mailing-api responded ${r.status}: ${r.text.slice(0, 200)}`)
@@ -331,7 +338,7 @@ export function registerOutboundTools(server: McpServer, deps: OutboundDeps): vo
 
       try {
         const url = `${mailingApiUrl}/v1/unsubscribe`
-        const r = await postJson(url, tenantId, body)
+        const r = await postJson(url, tenantId, body, serviceToken)
         if (!r.ok) {
           return mcpError("unsubscribe_failed",
             `mailing-api responded ${r.status}: ${r.text.slice(0, 200)}`)
