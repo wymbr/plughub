@@ -39,7 +39,7 @@ import crypto from "node:crypto"
 import { authorOf } from "../middleware/require-resource-write"
 import { prisma } from "../db"
 import { publishRegistryChanged } from "../infra/kafka"
-import { deployViolationBatch, slotDeclared } from "../lib/capacity"
+import { capacityDropWarning, deployViolationBatch, slotDeclared } from "../lib/capacity"
 import { judgeSlotCandidate } from "../lib/slot-candidate"
 import { promoteSlotsInTx, recordSkillDeployment, type SlotContent } from "../lib/slot-promotion"
 import { requireDeployWrite, _getTenantId } from "./pool-slots"
@@ -173,7 +173,14 @@ poolSlotsBatchRouter.post("/promote-batch", requireDeployWrite, async (req: Requ
         problemas.push({ pool_id: poolId, error: veredito.error, ...(veredito.message ? { message: veredito.message } : {}) })
         continue
       }
-      plano.push({ poolId, config, current, unchanged: false, warnings: veredito.warnings })
+      // PRM-04 — config herdada do `current` nunca cai; a declarada em `configs[pool]` pode.
+      const warnings = [...veredito.warnings]
+      const queda = capacityDropWarning(poolId, current ?? null, config)
+      if (queda) {
+        console.warn(`[pool-slots:promote-batch] ${queda}`)
+        warnings.push(queda)
+      }
+      plano.push({ poolId, config, current, unchanged: false, warnings })
     }
 
     const mudam = plano.filter(p => !p.unchanged)

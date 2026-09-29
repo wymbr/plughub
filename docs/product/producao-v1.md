@@ -68,7 +68,7 @@ As fichas abertas cuidam da **correção** do core e dos canais. O que separa o 
 
 `PRD-03` (teto do bridge — paliativo feito em 2026-09-28) · `DUR-01` (espera do `menu` por suspender/retomar — promovida de `adiado`; **fechada em 2026-09-28**) ·
 ~~`SFS-01`~~ (executor sai de "harness de teste"; fechada 2026-09-28) · `PRD-04` (Redis) · `PRD-05` (Kafka, Postgres, ClickHouse,
-backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · ~~`ALW-18`~~ (fechada 2026-09-28) · `PRM-04`.
+backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · ~~`ALW-18`~~ (fechada 2026-09-28) · ~~`PRM-04`~~ (fechada 2026-09-29).
 
 ### Fase 2 — canais confiáveis
 
@@ -103,7 +103,7 @@ do Redis, broker) sem perder conversa — e o piloto.
 ## 5. Prioridade das fichas existentes
 
 **P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, ~~`ALW-18`~~ (fechada 2026-09-28), ~~`DUR-01`~~ (fechada 2026-09-28),
-~~`SFS-01`~~ (fechada 2026-09-28), `PRM-04`, `CAP-10`, `CAP-15`, `AUT-20`, `AUT-58`, `AUD-03`.
+~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), `CAP-10`, `CAP-15`, `AUT-20`, `AUT-58`, `AUD-03`.
 
 **P1 — necessário nos primeiros meses:** `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,
 `USG-03`, `USG-04`, `AIG-02`, `AIG-01`, `KPI-01..05`, `AUD-01`, `AUD-02`, `CAP-07`, `CAP-08`, `CAP-14`,

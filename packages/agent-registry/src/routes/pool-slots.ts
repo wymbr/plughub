@@ -20,7 +20,7 @@ import { Router, Request, Response, NextFunction } from "express"
 import { authorOf, requireAbacWrite } from "../middleware/require-resource-write"
 import { prisma, Prisma } from "../db"
 import { publishRegistryChanged } from "../infra/kafka"
-import { deployViolation, slotDeclared } from "../lib/capacity"
+import { capacityDropWarning, deployViolation, slotDeclared } from "../lib/capacity"
 import { judgeSlotCandidate } from "../lib/slot-candidate"
 import { promoteSlotsInTx, recordSkillDeployment } from "../lib/slot-promotion"
 
@@ -169,6 +169,18 @@ poolSlotsRouter.put("/slots/:slot", requireDeployWrite, async (req: Request, res
     if (veredito.kind === "block") {
       return res.status(422).json({ error: veredito.error, ...(veredito.message ? { message: veredito.message } : {}) })
     }
+    const warnings = [...veredito.warnings]
+
+    // PRM-04 — declarar menos do que roda é legítimo, mas é DITO: o `1` que derrubou o
+    // demo_ia era plausível e ninguém o estranhou.
+    const currentRow = await (prisma as any).poolSkillSlot.findUnique({
+      where: { pool_id_tenant_id_slot: { pool_id: poolId, tenant_id: tenantId, slot: "current" } },
+    }) as { skill_id?: unknown; config_json?: unknown } | null
+    const queda = capacityDropWarning(poolId, currentRow, config_json ?? {})
+    if (queda) {
+      console.warn(`[pool-slots:set-next] ${queda}`)
+      warnings.push(queda)
+    }
 
     const row = await (prisma as any).poolSkillSlot.upsert({
       where:  { pool_id_tenant_id_slot: { pool_id: poolId, tenant_id: tenantId, slot: "next" } },
@@ -195,7 +207,7 @@ poolSlotsRouter.put("/slots/:slot", requireDeployWrite, async (req: Request, res
     // fato some, que é como a MSK-01 sobreviveu.
     return res.json({
       ..._formatSlot(row, "next"),
-      ...(veredito.warnings.length ? { warnings: veredito.warnings } : {}),
+      ...(warnings.length ? { warnings } : {}),
     })
   } catch (err) {
     return next(err)
@@ -258,6 +270,14 @@ poolSlotsRouter.post("/promote", requireDeployWrite, async (req: Request, res: R
     if (veredito.kind === "block") {
       return res.status(422).json({ error: veredito.error, ...(veredito.message ? { message: veredito.message } : {}) })
     }
+    // PRM-04 — re-dito no promote: é aqui que a queda passa a valer, e quem promove
+    // (a tool `pool_promote`, uma Agenda) pode não ser quem declarou.
+    const warnings = [...veredito.warnings]
+    const queda = capacityDropWarning(poolId, currentSlot ?? null, nextSlot["config_json"])
+    if (queda) {
+      console.warn(`[pool-slots:promote] ${queda}`)
+      warnings.push(queda)
+    }
 
     const now = new Date()
 
@@ -291,6 +311,7 @@ poolSlotsRouter.post("/promote", requireDeployWrite, async (req: Request, res: R
         current:  _formatSlot(updatedBySlot["current"]  ?? null, "current"),
         next:     _formatSlot(updatedBySlot["next"]      ?? null, "next"),
       },
+      ...(warnings.length ? { warnings } : {}),
     })
   } catch (err) {
     return next(err)

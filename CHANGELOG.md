@@ -1,5 +1,37 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (1) — PRM-04: o deploy que reduz a capacidade do pool deixa de ser o default e passa a ser dito
+
+**O defeito.** Em 2026-09-08 o primeiro deploy do `demo_ia` levou a capacidade de 10 para
+**1**: o campo *Concurrent sessions* do formulário nascia do slot `next` — vazio no caso normal,
+porque `next` só existe entre o `set-next` e o `promote` — com fallback `1`, e o promote não
+tinha por que recusar. O bootstrap reagiu na hora. `1` é o valor plausível: o formulário parece
+preenchido e nada fica vermelho.
+
+**Medido antes de mexer.** A ficha dizia que o botão *Copy from Current* consertava, e **não
+consertava**: ele copia só as chaves que o skill declara (`config_params`/`interface`), e a
+capacidade é campo da plataforma, fora dessa lista. A defesa que dependia de o operador lembrar
+não existia nem para quem lembrasse. Exposição: 25 pools rodam hoje com `current` > 1.
+
+**O que mudou — as duas saídas da ficha, porque cobrem portas diferentes.**
+- **(a) o default é manter o que roda.** Sem `next`, o campo nasce com a capacidade do
+  `current`; *Copy from Current* passa a copiá-la; o editor mostra *"Em execução: N"* e, quando o
+  valor declarado é menor, diz que o bootstrap reduz as instâncias ao promover.
+- **(b) reduzir é dito, nunca recusado.** `capacityDropWarning` (`agent-registry/lib/capacity.ts`)
+  devolve `capacidade_reduzida` com os dois números — e nomeia o campo AUSENTE, que vale 1 pelo
+  `slotDeclared` — em `warnings` e no log das três portas: `set-next`, `promote` (quem promove
+  pode não ser quem declarou — a tool `pool_promote` repassa o corpo) e `promote-batch` (só a
+  config declarada em `configs[pool]` pode cair; a herdada do `current` não). A (a) sozinha não
+  cobre quem chama a API; a (b) sozinha avisa depois de o formulário ter proposto o erro. O modal
+  de promote mostra a queda antes da confirmação.
+
+**Verificado.** `capacity-drop.test.ts` 11 verdes, cada aviso com o seu controle (manter e
+aumentar não avisam; sem `current` não há o que reduzir); mutação (aviso desligado) reprova 5.
+Ao vivo no `probe_batch_a` (2 → 1): aviso no corpo e no log do `set-next` e do `promote`; na
+tela, o modal diz *"Capacity drops from 2 to 1"*, o editor avisa, *Copy from Current* traz o 2, e
+o probe voltou a 1 pela própria tela. No `demo_ia` (10, sem `next`) o editor abre com **10** —
+o caso da ficha — e foi fechado sem salvar.
+
 ## 2026-09-28 (10) — SFS-01: o executor de skill-flow é pacote, não harness de teste
 
 **Decisão do dono.** O `skill-flow-service` executa todo `/execute` do bridge em qualquer compose

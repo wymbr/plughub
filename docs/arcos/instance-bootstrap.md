@@ -2,6 +2,26 @@
 
 > Última atualização: 2026-05-31 · Estado: Arc 16 + Fase 3 (deploy-driven)
 
+## Deploy que declara MENOS do que roda (PRM-04, 2026-09-29)
+
+O número de instâncias de um pool IA é o `max_concurrent_sessions` do slot `current`, e o
+bootstrap reage ao promote **na hora**: declarar menos derruba instâncias. Em 2026-09-08 o
+formulário de deploy propôs `1` para o `demo_ia`, que rodava `10` — o campo nascia do slot
+`next` (vazio no caso normal) com fallback `1` —, o promote aceitou e o pool ficou com uma
+instância por 4 minutos. `1` é o valor plausível: nada o estranha.
+
+- **O default é manter o que roda.** Sem `next`, o formulário nasce com a capacidade do
+  `current`; *Copy from Current* também a copia (antes, só copiava as chaves que o skill
+  declara — a capacidade ficava de fora).
+- **Reduzir é legítimo, e é DITO, nunca recusado.** `capacityDropWarning`
+  (`agent-registry/src/lib/capacity.ts`) devolve `capacidade_reduzida` com os dois números —
+  e nomeia o campo AUSENTE, que vale 1 pelo `slotDeclared` — em `warnings` e no log das três
+  portas: `set-next`, `promote` (quem promove pode não ser quem declarou: a tool
+  `pool_promote`, uma Agenda) e `promote-batch` (só a config DECLARADA em `configs[pool]`
+  pode cair; a herdada do `current` não). O modal de promote da tela mostra a queda antes da
+  confirmação.
+- Teste: `agent-registry/src/__tests__/capacity-drop.test.ts` (cada aviso com o seu controle).
+
 ## Fase 3b/3a — Provisionamento deploy-driven (2026-05-31)
 
 Além do caminho legado por `agent_type`, o bootstrap agora provisiona instâncias de IA

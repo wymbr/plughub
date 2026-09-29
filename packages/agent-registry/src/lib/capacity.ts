@@ -40,6 +40,38 @@ export function slotDeclared(configJson: unknown): number {
   return typeof v === "number" && v >= 1 ? Math.floor(v) : 1
 }
 
+/**
+ * PRM-04 — o deploy que REDUZ a concorrência do pool é dito, nunca recusado.
+ *
+ * Medido em 2026-09-08: o formulário propunha `1` para um pool que rodava `10` (default
+ * do campo, não do pool), o promote aceitou e o bootstrap derrubou nove instâncias. `1`
+ * é o valor plausível: ninguém o estranha, e nenhum portão tem por que recusá-lo —
+ * reduzir é legítimo. Por isso a regra é AVISAR, nas três portas que declaram ou
+ * efetivam (set-next, promote, promote-batch), com os dois números e a causa quando o
+ * campo está AUSENTE (vale 1 pelo `slotDeclared`, que é o default que fez o estrago).
+ *
+ * Sem `current` com skill não há o que reduzir. Retorna null quando não há queda.
+ */
+export function capacityDropWarning(
+  poolId: string,
+  current: { skill_id?: unknown; config_json?: unknown } | null | undefined,
+  candidateConfig: unknown,
+): string | null {
+  if (!current || !current.skill_id) return null
+  const rodando = slotDeclared(current.config_json)
+  const novo    = slotDeclared(candidateConfig)
+  if (novo >= rodando) return null
+  const cfg = (candidateConfig ?? {}) as Record<string, unknown>
+  const ausente = typeof cfg["max_concurrent_sessions"] !== "number"
+  return (
+    `capacidade_reduzida: o pool '${poolId}' roda com max_concurrent_sessions=${rodando} ` +
+    `e este deploy declara ${novo}` +
+    (ausente ? " (campo AUSENTE na config — vale o default 1)" : "") +
+    `. Ao promover, o bootstrap reduz as instâncias na hora. Se não é de propósito, ` +
+    `declare max_concurrent_sessions=${rodando}.`
+  )
+}
+
 /** Declarada atual do próprio pool (slot `current`; 0 se não há deploy). */
 export async function currentDeclared(tenantId: string, poolId: string): Promise<number> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

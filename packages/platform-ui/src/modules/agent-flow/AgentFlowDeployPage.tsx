@@ -177,6 +177,17 @@ function fmtDateShort(iso?: string | null) {
 }
 
 /** Accent color per slot — semantic, data-driven — stays as inline style */
+/**
+ * PRM-04 — a concorrência que um slot DECLARA, com a mesma regra do registry
+ * (`lib/capacity.ts::slotDeclared`): número ≥ 1, senão vale 1. `null` quando o slot não
+ * existe — não há o que comparar.
+ */
+function declaredCapacity(slot: SlotData | undefined | null): number | null {
+  if (!slot?.set) return null
+  const v = slot.config_json?.max_concurrent_sessions
+  return typeof v === 'number' && v >= 1 ? Math.floor(v) : 1
+}
+
 const SLOT_COLOR: Record<string, string> = {
   previous: '#94a3b8',
   current:  '#22c55e',
@@ -690,11 +701,15 @@ function NextSlotEditor({
   const [newFields,             setNewFields]             = useState<Set<string>>(new Set())
   // max_concurrent_sessions is a platform-level field stored in config_json but managed
   // separately so it is not reset when the operator changes the skill-flow.
+  // PRM-04: sem `next`, o default é MANTER o que roda (o `current`), nunca `1` — o `1`
+  // derrubou o demo_ia de 10 instâncias para uma. Reduzir continua possível, e é dito.
+  const runningCapacity = declaredCapacity(currentSlot)
   const [maxConcurrentSessions, setMaxConcurrentSessions] = useState<number>(
     typeof existingNext.config_json?.max_concurrent_sessions === 'number'
       ? existingNext.config_json.max_concurrent_sessions
-      : 1
+      : runningCapacity ?? 1
   )
+  const capacityDrops = runningCapacity !== null && maxConcurrentSessions < runningCapacity
 
   const selectedSkill = skills.find(s => s.skill_id === selectedSkillId) ?? null
   const schema        = selectedSkill?.interface ?? null
@@ -739,6 +754,8 @@ function NextSlotEditor({
 
     setConfigValues(merged)
     setNewFields(detected)
+    // A capacidade não é chave do skill, e por isso ficava de fora da cópia (PRM-04).
+    if (runningCapacity !== null) setMaxConcurrentSessions(runningCapacity)
   }
 
   const handleFieldChange = (key: string, value: unknown) => {
@@ -809,6 +826,13 @@ function NextSlotEditor({
               {t('deploy.concurrentSessionsDesc')}
             </span>
           </div>
+          {runningCapacity !== null && (
+            <div className={`text-xs mt-1.5 ${capacityDrops ? 'text-warning font-semibold' : 'text-muted'}`}>
+              {capacityDrops
+                ? t('deploy.concurrentSessionsDrop', { running: runningCapacity, declared: maxConcurrentSessions })
+                : t('deploy.concurrentSessionsRunning', { running: runningCapacity })}
+            </div>
+          )}
         </div>
 
         {/* Skill-specific config form */}
@@ -1052,6 +1076,13 @@ export default function AgentFlowDeployPage() {
     return p.pool_id.toLowerCase().includes(q) || (p.description ?? '').toLowerCase().includes(q)
   })
 
+  // PRM-04 — a queda de capacidade é dita ANTES de confirmar, com os dois números.
+  const runningCap  = declaredCapacity(slots?.slots.current)
+  const nextCap     = declaredCapacity(slots?.slots.next)
+  const promoteCapacityDrop = runningCap !== null && nextCap !== null && nextCap < runningCap
+    ? { running: runningCap, declared: nextCap }
+    : null
+
   const canPromote  = slots?.slots.next.set     === true
   const canRollback = slots?.slots.previous.set === true
   const skillMap    = Object.fromEntries(skills.map(s => [s.skill_id, s]))
@@ -1264,6 +1295,14 @@ export default function AgentFlowDeployPage() {
               {t('deploy.promoteNotice1', { next: slotNext, current: slotCurrent, previous: slotPrevious })}
               <br /><br />
               {t('deploy.promoteNotice2')}
+              {promoteCapacityDrop && (
+                <>
+                  <br /><br />
+                  <strong className="text-warning">
+                    {t('deploy.promoteCapacityDrop', promoteCapacityDrop)}
+                  </strong>
+                </>
+              )}
             </span>
           }
           confirmLabel={t('deploy.confirmPromote')}
