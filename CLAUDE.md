@@ -835,7 +835,9 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
   entrada é opcional.
   **Por que `/v1` é exigência e não gosto:** dentro dele vive `POST /v1/channels/webhook/pool/{pool_id}`,
   **anônima por construção** — não passa pelo registro (ADR §7.6.1) e por isso **não tem onde pendurar
-  credencial**. Publicar o prefixo torna disparável por qualquer um TODO pool webhook do tenant, inclusive
+  credencial** (desde a WHK-01 ela ao menos confere que o pool EXISTE no registry: 404
+  se não, 503 se não deu para conferir — antes, pool inventado virava contato numa fila
+  fantasma). Publicar o prefixo torna disparável por qualquer um TODO pool webhook do tenant, inclusive
   os que promovem deploy e contatam clientes, e nenhum `auth_required` muda isso. O mesmo prefixo abriga
   RPC interno com nome infeliz (`…/delegate`, `…/collect`, `…/resume/{token}`, `…/identity/*`).
   ⚠️ **A separação externo×interno é de CÓDIGO, não de topologia** — `/channel/webhook/{slug}`

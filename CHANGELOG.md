@@ -1,5 +1,39 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (5) — WHK-01: o gatilho por pool recusa pool que não existe
+
+**O defeito, achado na AUT-20.** `POST /v1/channels/webhook/pool/{pool_id}` criava sessão para
+QUALQUER `pool_id`. Com um pool inventado: 201, sessão, e o routing enfileirava o contato em
+`{t}:pool:{p}:queue` — fila de um pool que ninguém atende —, encerrado ~30 min depois como
+`max_wait_exceeded`. É o valor plausível da § Postura: o motivo registrado é verdadeiro e esconde
+o fato ("o pool não existe"). A rota é anônima por construção, então qualquer um na rede interna
+enchia filas fantasmas.
+
+**Onde a pergunta mora.** Na PORTA, não no routing: o routing só conhece o pool pelo cache
+`{t}:pool_config:{p}`, que expira — lá, "não achei a config" não é "o pool não existe". Quem sabe
+é o agent-registry, e a porta pode perguntar (`pool_existence.py`, três respostas sem palpite):
+`exists` segue; `not_found` → **404** `pool_not_found`, WARNING com a origem; `unavailable`
+(sem URL, rede, status inesperado) → **503** `pool_unverified`, ERROR, nenhuma sessão — seguir seria
+o mesmo palpite. A existência se confere no tenant do PEDIDO.
+
+**Os três chamadores já tratavam não-2xx alto** (medido antes): o bridge nos hooks *detached*
+(ERROR com status e corpo), a tool `workflow_trigger` (`isError`) e o scheduler (`failed` no
+ledger da agenda). A recusa aparece do outro lado.
+
+**Medido no histórico, com a ressalva que ele pede.** Sessões `webhook` em pool inexistente nos
+últimos 30 dias existem, mas quase todas são fixtures sintéticas gravadas por probes (`d-00`…`d-13`,
+`ses-resv-1`); restam 3 com id de UUID, uma aberta desde 2026-09-02 (`3b1a8fdf`). A tabela não diz
+por qual porta cada sessão entrou.
+
+**Verificado.** `test_pool_existence.py` 9 verdes (veredito por resposta do registry, cabeçalhos
+de tenant e serviço, e a rota com cada veredito — sessão só quando existe, no tenant pedido);
+mutação desligando o portão reprova exatamente o teste do pool inexistente. Ao vivo: pool
+inventado → 404 nomeado, log de recusa, zero chaves no Redis; controle `probe_customer_cancel`
+(dispara o `limite_processo`) verde.
+
+**Fora desta ficha:** o WebSocket público do webchat trata identificador desconhecido como
+`pool_id` (compatibilidade de URL de widget) — ficha WHK-02, que pede decisão.
+
 ## 2026-09-29 (4) — RUL-01: a escalação por regra fingia sucesso; agora recusa alto
 
 **O defeito.** O modo ativo do `escalator` do rules-engine fazia

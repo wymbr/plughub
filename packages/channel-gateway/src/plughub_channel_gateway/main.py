@@ -63,6 +63,7 @@ from .auth import accessible_pools, pool_in_scope
 from .speech_config import PROFILE_ID_RE, VOICE_PARAMS, conferir_forma
 from .identity_auth import identity_principal, tenant_for
 from .context_reader import ContextReader
+from .pool_existence import pool_existence
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint, resolve_pool
 from .outbound_consumer import OutboundConsumer
 from .call_relay import CallRelay
@@ -1663,11 +1664,32 @@ async def webhook_trigger_by_pool(pool_id: str, request: Request) -> dict:
 
     settings = get_settings()
     body     = await request.json()
+    tenant   = body.get("tenant_id") or settings.tenant_id
+
+    # WHK-01 — pool que não existe não vira sessão. Antes, qualquer `pool_id` nascia
+    # contato numa fila que ninguém atende, encerrado 30 min depois como
+    # `max_wait_exceeded`. Registry fora do ar RECUSA (503): seguir seria o mesmo palpite.
+    veredito, motivo = await pool_existence(
+        tenant_id          = tenant,
+        pool_id            = pool_id,
+        agent_registry_url = settings.agent_registry_url,
+        service_token      = settings.agent_registry_service_token,
+    )
+    if veredito == "not_found":
+        logger.warning("webhook trigger RECUSADO: %s (origem %s)", motivo,
+                       request.client.host if request.client else "?")
+        raise HTTPException(status_code=404, detail={"error": "pool_not_found", "pool_id": pool_id,
+                                                     "tenant_id": tenant})
+    if veredito == "unavailable":
+        logger.error("webhook trigger RECUSADO: não deu para conferir o pool %s (%s) — "
+                     "nenhuma sessão criada", pool_id, motivo)
+        raise HTTPException(status_code=503, detail={"error": "pool_unverified", "pool_id": pool_id,
+                                                     "reason": motivo})
 
     session_id = await _webhook_adapter.handle_trigger(
         skill_id          = "",            # endereço é o pool — o skill vem do slot
         pool_id           = pool_id,
-        tenant_id         = body.get("tenant_id") or settings.tenant_id,
+        tenant_id         = tenant,
         trigger_type      = body.get("trigger_type") or "task",
         metadata          = body.get("metadata"),
         customer_id       = body.get("customer_id"),
