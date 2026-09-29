@@ -1,5 +1,5 @@
 /**
- * hooks.ts — leitura de instâncias de workflow (workflow-api, porta 3800)
+ * hooks.ts — leitura de processos (analytics-api `/sessions/processes`, ORQ-10)
  *
  * ⚠️ **Este arquivo sobreviveu à MOD-11 de propósito, e o consumidor dele não
  * mora mais aqui.** O módulo `workflows` foi encerrado em 2026-09-08 — as telas
@@ -277,4 +277,5 @@ export interface InstanceSession {
 // (`/v1/workflow/trigger`) virou proxy do channel-gateway e não escreve linha
 // alguma aqui. Reapontar teria trocado `HTTP 410` por `HTTP 404`.
 //
-// Sonda: `infra/test/probe_workflow_cancel_callers.sh`. Detalhe: TODO § "Lacuna 4b".
+// Detalhe: TODO § "Lacuna 4b". A sonda de então e as rotas de instância da
+// workflow-api saíram na AUT-64 (2026-09-29).

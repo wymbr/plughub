@@ -75,24 +75,9 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # workflow-api (/v1/workflow and /v1/journeys) — must come before generic /v1 rule\n\
-    location ~ ^/v1/workflow(/|$) {\n\
-        set $up_workflow http://workflow-api:3800;\n\
-        proxy_pass         $up_workflow;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header   Host $host;\n\
-        proxy_buffering    off;\n\
-        proxy_read_timeout 300s;\n\
-    }\n\
-\n\
-    location ~ ^/v1/journeys(/|$) {\n\
-        set $up_workflow http://workflow-api:3800;\n\
-        proxy_pass         $up_workflow;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header   Host $host;\n\
-        proxy_buffering    off;\n\
-        proxy_read_timeout 300s;\n\
-    }\n\
+    # workflow-api: /v1/workflow e /v1/journeys SAIRAM da borda em 2026-09-29 (AUT-64) —\n\
+    # as rotas foram removidas (sem chamador) e /v1/journeys nem era montado. Caem no\n\
+    # catch-all do agent-registry, que nao as conhece.\n\
 \n\
     # evaluation-api (Arc 6) — before generic /v1\n\
     location ~ ^/v1/evaluation(/|$) {\n\

@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (13) — AUT-64: as 11 rotas abertas da workflow-api saíram, em vez de ganhar portão
+
+**A ficha mandava medir antes de fechar: o que não tivesse chamador sairia.** Nenhuma das 11
+tinha, e o dono decidiu pela remoção.
+
+**Medido:**
+- `workflow.instances` tem **0 linhas**, e nada no repositório chama `db_create_instance`. O Arc 19
+  (fase D) trocou a instância pela sessão webhook;
+- as cinco rotas de ciclo de vida (`persist-suspend`, `complete`, `fail`, `collect/persist`,
+  `collect/respond`) respondiam **410** desde a fase D. O único chamador era o skill-flow-worker,
+  que só age ao consumir `workflow.events`, e esse tópico não tem mais quem produza início de
+  instância. A cadeia estava morta nas duas pontas;
+- as quatro de leitura (`instances`, `…/{id}`, `…/{id}/sessions`, `campaigns/{id}/collects`) liam
+  tabela vazia. O Monitor lê `/sessions/processes` da analytics-api desde a ORQ-10;
+- **`trigger` e `resume` eram proxies ANÔNIMOS** para as rotas internas do channel-gateway
+  (`/v1/channels/webhook/{flow_id}` e `…/resume/{token}`). Com a borda publicando `/v1/workflow`,
+  eram um desvio, pela 5174, do que a AUT-20 fechou. Um `trigger` anônimo foi repassado (404 só
+  porque o skill era inventado). E o `trigger` endereçava **skill**, contra o invariante do pool;
+- logs do container, 30 dias: nenhuma chamada além da própria varredura da AUT-58.
+
+**O que saiu:**
+- as 11 rotas, o `calendar_client.py` (sem chamador desde que o `persist-suspend` virou 410) e as
+  configurações que só elas liam (calendar, agent-registry, channel-gateway), inclusive no compose;
+- da borda: `^/v1/workflow` e `^/v1/journeys` no nginx do platform-ui e no vite. `/v1/journeys`
+  nem era montado pelo serviço desde a fase F. As duas caem agora no catch-all do agent-registry, e a
+  5174 responde **404** onde respondia 200/422;
+- os cenários e2e **13, 14, 18 e 28**, com o `WorkflowClient`/`CalendarClient` do `http-client.ts`.
+  13 e 14 já batiam em 410; 18 era a cadeia do worker; 28 exercitava o motor de revisão por
+  workflow, declarado LEGADO em 2026-06-25;
+- o `probe_workflow_cancel_callers.sh`, que respondeu à pergunta dele em 2026-08-07 e dependia da
+  leitura de `/v1/workflow/instances`.
+
+**O que ficou, e é dito:** `/v1/health`, `POST /admin/backfill-events` (fechado desde a MOD-11) e o
+scanner de timeout, que varre tabelas vazias. Aposentar o serviço e o skill-flow-worker (que segue
+deployado, chamando rotas que agora dão 404 em vez de 410) é a **WFL-01**.
+
+**Instrumentos:**
+- `TestAut64RoutesRemoved`: as 11 respondem **404 com header de admin**, o que distingue removida de
+  gateada. O censo lê o `openapi()` e exige exatamente `{health, backfill}`. Contraprova: devolver
+  `GET /v1/workflow/instances` ao router deixa os dois vermelhos;
+- o **`gate_orphan_ui_callers`** perseguia rota 410/501 só em Python, e as cinco que achava eram
+  estas. Sem elas contaria zero e sairia INCONCLUSIVO para sempre. Passou a ler também o handler
+  Express cuja primeira linha é `return res.status(410|501)`, e acha as duas da PID-08 no
+  agent-registry. Contraprova: uma tela chamando `/v1/skills/${id}/deploy` deixa o gate vermelho;
+- as 11 linhas `divida:AUT-64` saíram do `route_credential_baseline.tsv`, porque a rota não existe
+  mais. workflow-api 11 testes.
+
 ## 2026-09-29 (12) — AUT-63: a calendar-api exige credencial em toda rota, confere o tenant e a posse da linha por id
 
 **Medido antes, pela borda pública (5174):** listas de calendários, feriados e associações, leituras

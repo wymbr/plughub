@@ -1235,7 +1235,7 @@ caso"* ou *"remover a alternativa"*, a segunda é a que não depende de memória
 
 ## Arc 4 — Workflow Automation
 
-**workflow-api** (port 3800): `WorkflowInstance` lifecycle. Endpoints: `/trigger`, `/instances/{id}/persist-suspend`, `/resume`, `/complete`, `/fail`, `/cancel`. Timeout scanner: background task, 60s interval, atomic UPDATE. Kafka topic `workflow.events` (7 event types).
+**workflow-api** (port 3800): ⚠️ **sem superfície de produto desde a AUT-64 (2026-09-29).** As rotas de instância e de proxy (`/trigger`, `/resume`, `/instances*`, `/collect/*`, `/campaigns/{id}/collects`) SAÍRAM por não terem chamador — `workflow.instances` tem 0 linhas e nada a escreve desde o Arc 19 —, e a borda deixou de publicar `/v1/workflow` e `/v1/journeys`. Sobram `/v1/health`, `POST /admin/backfill-events` (`X-Admin-Token`) e o scanner de timeout sobre tabelas vazias. Disparar ou retomar processo é pelo POOL, no channel-gateway. Aposentar o serviço e o skill-flow-worker: `WFL-01`.
 
 **Suspend step**: `reason: approval|input|webhook|timer`, `timeout_hours`, `business_hours` (uses calendar-api). Two-stage idempotency sentinel. **collect step**: contacts target via channel, suspends until response or timeout. `collect_token` for correlation; `campaign_id` as free-form grouper across instances.
 

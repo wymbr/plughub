@@ -30,16 +30,8 @@ class Settings(BaseSettings):
     journey_topic:   str  = "journey.events"
     kafka_enabled:   bool = True
 
-    # Calendar API (for business-hours deadline calculation)
-    calendar_api_url: str = "http://localhost:3700"
-    # AUT-63 — `X-Service-Token` do motor da calendar-api.
-    calendar_service_token: str = ""
-
-    # Agent Registry (for resolving flow_definition when only flow_id is provided)
-    agent_registry_url: str = "http://localhost:3300"
-
-    # Channel Gateway (Arc 19 Fase D — proxy target for /v1/workflow/trigger)
-    channel_gateway_url: str = "http://localhost:8010"
+    # calendar-api, agent-registry e channel-gateway SAÍRAM em 2026-09-29 (AUT-64):
+    # eram alvo das rotas de proxy e de prazo removidas, e nada mais os lia.
 
     # Timeout scanner interval in seconds
     timeout_scan_interval_s: int = 60

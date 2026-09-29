@@ -31,14 +31,7 @@ export default defineConfig({
                 changeOrigin: true,
                 rewrite: function (path) { return path.replace(/^\/analytics/, ''); },
             },
-            '^/v1/workflow': {
-                target: 'http://localhost:3800',
-                changeOrigin: true
-            },
-            '^/v1/journeys': {
-                target: 'http://localhost:3800',
-                changeOrigin: true
-            },
+            // /v1/workflow e /v1/journeys (workflow-api) sairam em 2026-09-29 (AUT-64)
             '^/v1/(calendars|holiday-sets|associations|engine)': {
                 target: 'http://localhost:3700',
                 changeOrigin: true

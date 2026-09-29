@@ -19,8 +19,6 @@ export interface ScenarioContext {
   channelGatewayWsUrl: string;
   /** HTTP base URL for the Channel Gateway (e.g. http://localhost:8010) */
   channelGatewayHttpUrl: string;
-  /** Workflow API base URL (Arc 4 — e.g. http://localhost:3800) */
-  workflowApiUrl: string;
   /** Calendar API base URL (Arc 4 — e.g. http://localhost:3700) */
   calendarApiUrl: string;
   /** Analytics API base URL (Arc 3 — e.g. http://localhost:3500) */

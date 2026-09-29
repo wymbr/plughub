@@ -17,18 +17,12 @@
  *   ts-node runner.ts --only 11       — run only scenario 11 (comparison mode)
  *   ts-node runner.ts --only 12       — run only scenario 12 (webchat channel)
  *   ts-node runner.ts --webchat       — run scenarios 01–04 + 12 (includes webchat)
- *   ts-node runner.ts --workflow      — run scenarios 01–04 + 13 + 14 (workflow + collect)
- *   ts-node runner.ts --only 13       — run only scenario 13 (workflow automation)
- *   ts-node runner.ts --collect       — run scenarios 01–04 + 14 (collect step)
- *   ts-node runner.ts --only 14       — run only scenario 14 (collect step)
  *   ts-node runner.ts --bootstrap     — run scenario 15 (instance bootstrap)
  *   ts-node runner.ts --only 15       — run only scenario 15 (instance bootstrap)
  *   ts-node runner.ts --reconcile     — run scenarios 01–04 + 15 + 16 (bootstrap + live reconcile)
  *   ts-node runner.ts --only 16       — run only scenario 16 (live reconciliation)
  *   ts-node runner.ts --ctx           — run scenario 17 (ContextStore accumulation + supervisor_state)
  *   ts-node runner.ts --only 17       — run only scenario 17 (ContextStore)
- *   ts-node runner.ts --worker        — run scenario 18 (Kafka→worker→engine chain)
- *   ts-node runner.ts --only 18       — run only scenario 18 (workflow worker chain)
  *   ts-node runner.ts --mention       — run scenario 19 (@mention co-pilot + masked PIN auth)
  *   ts-node runner.ts --only 19       — run only scenario 19 (@mention + masked PIN)
  *   ts-node runner.ts --masked        — run scenarios 20 + 21 (masked form + retry cycle)
@@ -46,8 +40,6 @@
  *   ts-node runner.ts --only 26          — run only scenario 26 (AI Gateway provider fallback chain)
  *   ts-node runner.ts --permissions      — run scenario 27 (Arc 6 v2 — 2D permission model)
  *   ts-node runner.ts --only 27          — run only scenario 27 (grant/list/update/resolve/revoke perms)
- *   ts-node runner.ts --workflow-review  — run scenario 28 (Arc 6 v2 — workflow review/contestation cycle)
- *   ts-node runner.ts --only 28          — run only scenario 28 (workflow motor, anti-replay, ContextStore lock)
  *   ts-node runner.ts --queue            — run scenario 29 (fila atendida — o agente de fila ouve o cliente)
  *   ts-node runner.ts --only 29          — run only scenario 29 (queue agent transport + heard + reply)
  *
@@ -105,12 +97,9 @@ import { run as scenario09 } from "./scenarios/09_session_replayer";
 import { run as scenario10 } from "./scenarios/10_masking";
 import { run as scenario11 } from "./scenarios/11_comparison_mode";
 import { run as scenario12 } from "./scenarios/12_webchat_channel";
-import { run as scenario13 } from "./scenarios/13_workflow_automation";
-import { run as scenario14 } from "./scenarios/14_collect_step";
 import { run as scenario15 } from "./scenarios/15_instance_bootstrap";
 import { run as scenario16 } from "./scenarios/16_live_reconciliation";
 import { run as scenario17 } from "./scenarios/17_context_store";
-import { run as scenario18 } from "./scenarios/18_workflow_worker_chain";
 import { run as scenario19 } from "./scenarios/19_mention_copilot_auth";
 import { run as scenario20 } from "./scenarios/20_masked_form";
 import { run as scenario21 } from "./scenarios/21_masked_retry";
@@ -120,7 +109,6 @@ import { run as scenario24 } from "./scenarios/24_evaluation_campaign";
 import { run as scenario25 } from "./scenarios/25_evaluation_contestation";
 import { run as scenario26 } from "./scenarios/26_ai_gateway_fallback";
 import { run as scenario27 } from "./scenarios/27_evaluation_permissions";
-import { run as scenario28 } from "./scenarios/28_evaluation_workflow_cycle";
 import { run as scenario29 } from "./scenarios/29_queue_agent";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,7 +123,6 @@ const config = {
   aiGatewayUrl:          process.env["AI_GATEWAY_URL"]           ?? "http://localhost:3200",
   channelGatewayWsUrl:   process.env["CHANNEL_GATEWAY_WS_URL"]   ?? "ws://localhost:8010",
   channelGatewayHttpUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
-  workflowApiUrl:        process.env["WORKFLOW_API_URL"]         ?? "http://localhost:3800",
   calendarApiUrl:        process.env["CALENDAR_API_URL"]         ?? "http://localhost:3700",
   analyticsApiUrl:       process.env["ANALYTICS_API_URL"]        ?? "http://localhost:3500",
   evaluationApiUrl:      process.env["EVALUATION_API_URL"]       ?? "http://localhost:3400",
@@ -159,12 +146,9 @@ const onlyScenario = onlyFlag >= 0 ? args[onlyFlag + 1] : null;
 const runPerf       = args.includes("--perf")       || onlyScenario === "05";
 const runConference = args.includes("--conference") || onlyScenario === "06";
 const runWebchat    = args.includes("--webchat")    || onlyScenario === "12";
-const runWorkflow   = args.includes("--workflow")   || onlyScenario === "13";
-const runCollect    = args.includes("--collect")    || onlyScenario === "14";
 const runBootstrap  = args.includes("--bootstrap")  || onlyScenario === "15";
 const runReconcile  = args.includes("--reconcile") || onlyScenario === "16";
 const runCtx        = args.includes("--ctx")        || onlyScenario === "17";
-const runWorker     = args.includes("--worker")     || onlyScenario === "18";
 const runMention    = args.includes("--mention")    || onlyScenario === "19";
 const runMasked     = args.includes("--masked")     || onlyScenario === "20" || onlyScenario === "21";
 const runHooks      = args.includes("--hooks")      || onlyScenario === "22";
@@ -173,7 +157,6 @@ const runEvaluation = args.includes("--evaluation") || onlyScenario === "24";
 const runContestation = args.includes("--contestation") || onlyScenario === "25";
 const runFallback         = args.includes("--fallback")         || onlyScenario === "26";
 const runPermissions      = args.includes("--permissions")      || onlyScenario === "27";
-const runWorkflowReview   = args.includes("--workflow-review")  || onlyScenario === "28";
 const runQueue            = args.includes("--queue")            || onlyScenario === "29";
 const runDemo             = args.includes("--demo");  // runs all scenarios 01–18
 
@@ -181,6 +164,11 @@ const runDemo             = args.includes("--demo");  // runs all scenarios 01�
 // Scenario registry
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Cenários 13, 14, 18 e 28 SAÍRAM em 2026-09-29 (AUT-64): exercitavam as rotas de
+// instância e de proxy da workflow-api (`trigger`, `resume`, `persist-suspend`,
+// `complete`, `collect/*`), removidas por não terem chamador de produto. 13 e 14 já
+// batiam em 410 desde o Arc 19 (fase D); 18 dependia da cadeia do skill-flow-worker
+// (`WFL-01`); 28 era o motor de revisão por workflow, declarado LEGADO em 2026-06-25.
 const ALL_SCENARIOS: Array<{ id: string; fn: (ctx: ScenarioContext) => Promise<ScenarioResult> }> = [
   { id: "01", fn: scenario01 },
   { id: "02", fn: scenario02 },
@@ -220,14 +208,6 @@ if (runDemo || runWebchat || onlyScenario === "12") {
   ALL_SCENARIOS.push({ id: "12", fn: scenario12 });
 }
 
-if (runDemo || runWorkflow || onlyScenario === "13") {
-  ALL_SCENARIOS.push({ id: "13", fn: scenario13 });
-}
-
-if (runDemo || runWorkflow || runCollect || onlyScenario === "14") {
-  ALL_SCENARIOS.push({ id: "14", fn: scenario14 });
-}
-
 if (runDemo || runBootstrap || onlyScenario === "15") {
   ALL_SCENARIOS.push({ id: "15", fn: scenario15 });
 }
@@ -238,10 +218,6 @@ if (runDemo || runReconcile || onlyScenario === "16") {
 
 if (runDemo || runCtx || onlyScenario === "17") {
   ALL_SCENARIOS.push({ id: "17", fn: scenario17 });
-}
-
-if (runDemo || runWorker || onlyScenario === "18") {
-  ALL_SCENARIOS.push({ id: "18", fn: scenario18 });
 }
 
 if (runMention || onlyScenario === "19") {
@@ -280,10 +256,6 @@ if (runPermissions || onlyScenario === "27") {
   ALL_SCENARIOS.push({ id: "27", fn: scenario27 });
 }
 
-if (runWorkflowReview || onlyScenario === "28") {
-  ALL_SCENARIOS.push({ id: "28", fn: scenario28 });
-}
-
 // Cenário 29 fica FORA do `--demo` de propósito: ele depende de uma precondição
 // de ambiente (nenhum agente pronto no pool humano) que ele MEDE e sobre a qual
 // reprova. Numa suíte corrida com o Console aberto, isso viraria vermelho
@@ -307,7 +279,6 @@ async function main(): Promise<void> {
   console.log(`  Tenant:      ${config.tenantId}`);
   console.log(`  MCP Server:  ${config.mcpServerUrl}`);
   console.log(`  Registry:    ${config.agentRegistryUrl}`);
-  console.log(`  Workflow:    ${config.workflowApiUrl}`);
   console.log(`  Calendar:    ${config.calendarApiUrl}`);
   console.log(`  Analytics:   ${config.analyticsApiUrl}`);
   console.log(`  Kafka:       ${config.kafkaBrokers.join(",")}`);
@@ -335,7 +306,6 @@ async function main(): Promise<void> {
     ["AI_GATEWAY_URL",           config.aiGatewayUrl],
     ["CHANNEL_GATEWAY_WS_URL",   config.channelGatewayWsUrl],
     ["CHANNEL_GATEWAY_HTTP_URL", config.channelGatewayHttpUrl],
-    ["WORKFLOW_API_URL",         config.workflowApiUrl],
     ["CALENDAR_API_URL",         config.calendarApiUrl],
     ["ANALYTICS_API_URL",        config.analyticsApiUrl],
     ["EVALUATION_API_URL",       config.evaluationApiUrl],
@@ -360,11 +330,10 @@ async function main(): Promise<void> {
   console.log("[runner] Waiting for services to be ready...");
 
   const scenarioIds = new Set(SCENARIOS_TO_RUN.map((s) => s.id));
-  const needsCore      = [...scenarioIds].some((id) => !["13", "14", "15", "16"].includes(id));
+  const needsCore      = [...scenarioIds].some((id) => !["15", "16"].includes(id));
   const needsRegistry  = scenarioIds.has("15") || scenarioIds.has("16") || needsCore;
   const needsBootstrap = scenarioIds.has("15") || scenarioIds.has("16");
   const needsConfigApi = scenarioIds.has("16");
-  const needsWorkflow  = scenarioIds.has("13") || scenarioIds.has("14") || scenarioIds.has("18") || runWorkflow || runCollect || runWorker;
 
   const waits: Promise<unknown>[] = [
     waitForRedis(config.redisUrl, 30000),
@@ -388,13 +357,6 @@ async function main(): Promise<void> {
       waitForService(`${config.mcpServerUrl}/health`, "mcp-server-plughub", 30000),
       waitForService(`${config.skillFlowUrl}/health`, "skill-flow-service", 30000),
       waitForService(`${config.rulesEngineUrl}/rules?tenant_id=${config.tenantId}`, "rules-engine", 30000),
-    );
-  }
-
-  if (needsWorkflow) {
-    waits.push(
-      waitForService(`${config.workflowApiUrl}/v1/health`, "workflow-api", 30000),
-      waitForService(`${config.calendarApiUrl}/v1/health`, "calendar-api", 30000),
     );
   }
 
@@ -442,7 +404,6 @@ async function main(): Promise<void> {
       aiGatewayUrl:          config.aiGatewayUrl,
       channelGatewayWsUrl:   config.channelGatewayWsUrl,
       channelGatewayHttpUrl: config.channelGatewayHttpUrl,
-      workflowApiUrl:        config.workflowApiUrl,
       calendarApiUrl:        config.calendarApiUrl,
       analyticsApiUrl:       config.analyticsApiUrl,
       evaluationApiUrl:      config.evaluationApiUrl,
@@ -455,12 +416,6 @@ async function main(): Promise<void> {
       webchatJwtSecret:      config.webchatJwtSecret,
     };
 
-    // Scenario 18 involves two Kafka consumer setups + two worker processing cycles.
-    // The worker needs to consume workflow.started, run engine (suspend), call
-    // persist-suspend, then consume workflow.resumed and run engine again (complete).
-    // Each Kafka consumer setup adds ~1-2s, and the worker may take a few seconds
-    // to process each event.  120s provides a comfortable window.
-    // Scenario 18: two Kafka round-trips + two worker engine runs → 120s
     // Scenario 19: LLM reason step (real API) + BLPOP cycles → 90s
     // Scenarios 20 + 21: BLPOP cycles, two form/text menu interactions → 60s
     // Scenario 29: enfileiramento + ativação do agente de fila pelo bridge
@@ -470,7 +425,7 @@ async function main(): Promise<void> {
     //   mata o cenário antes das asserções, e "morreu" vira indistinguível de
     //   "reprovou". → 150s
     const timeoutMs =
-      id === "18" ? 120_000 : id === "29" ? 150_000 : id === "19" ? 90_000 : 60_000;
+      id === "29" ? 150_000 : id === "19" ? 90_000 : 60_000;
 
     let result: ScenarioResult;
     try {

@@ -2,81 +2,22 @@
 router.py
 FastAPI routes for the Workflow API.
 
-Endpoints:
-  POST /v1/workflow/trigger                       — create + start a WorkflowInstance
-  POST /v1/workflow/instances/{id}/persist-suspend — called by Skill Flow engine on suspend
-  POST /v1/workflow/resume                        — resume a suspended instance (token-based)
-  POST /v1/workflow/instances/{id}/complete       — mark an instance completed (called by engine)
-  POST /v1/workflow/instances/{id}/fail           — mark an instance failed (called by engine)
-  GET  /v1/workflow/instances                     — list instances
-  GET  /v1/workflow/instances/{id}                — get instance detail
-  (POST /v1/workflow/instances/{id}/cancel        — REMOVIDA 2026-08-07, ver § Cancel)
+Rota viva:
+  POST /admin/backfill-events                     — re-emite workflow.* do histórico (X-Admin-Token)
+  (GET /v1/health mora no main.py)
 
-  ── Webhook Trigger ───────────────────────────────────────────────────────────
-  POST /v1/workflow/webhooks                      — register a webhook (admin)
-  GET  /v1/workflow/webhooks                      — list webhooks for tenant (admin)
-  GET  /v1/workflow/webhooks/{webhook_id}         — get webhook detail (admin)
-  PATCH /v1/workflow/webhooks/{webhook_id}        — update active/description/context (admin)
-  POST /v1/workflow/webhooks/{webhook_id}/rotate  — rotate token (admin)
-  DELETE /v1/workflow/webhooks/{webhook_id}       — delete webhook (admin)
-  GET  /v1/workflow/webhooks/{webhook_id}/deliveries — delivery log (admin)
-  POST /v1/workflow/webhook/{webhook_id}          — PUBLIC trigger endpoint (X-Webhook-Token)
-
-Architecture note:
-  The Skill Flow engine runs in a TypeScript worker process. When it hits a
-  suspend step, it calls POST /persist-suspend to delegate persistence and
-  deadline calculation to this service. The worker also calls /complete and
-  /fail to report the final outcome.
-
-  When an external actor sends a resume signal (approval, input, webhook, etc.),
-  they call POST /resume with the resume_token. The workflow-api records the
-  decision and emits workflow.resumed to Kafka. A Kafka consumer (or the worker
-  itself) picks up the event and calls engine.run() with resumeContext set.
-
-  Webhook tokens are stored as SHA-256 hashes — plain tokens are shown once at
-  creation and never stored. Authentication uses X-Webhook-Token header with
-  constant-time hash comparison.
+⚠️ **As 11 rotas de instância e de proxy SAÍRAM em 2026-09-29 (AUT-64)** — ver o bloco
+"Rotas REMOVIDAS" abaixo. Antes dela saíram o cancel (2026-08-07) e as 8 de webhook
+(2026-09-08, MOD-11).
 """
 from __future__ import annotations
 
 import logging
-import re
-import time
-from datetime import datetime, timezone
-from typing import Any
 
-import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
 
-from .calendar_client import calculate_deadline
-from .db import (
-    db_cancel_instance,
-    db_complete_collect,
-    db_complete_instance,
-    db_create_collect,
-    db_create_instance,
-    db_fail_instance,
-    db_get_collect_by_token,
-    db_get_instance,
-    db_get_instance_by_token,
-    db_get_instance_sessions,
-    db_list_collects_by_campaign,
-    db_list_instances,
-    db_resume_instance,
-    db_suspend_instance,
-)
-from .kafka_emitter import (
-    emit_cancelled,
-    emit_collect_requested,
-    emit_collect_responded,
-    emit_completed,
-    emit_events_batch,
-    emit_failed,
-    emit_resumed,
-    emit_started,
-    emit_suspended,
-)
+from .db import db_list_instances
+from .kafka_emitter import emit_events_batch
 
 logger = logging.getLogger("plughub.workflow.router")
 router = APIRouter()
@@ -94,351 +35,38 @@ def _settings(request: Request):
     return request.app.state.settings
 
 
-# ── Trigger ───────────────────────────────────────────────────────────────────
-
-class TriggerRequest(BaseModel):
-    tenant_id:         str
-    flow_id:           str
-    trigger_type:      str = "manual"
-    session_id:        str | None = None
-    # When triggered from an active customer session, pass the session_id here.
-    # The worker will use this as the ContextStore key so @ctx.* reads/writes
-    # target {tenant}:ctx:{origin_session_id} rather than the workflow UUID.
-    origin_session_id: str | None = None
-    pool_id:           str | None = None
-    context:           dict = Field(default_factory=dict)
-    metadata:          dict = Field(default_factory=dict)
-
-
-_SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+$")  # id estável (Skill Versioning Fase A); _v\d+ legado casa o slug
-
-
-async def _resolve_flow_definition(
-    flow_id: str,
-    tenant_id: str,
-    metadata: dict,
-    registry_url: str,
-) -> dict:
-    """
-    If metadata already contains 'flow_definition', return metadata unchanged.
-    Otherwise, for skill_* flow IDs, fetch the skill from agent-registry and inject
-    the 'flow' field as 'flow_definition' so the skill-flow-worker can execute it.
-    """
-    if "flow_definition" in metadata:
-        return metadata
-
-    if not _SKILL_ID_RE.match(flow_id):
-        return metadata  # not a skill — infrastructure flows may have definitions elsewhere
-
-    try:
-        url = f"{registry_url}/v1/skills/{flow_id}"
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, headers={"x-tenant-id": tenant_id})
-        if resp.status_code == 200:
-            skill = resp.json()
-            if skill.get("flow"):
-                return {**metadata, "flow_definition": dict(skill["flow"])}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not fetch flow_definition for %s from registry: %s", flow_id, exc)
-
-    return metadata
-
-
-@router.post("/v1/workflow/trigger", status_code=201)
-async def trigger_workflow(
-    body:    TriggerRequest,
-    request: Request,
-) -> dict[str, Any]:
-    """
-    Arc 19 Fase D — proxies to the channel-gateway WebhookAdapter.
-
-    POST /v1/channels/webhook/{flow_id} creates a normal webhook session via
-    conversations.inbound Kafka.  The session_id returned by channel-gateway
-    is the single persistent identifier for the workflow execution.
-
-    Legacy fields (origin_session_id, pool_id, journey_id, context) are
-    forwarded inside metadata so the webhook adapter / orchestrator-bridge can
-    read them from pipeline_state.contact_context on first step.
-    """
-    settings = _settings(request)
-    trigger_type = body.trigger_type if body.trigger_type != "manual" else "api"
-    metadata: dict = dict(body.metadata)
-    if body.context:
-        metadata.setdefault("context", body.context)
-    if body.origin_session_id:
-        metadata.setdefault("origin_session_id", body.origin_session_id)
-    if body.pool_id:
-        metadata.setdefault("pool_id", body.pool_id)
-
-    gw_url = f"{settings.channel_gateway_url}/v1/channels/webhook/{body.flow_id}"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(gw_url, json={
-                "tenant_id":    body.tenant_id,
-                "trigger_type": trigger_type,
-                "metadata":     metadata or None,
-                "customer_id":  body.session_id or None,
-            })
-            resp.raise_for_status()
-            return resp.json()
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            exc.response.status_code,
-            f"Channel gateway error: {exc.response.text}",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(502, f"Channel gateway unreachable: {exc}") from exc
-
-
-# ── Persist Suspend ───────────────────────────────────────────────────────────
-
-class PersistSuspendRequest(BaseModel):
-    step_id:        str
-    resume_token:   str
-    reason:         str
-    timeout_hours:  float = 48.0
-    business_hours: bool  = True
-    # Optional: entity to use for calendar association lookup
-    entity_type:    str   = "workflow"
-    entity_id:      str | None = None
-    calendar_id:    str | None = None      # reserved — future direct-calendar override
-    # Optional: absolute ISO-8601 datetime for timer-based suspends (scheduled deploys, etc.)
-    # When provided, used directly as resume_expires_at (overrides timeout_hours + business_hours)
-    scheduled_at:   str | None = None
-    pipeline_state: dict  = Field(default_factory=dict)
-    metadata:       dict  = Field(default_factory=dict)
-
-
-@router.post("/v1/workflow/instances/{instance_id}/persist-suspend", status_code=410)
-async def persist_suspend(
-    instance_id: str,
-    request:     Request,
-) -> dict[str, Any]:
-    """
-    Arc 19 Fase D — deprecated.
-
-    Suspend state is now managed by the channel-gateway WebhookAdapter via
-    Redis (status suspended + TTL extension) and the orchestrator-bridge
-    persistSuspendWebhook callback.  This endpoint is no longer called.
-    """
-    raise HTTPException(
-        410,
-        "Deprecated in Arc 19 Fase D. Suspend is managed by the channel-gateway "
-        "WebhookAdapter and orchestrator-bridge persistSuspendWebhook callback.",
-    )
-
-
-# ── Resume ────────────────────────────────────────────────────────────────────
-
-class ResumeRequest(BaseModel):
-    token:     str
-    decision:  str   # approved | rejected | input | timeout
-    payload:   dict  = Field(default_factory=dict)
-    # Arc 19 Fase D: when tenant_id is present the token belongs to a webhook
-    # session managed by channel-gateway; proxy the call there.
-    # When absent fall back to the legacy PostgreSQL-backed path for pre-Arc19
-    # workflow instances that still exist in the database.
-    tenant_id: str | None = None
-
-
-@router.post("/v1/workflow/resume", status_code=200)
-async def resume_workflow(
-    body:    ResumeRequest,
-    request: Request,
-    pool=Depends(_pool),
-) -> dict[str, Any]:
-    """
-    Resume a suspended workflow / webhook session using its resume_token.
-
-    Arc 19 Fase D behaviour:
-    - If body.tenant_id is provided → proxy to channel-gateway WebhookAdapter
-      (POST /v1/channels/webhook/resume/{token}).  The session is managed in
-      Redis; channel-gateway handles TTL, stream events, and re-allocation.
-    - If body.tenant_id is absent → legacy path: look up the WorkflowInstance
-      in PostgreSQL, validate the token, publish workflow.resumed to Kafka.
-      Kept for backward compatibility with pre-Arc19 instances.
-    """
-    settings = _settings(request)
-
-    # ── Arc 19: webhook session managed by channel-gateway ────────────────────
-    if body.tenant_id:
-        gw_url = f"{settings.channel_gateway_url}/v1/channels/webhook/resume/{body.token}"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(gw_url, json={
-                    "tenant_id": body.tenant_id,
-                    "payload":   {**body.payload, "decision": body.decision},
-                })
-                resp.raise_for_status()
-                return resp.json()
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(
-                exc.response.status_code,
-                f"Channel gateway error: {exc.response.text}",
-            ) from exc
-        except Exception as exc:
-            raise HTTPException(502, f"Channel gateway unreachable: {exc}") from exc
-
-    # ── Legacy: PostgreSQL-backed WorkflowInstance ────────────────────────────
-    producer = _producer(request)
-
-    instance = await db_get_instance_by_token(pool, body.token)
-    if not instance:
-        raise HTTPException(404, "resume_token not found or already consumed")
-    if instance["status"] != "suspended":
-        raise HTTPException(
-            409,
-            f"Instance is not suspended (current status: '{instance['status']}')"
-        )
-
-    # Check expiry (only for non-timeout decisions — timeout is system-generated)
-    if body.decision != "timeout" and instance["resume_expires_at"]:
-        expires = datetime.fromisoformat(instance["resume_expires_at"])
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) > expires:
-            raise HTTPException(410, "resume_token has expired")
-
-    current_step = instance.get("current_step") or "unknown"
-
-    updated = await db_resume_instance(
-        pool,
-        instance_id=instance["id"],
-        pipeline_state=instance["pipeline_state"],
-    )
-    if not updated:
-        raise HTTPException(409, "Resume failed — concurrent update detected")
-
-    wait_ms = 0
-    if instance.get("suspended_at"):
-        suspended_dt = datetime.fromisoformat(instance["suspended_at"])
-        if suspended_dt.tzinfo is None:
-            suspended_dt = suspended_dt.replace(tzinfo=timezone.utc)
-        wait_ms = int((datetime.now(timezone.utc) - suspended_dt).total_seconds() * 1000)
-
-    await emit_resumed(
-        producer, settings.kafka_topic,
-        tenant_id=instance["tenant_id"],
-        instance_id=instance["id"],
-        flow_id=instance["flow_id"],
-        decision=body.decision,
-        resumed_from=current_step,
-        next_step="__pending_engine__",
-        wait_duration_ms=wait_ms,
-    )
-
-    return {
-        "instance_id":      instance["id"],
-        "flow_id":          instance["flow_id"],
-        "decision":         body.decision,
-        "wait_duration_ms": wait_ms,
-        "instance":         updated,
-    }
-
-
-# ── Complete / Fail (called by engine worker) ─────────────────────────────────
-
-class CompleteRequest(BaseModel):
-    outcome:        str
-    pipeline_state: dict = Field(default_factory=dict)
-
-
-@router.post("/v1/workflow/instances/{instance_id}/complete", status_code=410)
-async def complete_workflow(
-    instance_id: str,
-    request:     Request,
-) -> dict[str, Any]:
-    """
-    Arc 19 Fase D — deprecated.
-
-    Workflow completion is now signalled via agent_done from the
-    orchestrator-bridge, which closes the webhook session normally.
-    """
-    raise HTTPException(
-        410,
-        "Deprecated in Arc 19 Fase D. Workflow completion is handled by "
-        "agent_done in the orchestrator-bridge.",
-    )
-
-
-class FailRequest(BaseModel):
-    error: str
-
-
-@router.post("/v1/workflow/instances/{instance_id}/fail", status_code=410)
-async def fail_workflow(
-    instance_id: str,
-    request:     Request,
-) -> dict[str, Any]:
-    """
-    Arc 19 Fase D — deprecated.
-
-    Workflow failure is now propagated via session close with
-    close_reason=system_error from the orchestrator-bridge.
-    """
-    raise HTTPException(
-        410,
-        "Deprecated in Arc 19 Fase D. Workflow failure is signalled via "
-        "session close (close_reason=system_error) from the orchestrator-bridge.",
-    )
-
-
-# ── List / Detail ─────────────────────────────────────────────────────────────
-
-@router.get("/v1/workflow/instances")
-async def list_instances(
-    tenant_id: str,
-    status:    str | None = None,   # all | active | suspended | completed | failed | timed_out | cancelled
-    flow_id:   str | None = None,
-    pool_id:   str | None = None,
-    from_dt:   str | None = None,   # ISO date string (inclusive)
-    to_dt:     str | None = None,   # ISO date string (inclusive)
-    limit:     int = 50,
-    offset:    int = 0,
-    pool=Depends(_pool),
-) -> list[dict]:
-    if limit > 200:
-        limit = 200
-    return await db_list_instances(
-        pool, tenant_id, status, flow_id, pool_id, from_dt, to_dt, limit, offset
-    )
-
-
-@router.get("/v1/workflow/instances/{instance_id}/sessions")
-async def list_instance_sessions(
-    instance_id: str,
-    pool=Depends(_pool),
-) -> dict[str, Any]:
-    """
-    Returns all session_ids linked to a workflow instance.
-
-    Includes:
-    - origin_session_id: the customer session that triggered the workflow (type='origin')
-    - responded_session_id: sessions created when collect steps were responded to (type='collect')
-
-    Used by Analytics/Processes drill-down (Arc 18 B2).
-    """
-    instance = await db_get_instance(pool, instance_id)
-    if not instance:
-        raise HTTPException(404, "workflow instance not found")
-
-    sessions = await db_get_instance_sessions(pool, instance_id)
-    return {
-        "instance_id":  instance_id,
-        "session_ids":  [s["session_id"] for s in sessions],
-        "sessions":     sessions,
-    }
-
-
-@router.get("/v1/workflow/instances/{instance_id}")
-async def get_instance(
-    instance_id: str,
-    pool=Depends(_pool),
-) -> dict[str, Any]:
-    instance = await db_get_instance(pool, instance_id)
-    if not instance:
-        raise HTTPException(404, "workflow instance not found")
-    return instance
+# ── Rotas REMOVIDAS em 2026-09-29 (AUT-64) ───────────────────────────────────
+#
+# Saíram 11 rotas, todas medidas SEM chamador de produto. A AUT-58 as achou
+# respondendo ao anônimo pela borda pública (o nginx do platform-ui publicava
+# `^/v1/workflow`). A ficha mandava medir antes de pôr portão, e o que não tivesse
+# chamador sairia. Nenhuma tinha:
+#
+#   · `GET /v1/workflow/instances`, `…/{id}`, `…/{id}/sessions`,
+#     `GET /v1/workflow/campaigns/{id}/collects` — leem `workflow.instances` e
+#     `workflow.collect_instances`. A primeira tem ZERO linhas, e nada neste
+#     repositório chama `db_create_instance`: o Arc 19 (fase D) trocou a instância
+#     pela SESSÃO webhook. O Monitor lê `/sessions/processes` da analytics-api, e o
+#     `hooks.ts` da UI já não chamava nenhuma delas.
+#   · `persist-suspend`, `complete`, `fail`, `collect/persist`, `collect/respond`
+#     — respondiam 410 desde a fase D. O único chamador era o skill-flow-worker,
+#     que só age ao consumir `workflow.events`, e o tópico não tem mais produtor de
+#     início de instância. A cadeia estava morta nas duas pontas.
+#   · `POST /v1/workflow/trigger` e `POST /v1/workflow/resume` — proxies ANÔNIMOS
+#     para as rotas internas do channel-gateway (`/v1/channels/webhook/{flow_id}` e
+#     `…/resume/{token}`). Com a borda publicando `/v1/workflow`, eram um
+#     desvio pela 5174 do que a AUT-20 fechou. O trigger ainda endereçava um SKILL,
+#     não um pool (CLAUDE.md § Invariants). Só os cenários e2e 13/14/18/28 os
+#     chamavam, e eles saíram junto. O ramo "legado" do resume
+#     (`workflow.resumed` sobre instância em PG) operava sobre a tabela vazia.
+#
+# Logs do container (30 dias): nenhuma chamada a estas rotas além da própria
+# varredura da AUT-58. Quem precisa disparar ou retomar processo usa o caminho
+# por POOL do channel-gateway, pelo registro de endereço (`ChannelEndpoint`).
+#
+# Ficam: o scanner de timeout, que opera sobre as mesmas tabelas vazias, e o
+# backfill administrativo. A aposentadoria do serviço e do skill-flow-worker
+# inteiros é a `WFL-01`.
 
 
 # ── Cancel — ROTA REMOVIDA em 2026-08-07 (I5, lacuna 4b) ──────────────────────
@@ -462,107 +90,15 @@ async def get_instance(
 #
 # **Não foi reapontada para `/api/force-complete`** porque a medição mostrou que
 # não há endereço: esta tabela tem UM escritor (`:794`) e ele grava
-# `session_id: None` hardcoded (`:799`) — cobertura 0% por construção. Sonda:
-# `infra/test/probe_workflow_cancel_callers.sh`.
+# `session_id: None` hardcoded (`:799`) — cobertura 0% por construção. A sonda
+# (`probe_workflow_cancel_callers.sh`) saiu na AUT-64 junto com a leitura de
+# `/v1/workflow/instances`, de que ela dependia.
 #
 # Quem precisar encerrar execução parada usa `POST /api/force-complete/{sid}`
 # no mcp-server (BFF), que é endereçado por SESSÃO — a unidade do Arc 19.
 
 
-# ── Collect: Persist ──────────────────────────────────────────────────────────
-
-class CollectPersistRequest(BaseModel):
-    """
-    Called by the Skill Flow engine (TypeScript worker) when it executes a
-    collect step.  The workflow-api calculates send_at and expires_at using
-    the calendar-api (or wall-clock fallback) and creates the collect_instance.
-    """
-    step_id:        str
-    collect_token:  str
-    target:         dict                  # { type, id }
-    channel:        str | None = None     # optional — channel-gateway selects by requires[] when absent (Arc 16)
-    interaction:    str
-    prompt:         str
-    options:        list = Field(default_factory=list)
-    fields:         list = Field(default_factory=list)
-    scheduled_at:   str | None = None     # ISO-8601 absolute send time
-    delay_hours:    float | None = None   # relative send time from now
-    timeout_hours:  float = 48.0
-    business_hours: bool  = True
-    entity_type:    str   = "workflow"
-    entity_id:      str | None = None     # for calendar association lookup
-    calendar_id:    str | None = None     # reserved for direct calendar override
-    campaign_id:    str | None = None
-
-
-@router.post("/v1/workflow/instances/{instance_id}/collect/persist", status_code=410)
-async def persist_collect(
-    instance_id: str,
-    request:     Request,
-) -> dict[str, Any]:
-    """
-    Arc 19 Fase D — deprecated.
-
-    The collect step is now handled by the orchestrator-bridge / channel-gateway
-    via the unified session model.  The step suspends the webhook session and
-    creates a child contact session through the channel-gateway capability
-    negotiation (Arc 16).
-    """
-    raise HTTPException(
-        410,
-        "Deprecated in Arc 19 Fase D. Collect steps are handled by the "
-        "orchestrator-bridge and channel-gateway capability negotiation.",
-    )
-
-
-# ── Collect: Respond ──────────────────────────────────────────────────────────
-
-class CollectRespondRequest(BaseModel):
-    """
-    Called by the channel-gateway (or any external actor) when the target
-    responds to a collect request.  The collect_token is the correlation key.
-    """
-    collect_token: str
-    response_data: dict  = Field(default_factory=dict)
-    channel:       str   = ""
-    session_id:    str | None = None
-
-
-@router.post("/v1/workflow/collect/respond", status_code=410)
-async def respond_collect(
-    request: Request,
-) -> dict[str, Any]:
-    """
-    Arc 19 Fase D — deprecated.
-
-    Collect responses are now delivered to the webhook session via the
-    channel-gateway WebhookAdapter resume endpoint, which re-allocates the
-    skill-flow instance and injects the response into pipeline_state.
-    """
-    raise HTTPException(
-        410,
-        "Deprecated in Arc 19 Fase D. Collect responses are routed via "
-        "POST /v1/channels/webhook/resume/{token} on the channel-gateway.",
-    )
-
-
-# ── Campaign query ─────────────────────────────────────────────────────────────
-
-@router.get("/v1/workflow/campaigns/{campaign_id}/collects")
-async def list_campaign_collects(
-    campaign_id: str,
-    tenant_id:   str,
-    limit:       int = 200,
-    offset:      int = 0,
-    pool=Depends(_pool),
-) -> list[dict]:
-    """List all collect_instances for a campaign (for CampaignPanel)."""
-    if limit > 1000:
-        limit = 1000
-    return await db_list_collects_by_campaign(pool, tenant_id, campaign_id, limit, offset)
-
-
-# ── Webhook helpers ────────────────────────────────────────────────────────────
+# ── Admin helpers ─────────────────────────────────────────────────────────────
 
 def _require_admin(request: Request, x_admin_token: str = Header(default="")):
     """

@@ -1979,19 +1979,9 @@ services:
       PLUGHUB_WORKFLOW_KAFKA_TOPIC:      workflow.events
       PLUGHUB_WORKFLOW_COLLECT_TOPIC:    collect.events
       PLUGHUB_WORKFLOW_JOURNEY_TOPIC:    journey.events
-      PLUGHUB_WORKFLOW_CALENDAR_API_URL:      http://calendar-api:3700
-      PLUGHUB_WORKFLOW_CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
-      PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL:   http://agent-registry:3300
-      # ⚠️ FALTAVA (medido 2026-08-25) — e não era só problema de teste.
-      # `channel_gateway_url` cai em `http://localhost:8010` (`config.py:40`), que
-      # dentro deste container é ELE MESMO, então `POST /v1/workflow/trigger`
-      # devolvia `502 Channel gateway unreachable` para QUALQUER chamador — é o
-      # proxy do Arc 19 Fase D, endpoint de produto. Derrubou os cenários e2e
-      # 13, 14 e 18 de uma vez. Note o PREFIXO: o Settings usa
-      # `env_prefix="PLUGHUB_WORKFLOW_"` (`config.py:48`), então um
-      # `CHANNEL_GATEWAY_URL` sem prefixo — como o do skill-flow-service §800 —
-      # seria ignorado em silêncio.
-      PLUGHUB_WORKFLOW_CHANNEL_GATEWAY_URL:  http://channel-gateway:8010
+      # calendar-api, agent-registry e channel-gateway SAÍRAM em 2026-09-29 (AUT-64):
+      # eram alvo das rotas de proxy (`trigger`/`resume`) e de prazo, removidas por
+      # não terem chamador. O serviço hoje só serve health e o backfill administrativo.
     depends_on:
       postgres:
         condition: service_healthy
@@ -2001,8 +1991,6 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
-      calendar-api:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s

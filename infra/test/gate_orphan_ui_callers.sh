@@ -49,6 +49,11 @@
 #   ⇒ verde. Se vier 6 rotas, o /cancel voltou; se vier > 0 órfãos, achamos o
 #     terceiro caso da família.
 #
+# PREVISÃO REVISTA em 2026-09-29 (AUT-64), contada por grep: as 5 rotas da
+# workflow-api SAÍRAM, então o lado Python conta **0**. O lado Express conta
+# **2** (`/v1/skills/{skill_id}/deploy` e `…/deployments/scheduled`, ambas 410
+# da PID-08) · órfãos **0** ⇒ verde. Se o Express vier 0, o detector quebrou.
+#
 # Uso:  bash infra/test/gate_orphan_ui_callers.sh
 # Pré:  nenhuma — roda sobre o repositório, sem stack.
 # Saída: 0 = nenhum chamador órfão · 1 = achou chamador órfão · 2 = INCONCLUSIVO.
@@ -70,6 +75,39 @@ fi
 DEAD=$(grep -rhoE '@(router|app)\.(post|get|put|delete|patch)\("([^"]+)"[^)]*status_code=(410|501)' \
          "$ROOT/packages" --include='*.py' 2>/dev/null \
        | sed -E 's/.*\("([^"]+)".*/\1/' | sort -u)
+
+# ── 1b. Rotas duras em Express (AUT-64, 2026-09-29) ──────────────────────────
+# As cinco rotas 410 da workflow-api SAÍRAM (AUT-64), e com elas o lado Python
+# ficou com ZERO rotas duras: o contador-testemunha mandaria este gate para
+# INCONCLUSIVO para sempre. As rotas duras vivas moram em TypeScript (o deploy
+# em lote por skill da PID-08, no agent-registry), então o detector passa a
+# lê-las também: handler cuja PRIMEIRA linha é `return res.status(410|501)`.
+# Um 501 dentro de `if` (ex.: o `force-complete` do mcp-server) não casa — é
+# resposta condicional, fora do escopo deste gate. O caminho é montado pelo
+# `app.use("<mount>", <nome>Router)` do mesmo pacote, e `:param` vira `{param}`
+# para o casamento prefixo/sufixo abaixo.
+TS_DEAD=$(python3 - "$ROOT/packages" <<'PY'
+import pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+out = set()
+for pkg in sorted(p for p in root.iterdir() if (p / "src").is_dir()):
+    files = [f for f in (pkg / "src").rglob("*.ts") if "node_modules" not in f.parts]
+    texts = {f: f.read_text(encoding="utf-8", errors="ignore") for f in files}
+    mounts = {}
+    for t in texts.values():
+        for m in re.finditer(r'app\.use\(\s*"([^"]+)"[^\n]*?\b(\w+Router)\s*\)', t):
+            mounts[m.group(2)] = m.group(1)
+    for t in texts.values():
+        for m in re.finditer(r'\b(\w+Router)\.(?:get|post|put|delete|patch)\(\s*"([^"]+)"[^\n]*\n\s*return res\.status\((?:410|501)\)', t):
+            mount = mounts.get(m.group(1))
+            if mount is None:
+                continue
+            path = (mount.rstrip("/") + m.group(2)).rstrip("/") or "/"
+            out.add(re.sub(r":(\w+)", r"{\1}", path))
+print("\n".join(sorted(out)))
+PY
+)
+DEAD=$(printf '%s\n%s\n' "$DEAD" "$TS_DEAD" | grep . | sort -u)
 
 DEAD_N=$(printf '%s\n' "$DEAD" | grep -c . || true)
 

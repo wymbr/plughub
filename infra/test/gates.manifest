@@ -1089,7 +1089,6 @@ smoke_wrapup_slot_handoff.sh
 ?probe_sequence_index.sh
 ?probe_supervisor_tool_masking.sh
 ?probe_ts_scope_resolvers.sh
-?probe_workflow_cancel_callers.sh
 ?smoke_acw_expire.sh
 ?smoke_agent_registry_write_auth.sh
 ?smoke_agent_role_gate.sh
