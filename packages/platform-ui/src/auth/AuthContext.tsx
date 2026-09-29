@@ -88,7 +88,7 @@ interface AuthContextType {
   getAccessToken:  () => Promise<string | null>
 
   // ── Convenience derivations — stable across token refreshes ──────────────
-  /** Tenant ID from JWT. Falls back to VITE_TENANT_ID env var when not authenticated. */
+  /** Tenant ID from the JWT only (TNT-01). '' when not authenticated — never a build-time default. */
   tenantId:        string
   /** ABAC permission checker built from the JWT module_config. Never null — graceful for unauthenticated state. */
   perms:           Permissions
@@ -348,8 +348,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   // ── Derived stable values — recomputed only when session identity changes ───
 
-  /** tenantId from JWT; falls back to env var so non-authenticated code still works */
-  const tenantId = session?.tenantId ?? (import.meta.env.VITE_TENANT_ID as string | undefined) ?? ''
+  /** tenantId from the JWT only (TNT-01). No session ⇒ '' — callers refuse, never guess a tenant. */
+  const tenantId = session?.tenantId ?? ''
 
   /** ABAC permission checker — recomputed only when moduleConfig object changes */
   const perms = useMemo(

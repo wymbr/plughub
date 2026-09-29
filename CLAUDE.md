@@ -1003,6 +1003,12 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   (`x-service-token` = `MCP_INTERNAL_SERVICE_TOKEN`, env vazio ⇒ 503) desde a CAP-10 — loopback
   não é defesa num deploy distribuído, e `agent_login` é auto-serviço. Cliente novo manda o header;
   o segredo nunca vai a MCP de domínio. Gate: ramo G do `probe_mcp_rest_surface.sh`.
+- **O tenant de uma leitura é o do TOKEN de usuário, nunca o da query nem o do build** (TNT-01).
+  Medido: a analytics-api usava o `tenant_id` da query sem compará-lo ao JWT, e o token de um
+  tenant leu cliente de outro; e a UI lia `VITE_TENANT_ID`, env que build nenhum define. A recusa
+  (403 `tenant_mismatch`) mora no ramo de usuário do `optional_pool_principal`, por onde passam
+  as três dependências de principal de pool. Serviço e token de sistema escolhem o tenant.
+  Gate: `probe_tenant_from_session.sh`.
 
 ---
 

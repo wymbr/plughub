@@ -17,9 +17,11 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/api/apiFetch";
+import { useAuth } from '@/auth/useAuth'
 
 const REPORTS_BASE = "/reports";
-const TENANT_ID    = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
+// TNT-01 — o tenant é o da SESSÃO (JWT), nunca a env de tenant do build: ela não é definida
+// em build nenhum, então toda instância consultava `tenant_demo`. Sem tenant, não se consulta.
 
 export interface CustomerJourney {
   journey_id:        string;
@@ -47,13 +49,16 @@ export function useCustomerJourneys(customerId: string | null): UseCustomerJourn
 
   const refetch = () => setFetchKey(k => k + 1);
 
+  const { tenantId } = useAuth();
+
   useEffect(() => {
+    if (!tenantId) { setError("no_tenant"); return; }
     if (!customerId) { setJourneys([]); setLoading(false); setError(null); return; }
     let cancelled = false;
     setLoading(true); setError(null);
 
     const url = `${REPORTS_BASE}/journeys?${new URLSearchParams({
-      tenant_id: TENANT_ID,
+      tenant_id: tenantId,
       customer_id: customerId,
       // significant_only=true (default): só PROCESSOS reais (multi-sessão / webhook) —
       // contatos avulsos (1 sessão) NÃO viram "journey" aqui, ficam na lista de contatos.
@@ -66,7 +71,7 @@ export function useCustomerJourneys(customerId: string | null): UseCustomerJourn
       .catch(e => { if (!cancelled) { setError(String(e)); setJourneys([]); setLoading(false); } });
 
     return () => { cancelled = true; };
-  }, [customerId, fetchKey]);
+  }, [customerId, fetchKey, tenantId]);
 
   return { journeys, loading, error, refetch };
 }

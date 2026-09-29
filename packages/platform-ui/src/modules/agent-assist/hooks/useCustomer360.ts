@@ -17,9 +17,11 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/api/apiFetch";
+import { useAuth } from '@/auth/useAuth'
 
 const REPORTS_BASE = "/reports";
-const TENANT_ID    = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
+// TNT-01 — o tenant é o da SESSÃO (JWT), nunca a env de tenant do build: ela não é definida
+// em build nenhum, então toda instância consultava `tenant_demo`. Sem tenant, não se consulta.
 
 export interface Customer360Contacts {
   total:            number;
@@ -69,13 +71,16 @@ export function useCustomer360(customerId: string | null): UseCustomer360Return 
 
   const refetch = () => setFetchKey(k => k + 1);
 
+  const { tenantId } = useAuth();
+
   useEffect(() => {
+    if (!tenantId) { setError("no_tenant"); return; }
     if (!customerId) { setData(null); setLoading(false); setError(null); return; }
     let cancelled = false;
     setLoading(true); setError(null);
 
     const url = `${REPORTS_BASE}/customers/${encodeURIComponent(customerId)}/360?${new URLSearchParams({
-      tenant_id: TENANT_ID,
+      tenant_id: tenantId,
     })}`;
 
     apiFetch(url)
@@ -84,7 +89,7 @@ export function useCustomer360(customerId: string | null): UseCustomer360Return 
       .catch(e => { if (!cancelled) { setError(String(e)); setData(null); setLoading(false); } });
 
     return () => { cancelled = true; };
-  }, [customerId, fetchKey]);
+  }, [customerId, fetchKey, tenantId]);
 
   return { data, loading, error, refetch };
 }

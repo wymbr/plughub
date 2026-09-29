@@ -1,5 +1,42 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (6) — TNT-01: o tenant de uma leitura é o da sessão — e a analytics-api lia outro tenant
+
+**A ficha, como nasceu (achado da AUT-20).** Sete telas do Console e da Análise tiravam o tenant
+de `VITE_TENANT_ID` (default `tenant_demo`), env que nenhum compose ou Dockerfile define — numa
+instância de outro cliente, consultariam `tenant_demo` e mostrariam tela vazia, o valor plausível.
+
+**O que a medição achou, e é pior.** A analytics-api recebia `tenant_id` pela QUERY e não o
+comparava com o do JWT. Com o token do `tenant_demo`: `?tenant_id=outro` → 200 em histórico,
+busca, visão 360 e jornadas; e o histórico e a visão 360 do cliente `d-00`, que **só existe** em
+`t_poss_1213d358`, vieram inteiros. O escopo de POOL não segura: pool é recorte dentro do tenant.
+Decisão do dono: consertar os dois agora.
+
+**Servidor — uma casa.** `pool_auth._enforce_request_tenant`, chamada no ramo de JWT de usuário do
+`optional_pool_principal`, por onde passam as três dependências de principal de pool (optional,
+require, sse): tenant da query diferente do do token → **403 `tenant_mismatch`** (WARNING com sub,
+os dois tenants e a rota); token de usuário sem tenant → 403 `user_token_without_tenant`. Mesma
+decisão do channel-gateway (`identity_auth.tenant_for`). Serviço (`X-Service-Token`) e token de
+sistema não passam por ali e seguem escolhendo o tenant. Censo AST novo
+(`_analytics_tenant_census.py`): **69** rotas tiram o tenant da query com principal de pool (cobertas
+pela casa), 4 são de sistema (já usam `effective_tenant`), 2 do `audit.py` decidem no corpo e usam o
+tenant das CLAIMS antes do da query — declaradas no gate com o motivo.
+
+**UI.** Os cinco hooks (`useCustomer360`, `useSessionTranscript`, `useCustomerHistory`,
+`useCustomerSearch`, `useCustomerJourneys`) leem o tenant de `useAuth()`, com ele nas dependências
+do efeito; sem tenant, `no_tenant` e nenhuma consulta. `ClienteTab` e `AnaliseClientesPage`
+perderam o fallback de env, e o `AuthContext` também (sem sessão ⇒ `''`, quem chama recusa).
+
+**Verificado.** `test_tenant_from_token.py` 9 verdes — divergência 403 e o controle 200 nas três
+dependências, token sem tenant recusado, serviço segue escolhendo; mutação que desliga a recusa
+reprova 4. Suíte da analytics-api inteira: 854 verdes, zero falhas. `probe_tenant_from_session.sh`
+rodou ANTES do deploy e reprovou 5 (o vazamento vivo); depois, verde. No navegador, Análise ›
+Clientes: busca, 360, jornadas e histórico com o tenant da sessão, todos 200.
+
+**Fora desta ficha:** o `organization_id` do calendário (`VITE_CALENDAR_ORG_ID ?? 'org-default'` em
+quatro telas, e o tenant usado como organização no `PoolsPage`) — as telas discordam entre si e a
+tabela está vazia; é pergunta de modelo, registrada como CAL-01.
+
 ## 2026-09-29 (5) — WHK-01: o gatilho por pool recusa pool que não existe
 
 **O defeito, achado na AUT-20.** `POST /v1/channels/webhook/pool/{pool_id}` criava sessão para

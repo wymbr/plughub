@@ -20,6 +20,7 @@ import { User, Search, UserPlus, Check, AlertCircle } from "lucide-react";
 import { getAccessToken } from "../../../../auth/token-store";
 import { Customer360Card } from "../Customer360Card";
 import { apiFetch } from '@/api/apiFetch'
+import { useAuth } from '@/auth/useAuth'
 
 // Kinds que o operador pode digitar — os nomes do índice de identidade, nunca rótulos.
 const ANCHOR_KINDS = ["phone", "email", "cpf"] as const
@@ -42,7 +43,8 @@ interface CustomerResult {
   attributes:  Record<string, unknown>;
 }
 
-const TENANT_ID = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
+// TNT-01 — o tenant é o da SESSÃO (JWT), nunca a env de tenant do build: ela não é definida
+// em build nenhum, então toda instância consultava `tenant_demo`. Sem tenant, não se consulta.
 
 function attrName(attrs: Record<string, unknown> | undefined): string | null {
   const n = attrs?.["nome"] ?? attrs?.["name"];
@@ -52,7 +54,8 @@ function attrName(attrs: Record<string, unknown> | undefined): string | null {
 
 export const ClienteTab: React.FC<ClienteTabProps> = ({ customerId, contactId, sessionId, tenantId, onLinked }) => {
   const { t } = useTranslation('agentAssist');
-  const tenant = tenantId ?? TENANT_ID;
+  const session = useAuth();
+  const tenant = tenantId || session.tenantId;
   // "não identificado" = sem customer_id resolvido (fallback pro contactId efêmero).
   const identified = !!customerId && customerId !== contactId;
 

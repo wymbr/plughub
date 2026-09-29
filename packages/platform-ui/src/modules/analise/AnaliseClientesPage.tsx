@@ -20,7 +20,8 @@ import { Customer360Card } from '@/modules/agent-assist/components/Customer360Ca
 import { HistoricoTab } from '@/modules/agent-assist/components/tabs/HistoricoTab'
 import { apiFetch } from '@/api/apiFetch'
 
-const TENANT_ID = import.meta.env.VITE_TENANT_ID ?? 'tenant_demo'
+// TNT-01 — o tenant é o da SESSÃO (JWT), nunca a env de tenant do build: ela não é definida
+// em build nenhum, então toda instância consultava `tenant_demo`. Sem tenant, não se consulta.
 
 interface CustomerResult {
   customer_id: string
@@ -36,7 +37,7 @@ function attrName(attrs: Record<string, unknown> | undefined): string | null {
 export default function AnaliseClientesPage() {
   const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
-  const tenant = tenantId ?? TENANT_ID
+  const tenant = tenantId
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [query,     setQuery]     = useState('')

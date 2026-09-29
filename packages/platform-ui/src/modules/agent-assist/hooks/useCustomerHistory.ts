@@ -11,9 +11,11 @@
 import { useEffect, useState } from "react";
 import { ContactHistoryEntry } from "../types";
 import { apiFetch } from '@/api/apiFetch'
+import { useAuth } from '@/auth/useAuth'
 
 const ANALYTICS_BASE = "/analytics";   // AUT-20 — mesma origem; sem base configurável
-const TENANT_ID      = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
+// TNT-01 — o tenant é o da SESSÃO (JWT), nunca a env de tenant do build: ela não é definida
+// em build nenhum, então toda instância consultava `tenant_demo`. Sem tenant, não se consulta.
 const HISTORY_LIMIT  = 20;
 
 interface UseCustomerHistoryReturn {
@@ -33,7 +35,10 @@ export function useCustomerHistory(
 
   const refetch = () => setFetchKey((k) => k + 1);
 
+  const { tenantId } = useAuth();
+
   useEffect(() => {
+    if (!tenantId) { setError("no_tenant"); return; }
     if (!customerId) {
       setEntries([]);
       setLoading(false);
@@ -47,7 +52,7 @@ export function useCustomerHistory(
 
     const url =
       `${ANALYTICS_BASE}/sessions/customer/${encodeURIComponent(customerId)}` +
-      `?tenant_id=${encodeURIComponent(TENANT_ID)}&limit=${HISTORY_LIMIT}`;
+      `?tenant_id=${encodeURIComponent(tenantId)}&limit=${HISTORY_LIMIT}`;
 
     apiFetch(url)
       .then((res) => {
@@ -71,7 +76,7 @@ export function useCustomerHistory(
     return () => {
       cancelled = true;
     };
-  }, [customerId, fetchKey]);
+  }, [customerId, fetchKey, tenantId]);
 
   return { entries, loading, error, refetch };
 }

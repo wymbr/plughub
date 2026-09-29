@@ -13,9 +13,11 @@
 import { useEffect, useState } from "react";
 import { SearchHit } from "../types";
 import { apiFetch } from '@/api/apiFetch'
+import { useAuth } from '@/auth/useAuth'
 
 const ANALYTICS_BASE = "/analytics";   // AUT-20 — mesma origem; sem base configurável
-const TENANT_ID      = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
+// TNT-01 — o tenant é o da SESSÃO (JWT), nunca a env de tenant do build: ela não é definida
+// em build nenhum, então toda instância consultava `tenant_demo`. Sem tenant, não se consulta.
 const SEARCH_LIMIT   = 30;
 const DEBOUNCE_MS    = 350;
 
@@ -48,7 +50,10 @@ export function useCustomerSearch(
   // Flatten filters into stable deps (objects would re-trigger every render).
   const { from, to, channel, outcome } = filters;
 
+  const { tenantId } = useAuth();
+
   useEffect(() => {
+    if (!tenantId) { setError("no_tenant"); return; }
     if (!customerId || !active) {
       setHits([]);
       setLoading(false);
@@ -62,7 +67,7 @@ export function useCustomerSearch(
 
     const timer = setTimeout(() => {
       const params = new URLSearchParams({
-        tenant_id: TENANT_ID,
+        tenant_id: tenantId,
         q,
         limit: String(SEARCH_LIMIT),
       });
@@ -99,7 +104,7 @@ export function useCustomerSearch(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [customerId, q, active, from, to, channel, outcome]);
+  }, [customerId, q, active, from, to, channel, outcome, tenantId]);
 
   return { hits, loading, error, active };
 }

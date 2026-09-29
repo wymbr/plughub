@@ -15,9 +15,11 @@
 import { useEffect, useState } from "react";
 import { TranscriptMessage } from "../types";
 import { apiFetch } from '@/api/apiFetch'
+import { useAuth } from '@/auth/useAuth'
 
 const ANALYTICS_BASE = "/analytics";   // AUT-20 — mesma origem; sem base configurável
-const TENANT_ID      = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
+// TNT-01 — o tenant é o da SESSÃO (JWT), nunca a env de tenant do build: ela não é definida
+// em build nenhum, então toda instância consultava `tenant_demo`. Sem tenant, não se consulta.
 
 interface UseSessionTranscriptReturn {
   messages: TranscriptMessage[];
@@ -32,7 +34,10 @@ export function useSessionTranscript(
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
 
+  const { tenantId } = useAuth();
+
   useEffect(() => {
+    if (!tenantId) { setError("no_tenant"); return; }
     if (!sessionId) {
       setMessages([]);
       setLoading(false);
@@ -46,7 +51,7 @@ export function useSessionTranscript(
 
     const url =
       `${ANALYTICS_BASE}/v1/transcript/sessions/${encodeURIComponent(sessionId)}` +
-      `?tenant_id=${encodeURIComponent(TENANT_ID)}&scope=contact`;
+      `?tenant_id=${encodeURIComponent(tenantId)}&scope=contact`;
 
     apiFetch(url)
       .then(async (res) => {
@@ -78,7 +83,7 @@ export function useSessionTranscript(
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, tenantId]);
 
   return { messages, loading, error };
 }

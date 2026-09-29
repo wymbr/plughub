@@ -276,6 +276,36 @@ def _service_principal(request: "Request | None") -> "PoolPrincipal | None":
     return PoolPrincipal(accessible_pools=None, tenant_id=None, sub=f"service:{name}")
 
 
+def _enforce_request_tenant(request: "Request | None", token_tenant: str | None, sub: str) -> None:
+    """
+    TNT-01 (2026-09-29) — usuário lê o PRÓPRIO tenant; o `tenant_id` da query não escolhe.
+
+    Medido antes: as rotas recebiam `tenant_id` pela query e o usavam na consulta sem
+    compará-lo ao do token. O JWT do `tenant_demo` leu o histórico e a visão 360 de um
+    cliente que só existe em `t_poss_1213d358` — 200 com os dados do outro tenant. O
+    escopo de POOL não segurava: pool é recorte DENTRO do tenant.
+
+    A regra mora AQUI porque as três dependências de principal de pool (optional,
+    require, sse) passam por este ramo, e o censo (`infra/test/_analytics_tenant_census.py`)
+    mostra que 69 rotas tiram o tenant da query com uma delas na assinatura. Mesma
+    decisão do channel-gateway (`identity_auth.tenant_for`): divergir é 403, nomeado.
+    Serviço (`X-Service-Token`) e token de SISTEMA não passam por aqui e seguem
+    escolhendo o tenant — é para isso que existem.
+    """
+    if not token_tenant:
+        logger.warning("pool_auth RECUSA: token de usuario sem tenant_id (sub=%s)", sub)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="user_token_without_tenant",
+        )
+    requested = request.query_params.get("tenant_id") if request is not None else None
+    if requested and requested != token_tenant:
+        logger.warning(
+            "pool_auth RECUSA: sub=%s pediu tenant=%s com credencial de %s (%s)",
+            sub, requested, token_tenant, request.url.path if request is not None else "?",
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant_mismatch")
+
+
 async def optional_pool_principal(
     request: Request = None,  # type: ignore[assignment]
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
@@ -353,6 +383,7 @@ async def optional_pool_principal(
 
     sub        = payload.get("sub", "")
     tenant_id  = payload.get("tenant_id")
+    _enforce_request_tenant(request, tenant_id, sub)
     accessible_pools: list[str] | None = _resolve_scope(payload, "header")
 
     # Arc 9 — supervised_agent_types: [] = no restriction (admin); non-empty = filter
