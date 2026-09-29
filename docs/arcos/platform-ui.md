@@ -534,7 +534,7 @@ React 18 + TypeScript + Vite. **Original** porta de dev: 5175. Proxy: `/api` →
 ## HistoricoTab — implementação
 
 - Hook `useCustomerHistory(customerId)` — fetch `GET /analytics/sessions/customer/{id}?tenant_id=VITE_TENANT_ID&limit=20`
-- Env vars: `VITE_ANALYTICS_URL` (default `/analytics`), `VITE_TENANT_ID` (default `tenant_demo`)
+- Base fixa `/analytics`, mesma origem (AUT-20, 2026-09-29: a env `VITE_ANALYTICS_URL` saiu); `VITE_TENANT_ID` (default `tenant_demo`)
 - Re-busca automaticamente quando `customerId` muda
 - Cancela fetch anterior em cada re-render (cleanup via flag `cancelled`)
 - `HistoryRow` — expansível: summary (ícone de canal, badge de outcome, data, duração, close_reason) + detalhes (pool, canal, session_id)

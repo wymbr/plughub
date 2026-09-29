@@ -1,11 +1,26 @@
 """
 escalator.py
-Triggers conversation_escalate via mcp-server-plughub.
+Consequence of a rule that fires with a target_pool.
 Spec: PlugHub v24.0 section 3.2
 
-When a rule fires AND has target_pool → triggers escalation.
-Shadow mode → evaluates and publishes to shadow Kafka topic, does not trigger.
-Active mode → triggers via mcp-server AND publishes to escalation Kafka topic.
+Shadow mode → evaluates and publishes to the shadow Kafka topic, does not act.
+Active mode → REFUSED, loudly: rule-driven escalation has no path yet (RUL-02).
+
+RUL-01 (2026-09-29) — o que havia aqui e por que saiu
+-----------------------------------------------------
+O modo ativo fazia `POST {mcp_server_url}/tools/conversation_escalate`, uma rota que o
+mcp-server-plughub NUNCA teve (as tools vivem atrás do transporte MCP), sem conferir o
+status — o 404 era engolido, o log dizia *"Escalation triggered"* e o evento de escalação
+saía como se o contato tivesse ido ao pool. O teste que "provava" o caminho fazia o mock
+responder 200: o mock CRIOU a rota que não existe.
+
+Consertar só a rota não bastava: a tool `conversation_escalate` foi escrita para o FLUXO que
+escala a si mesmo (grava `participant_left` do agente e reroteia). Chamada de fora, com a IA
+ainda rodando o skill, ela mandaria o contato a um humano SEM parar a IA. O caminho de
+verdade passa por quem é dono da ativação (o bridge) e é a ficha RUL-02. Até lá, o modo
+ativo recusa, alto, e a API recusa ATIVAR regra com `target_pool` (rule_registry.py).
+Medido no dia: nenhuma regra cadastrada em tenant nenhum, e o tópico de escalação nunca foi
+criado no broker — exposição zero, dano zero.
 """
 
 from __future__ import annotations
@@ -13,31 +28,26 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-import httpx
-
 from .models import EscalationTrigger, EvaluationResult
-from .config import get_settings
 
 if TYPE_CHECKING:
     from .kafka_publisher import KafkaPublisher
 
 logger = logging.getLogger("plughub.rules")
 
+# Nomeado para os testes e para o log: a recusa diz ONDE está o trabalho que falta.
+ESCALATION_PATH_TICKET = "RUL-02"
+
 
 class Escalator:
-    def __init__(
-        self,
-        http_client:     httpx.AsyncClient,
-        kafka_publisher: "KafkaPublisher | None" = None,
-    ) -> None:
-        self._http      = http_client
-        self._kafka     = kafka_publisher
-        self._settings  = get_settings()
+    def __init__(self, kafka_publisher: "KafkaPublisher | None" = None) -> None:
+        self._kafka = kafka_publisher
 
     async def trigger(self, result: EvaluationResult) -> EscalationTrigger | None:
         """
-        Triggers escalation if the rule fired and has a target_pool.
-        Returns EscalationTrigger or None if not applicable.
+        Shadow: returns the would-be EscalationTrigger and publishes it to the shadow topic.
+        Active: logs an ERROR and returns None — nothing escalated, nothing published as if
+        it had been.
         """
         rule = result.rule
 
@@ -51,7 +61,16 @@ class Escalator:
             )
             return None
 
-        is_shadow = rule.status == "shadow"
+        if rule.status != "shadow":
+            logger.error(
+                "Escalação por regra SEM CAMINHO — NÃO escalada: rule=%s status=%s "
+                "session=%s → pool=%s. O modo ativo não tem como escalar sem parar o agente em "
+                "curso (%s); a API recusa ativar regra com target_pool. Se esta linha aparece, "
+                "a regra foi ativada por fora da API.",
+                rule.rule_id, rule.status, result.context.session_id, rule.target_pool,
+                ESCALATION_PATH_TICKET,
+            )
+            return None
 
         trigger = EscalationTrigger(
             session_id=  result.context.session_id,
@@ -59,48 +78,14 @@ class Escalator:
             rule_id=     rule.rule_id,
             rule_name=   rule.name,
             target_pool= rule.target_pool,
-            shadow_mode= is_shadow,
+            shadow_mode= True,
             triggered_at=datetime.now(timezone.utc).isoformat(),
             context=     result.context,
         )
-
-        if is_shadow:
-            # Shadow mode: record what would happen but do NOT call mcp-server
-            logger.info(
-                "[SHADOW] Rule %s would escalate session=%s → pool=%s",
-                rule.rule_id, trigger.session_id, rule.target_pool,
-            )
-            if self._kafka:
-                await self._kafka.publish_shadow(trigger)
-            return trigger
-
-        # Active mode: trigger escalation via mcp-server AND publish Kafka event
-        try:
-            await self._call_conversation_escalate(trigger)
-            logger.info(
-                "Escalation triggered: rule=%s session=%s → pool=%s",
-                rule.rule_id, trigger.session_id, rule.target_pool,
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed to escalate session=%s rule=%s: %s",
-                trigger.session_id, rule.rule_id, exc,
-            )
-
-        if self._kafka:
-            await self._kafka.publish_escalation(trigger)
-
-        return trigger
-
-    async def _call_conversation_escalate(self, trigger: EscalationTrigger) -> None:
-        """Calls the conversation_escalate tool on mcp-server-plughub."""
-        await self._http.post(
-            f"{self._settings.mcp_server_url}/tools/conversation_escalate",
-            json={
-                "session_id":  trigger.session_id,
-                "target_pool": trigger.target_pool,
-                "reason":      f"rule:{trigger.rule_id}",
-                "context":     trigger.context.model_dump(),
-            },
-            timeout=5.0,
+        logger.info(
+            "[SHADOW] Rule %s would escalate session=%s → pool=%s",
+            rule.rule_id, trigger.session_id, rule.target_pool,
         )
+        if self._kafka:
+            await self._kafka.publish_shadow(trigger)
+        return trigger

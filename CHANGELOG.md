@@ -1,5 +1,92 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (4) — RUL-01: a escalação por regra fingia sucesso; agora recusa alto
+
+**O defeito.** O modo ativo do `escalator` do rules-engine fazia
+`POST {mcp_server_url}/tools/conversation_escalate` — rota que o mcp-server-plughub nunca teve
+(as tools vivem atrás do transporte MCP) — sem conferir o status. O 404 era engolido, o log dizia
+*"Escalation triggered"* e o evento saía como se o contato tivesse ido ao pool. O `CLAUDE.md`
+afirmava o caminho (*"A escalação em si é HTTP: `escalator` → `conversation_escalate`"*), e o
+teste que o "provava" fazia o mock de `http.post` responder 200: **o mock criou a rota**.
+
+**Medido antes de mexer.** Exposição e dano zero: nenhuma regra cadastrada em tenant nenhum
+(regra só se cria por `POST /rules`, sem tela, e nasce `draft`), e `rules.escalation.events` e
+`rules.shadow.events` **nem existem** no broker — o `main.py` monta o `Escalator` sem publicador.
+O defeito era latente: a primeira regra ativa com `target_pool` prometeria uma escalação que não
+aconteceria.
+
+**Por que não bastava consertar a rota.** A tool `conversation_escalate` foi escrita para o FLUXO
+que escala a si mesmo: grava `participant_left` do agente e reroteia com
+`escalated_from: "skill_flow"`. Chamada de fora, com a IA rodando o skill, ela mandaria o contato a
+um humano **sem parar a IA** — dois atendentes, e uma saída registrada que não houve.
+
+**Decisão do dono: falhar alto agora, desenho completo em ficha própria (RUL-02).**
+- Modo ativo: nenhuma chamada, nenhum evento; ERROR nomeando regra, sessão, pool e a RUL-02.
+  Shadow segue medindo.
+- `PATCH /rules/{id}/status` recusa **ativar** regra com `target_pool` (422, texto nomeando a
+  RUL-02). Regra ativa sem pool segue válida.
+- Saíram o cliente HTTP do rules-engine, o `mcp_server_url` da config e o
+  `PLUGHUB_MCP_SERVER_URL` do rules-engine nos quatro composes (o do channel-gateway fica).
+- `CLAUDE.md` (tabela de tópicos) e o comentário de `@plughub/schemas/rules-events.ts`, que dizia
+  que o Routing Engine consumia o evento, corrigidos.
+
+**A suíte do rules-engine não rodava em gate nenhum.** O Dockerfile não instalava `.[dev]` e o
+pacote não estava na lista do `probe_python_suites.sh`. Entrou (15 suítes; as mensagens deixaram
+de dizer "14" fixo). Ficam de fora, medidos e registrados como GAT-07: `mailing-api`,
+`quality-export`, `session-replayer`, `usage-aggregator`.
+
+**Verificado.** 30 verdes na imagem; mutação no portão de ativação reprova exatamente
+`test_activation_with_target_pool_is_refused`, e mutação que trata ativo como shadow reprova
+exatamente `test_active_is_refused_loudly_and_publishes_nothing` (cada um com o seu controle:
+shadow segue medindo, ativação sem pool passa). `probe_python_suites` verde, 3703 testes. Ao vivo
+pela API, num tenant de probe: ativar com pool → 422 nomeado; controle sem pool → ativa; as
+cinco chaves de probe removidas do Redis.
+
+## 2026-09-29 (3) — AUT-20: o platform-ui fala só com a própria origem, e a borda deixa de publicar o gatilho anônimo de pool
+
+**Medido antes de mexer.** A ficha dizia *"23 chamadas sem credencial, e a outra origem"*.
+A primeira metade estava vencida: o `api/registry.ts` anexa o Bearer desde a MOD-06. A segunda
+era maior do que dizia:
+- as 23 chamadas montavam a URL sobre `VITE_REGISTRY_URL || http://localhost:3300`, e a env não
+  é definida em compose, Dockerfile nem `.env` — **toda** chamada furava a borda e ia a outra
+  origem, que só existe no host que publica a 3300. No demo funcionava; em qualquer outro browser,
+  ou em produção, Canais e Pools ficariam sem dado;
+- o force-complete do Monitor fazia o mesmo com `http://localhost:3100` (que desde a CAP-13 só
+  publica em loopback) — a ficha dizia ser o *"ÚNICO resto real"*;
+- mais 6 bases configuráveis por env (`VITE_MCP_WS_URL`, `VITE_ANALYTICS_URL`) com default
+  relativo, e a mesma `VITE_ANALYTICS_URL` valia `/analytics` em três hooks e `/reports` em
+  outro: defini-la quebraria um dos lados, qualquer que fosse o valor.
+
+**O achado que a mudança destampou.** Relativo, o `/v1/channels` das GatewayConfigs tem de chegar
+ao registry — e a borda o mandava ao **channel-gateway**, porque a regra do nginx era
+`^/v1/channels` inteiro. Ali mora o `POST /v1/channels/webhook/pool/{pool_id}`, anônimo por
+construção. Medido pela 5174, sem credencial, com um pool inexistente: **201 e uma sessão
+criada**, enfileirada numa fila sem TTL (limpa à mão). O `CLAUDE.md` dizia que nenhum
+`vite.config.ts`/`Dockerfile` publicava rota do gateway, e publicava.
+
+**O que mudou.**
+- Todas as bases de serviço do platform-ui são caminho relativo, **sem override** — uma base
+  configurável é a porta por onde a outra origem volta. `VITE_REGISTRY_URL` saiu do
+  `vite-env.d.ts`.
+- nginx (`Dockerfile`) e proxy do Vite: o gateway sob `/v1/channels` recebe só
+  `webhook/(identity|resume)` — o que a UI chama (Cliente 360, resume do Console). O resto de
+  `/v1/channels` volta ao registry pela regra genérica.
+- Docs: a lista de envs de URL do `docs/pacotes/platform-ui.md` (três das quatro nem eram lidas)
+  e a do `docs/arcos/platform-ui.md`; a regra da borda no `CLAUDE.md`.
+- Gate novo `probe_ui_same_origin.sh`: A (nenhuma base de outra origem em `src/`, com mutação:
+  a linha injetada é vista, o comentário não), B (as duas tabelas de rotas nomeiam o caminho
+  exato) e C (vivo: `/v1/channels` pela borda chega ao registry; o gatilho de pool NÃO chega ao
+  gateway, medido por GET — sem efeito colateral — contra a testemunha de 405 direto nele; e
+  `webhook/identity` ainda chega, como controle).
+
+**Verificado.** O gate rodou **antes** do rebuild do platform-ui e reprovou 3 (o defeito vivo);
+depois, verde. No navegador, Canais (inclusive a aba Webhook, `/v1/channel-endpoints`) e Pools
+carregam com todas as chamadas em `localhost:5174` e zero a `localhost:33xx`.
+
+**Fora desta ficha, registrado como tarefa separada:** o gatilho de pool aceita pool inexistente
+e deixa o contato numa fila sem TTL; e sete telas tiram o tenant de `VITE_TENANT_ID` (default
+`tenant_demo`) em vez da sessão — numa instância dedicada, consultariam o tenant errado.
+
 ## 2026-09-29 (2) — CAP-10: o transporte MCP exige credencial de serviço
 
 **Por que agora.** Em 2026-09-12 o dono decidiu que a resposta era TOPOLOGIA — a 3100 publica

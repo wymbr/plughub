@@ -9,9 +9,12 @@ import {
 
 import { getAccessToken } from '@/auth/token-store'
 
-const getBaseUrl = () => {
-  return import.meta.env.VITE_REGISTRY_URL || 'http://localhost:3300'
-}
+// AUT-20 — MESMA ORIGEM, sempre: caminho relativo, pela borda (nginx do Dockerfile) ou
+// pelo proxy do Vite em dev, ambos com `^/v1` → agent-registry. Até 2026-09-29 a base era
+// `VITE_REGISTRY_URL || http://localhost:3300` e a env não era definida em lugar nenhum:
+// as 23 chamadas furavam a borda e iam a OUTRA origem, que só existe no próprio host que
+// publica a 3300. Não há override de propósito — uma base configurável é a porta por
+// onde a outra origem volta.
 
 interface ListResponse<T> {
   items: T[]
@@ -44,7 +47,7 @@ const operatorHeaders = (tenantId: string) => ({
 
 // Pools
 export const listPools = async (tenantId: string): Promise<ListResponse<Pool>> => {
-  const response = await fetch(`${getBaseUrl()}/v1/pools`, {
+  const response = await fetch(`/v1/pools`, {
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch pools')
@@ -54,7 +57,7 @@ export const listPools = async (tenantId: string): Promise<ListResponse<Pool>> =
 }
 
 export const getPool = async (poolId: string, tenantId: string): Promise<Pool> => {
-  const response = await fetch(`${getBaseUrl()}/v1/pools/${poolId}`, {
+  const response = await fetch(`/v1/pools/${poolId}`, {
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch pool')
@@ -69,7 +72,7 @@ const poolError = async (response: Response, fallback: string): Promise<Error> =
 }
 
 export const createPool = async (data: CreatePoolInput, tenantId: string): Promise<Pool> => {
-  const response = await fetch(`${getBaseUrl()}/v1/pools`, {
+  const response = await fetch(`/v1/pools`, {
     method: 'POST',
     headers: headers(tenantId),
     body: JSON.stringify(data)
@@ -91,7 +94,7 @@ export const updatePool = async (
   opts?: { forceDisable?: boolean },
 ): Promise<Pool> => {
   const qs = opts?.forceDisable ? '?force_disable=true' : ''
-  const response = await fetch(`${getBaseUrl()}/v1/pools/${poolId}${qs}`, {
+  const response = await fetch(`/v1/pools/${poolId}${qs}`, {
     method: 'PUT',
     headers: headers(tenantId),
     body: JSON.stringify(data)
@@ -102,7 +105,7 @@ export const updatePool = async (
 
 // Skills
 export const listSkills = async (tenantId: string): Promise<ListResponse<Skill>> => {
-  const response = await fetch(`${getBaseUrl()}/v1/skills`, {
+  const response = await fetch(`/v1/skills`, {
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch skills')
@@ -112,7 +115,7 @@ export const listSkills = async (tenantId: string): Promise<ListResponse<Skill>>
 }
 
 export const getSkill = async (skillId: string, tenantId: string): Promise<Skill> => {
-  const response = await fetch(`${getBaseUrl()}/v1/skills/${skillId}`, {
+  const response = await fetch(`/v1/skills/${skillId}`, {
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch skill')
@@ -120,7 +123,7 @@ export const getSkill = async (skillId: string, tenantId: string): Promise<Skill
 }
 
 export const createSkill = async (data: CreateSkillInput, tenantId: string): Promise<Skill> => {
-  const response = await fetch(`${getBaseUrl()}/v1/skills`, {
+  const response = await fetch(`/v1/skills`, {
     method: 'POST',
     headers: headers(tenantId),
     body: JSON.stringify(data)
@@ -130,7 +133,7 @@ export const createSkill = async (data: CreateSkillInput, tenantId: string): Pro
 }
 
 export const upsertSkill = async (skillId: string, data: CreateSkillInput, tenantId: string): Promise<Skill> => {
-  const response = await fetch(`${getBaseUrl()}/v1/skills/${skillId}`, {
+  const response = await fetch(`/v1/skills/${skillId}`, {
     method: 'PUT',
     headers: headers(tenantId),
     body: JSON.stringify(data)
@@ -140,7 +143,7 @@ export const upsertSkill = async (skillId: string, data: CreateSkillInput, tenan
 }
 
 export const deleteSkill = async (skillId: string, tenantId: string): Promise<void> => {
-  const response = await fetch(`${getBaseUrl()}/v1/skills/${skillId}`, {
+  const response = await fetch(`/v1/skills/${skillId}`, {
     method: 'DELETE',
     headers: headers(tenantId)
   })
@@ -153,7 +156,7 @@ export const listInstances = async (tenantId: string, poolId?: string, status?: 
   if (poolId) params.append('pool_id', poolId)
   if (status) params.append('status', status)
 
-  const response = await fetch(`${getBaseUrl()}/v1/instances?${params}`, {
+  const response = await fetch(`/v1/instances?${params}`, {
     headers: headers(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch instances')
@@ -166,7 +169,7 @@ export const listInstances = async (tenantId: string, poolId?: string, status?: 
 export const listHumanInstances = async (tenantId: string, status?: string): Promise<ListResponse<AgentInstance>> => {
   const params = new URLSearchParams({ framework: 'human' })
   if (status) params.append('status', status)
-  const response = await fetch(`${getBaseUrl()}/v1/instances?${params}`, {
+  const response = await fetch(`/v1/instances?${params}`, {
     headers: operatorHeaders(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch human instances')
@@ -179,7 +182,7 @@ export const instanceAction = async (
   action: 'pause' | 'resume' | 'force_logout',
   tenantId: string,
 ): Promise<void> => {
-  const response = await fetch(`${getBaseUrl()}/v1/instances/${instanceId}`, {
+  const response = await fetch(`/v1/instances/${instanceId}`, {
     method: 'PATCH',
     headers: operatorHeaders(tenantId),
     body: JSON.stringify({ action }),
@@ -192,7 +195,7 @@ export const instanceAction = async (
 
 // Channels (GatewayConfig)
 export const listChannels = async (tenantId: string): Promise<ListResponse<GatewayConfig>> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channels`, {
+  const response = await fetch(`/v1/channels`, {
     headers: operatorHeaders(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch channels')
@@ -204,7 +207,7 @@ export const listChannels = async (tenantId: string): Promise<ListResponse<Gatew
 }
 
 export const createChannel = async (data: CreateGatewayConfigInput, tenantId: string): Promise<GatewayConfig> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channels`, {
+  const response = await fetch(`/v1/channels`, {
     method: 'POST',
     headers: operatorHeaders(tenantId),
     body: JSON.stringify(data)
@@ -214,7 +217,7 @@ export const createChannel = async (data: CreateGatewayConfigInput, tenantId: st
 }
 
 export const updateChannel = async (id: string, data: UpdateGatewayConfigInput, tenantId: string): Promise<GatewayConfig> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channels/${id}`, {
+  const response = await fetch(`/v1/channels/${id}`, {
     method: 'PUT',
     headers: operatorHeaders(tenantId),
     body: JSON.stringify(data)
@@ -224,7 +227,7 @@ export const updateChannel = async (id: string, data: UpdateGatewayConfigInput, 
 }
 
 export const deleteChannel = async (id: string, tenantId: string): Promise<void> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channels/${id}`, {
+  const response = await fetch(`/v1/channels/${id}`, {
     method: 'DELETE',
     headers: operatorHeaders(tenantId)
   })
@@ -242,7 +245,7 @@ export const listChannelEndpoints = async (
   if (channel)         params.set('channel',           channel)
   if (gatewayConfigId) params.set('gateway_config_id', gatewayConfigId)
   const qs = params.toString() ? `?${params.toString()}` : ''
-  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints${qs}`, {
+  const response = await fetch(`/v1/channel-endpoints${qs}`, {
     headers: headers(tenantId),
   })
   if (!response.ok) throw new Error('Failed to fetch channel endpoints')
@@ -258,7 +261,7 @@ export const createChannelEndpoint = async (
   // um tipo que não menciona o token faz o chamador descartá-lo sem perceber, que é
   // exatamente o defeito do RegistrySyncer (ADR §7.10) reproduzido no front.
 ): Promise<EndpointTokenResult> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints`, {
+  const response = await fetch(`/v1/channel-endpoints`, {
     method: 'POST',
     headers: headers(tenantId),
     body: JSON.stringify(data),
@@ -277,7 +280,7 @@ export const updateChannelEndpoint = async (
   data: UpdateChannelEndpointInput,
   tenantId: string,
 ): Promise<ChannelEndpoint> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}`, {
+  const response = await fetch(`/v1/channel-endpoints/${id}`, {
     method: 'PUT',
     headers: headers(tenantId),
     body: JSON.stringify(data),
@@ -287,7 +290,7 @@ export const updateChannelEndpoint = async (
 }
 
 export const deleteChannelEndpoint = async (id: string, tenantId: string): Promise<void> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}`, {
+  const response = await fetch(`/v1/channel-endpoints/${id}`, {
     method: 'DELETE',
     headers: headers(tenantId),
   })
@@ -313,7 +316,7 @@ export const rotateChannelEndpointToken = async (
   id: string,
   tenantId: string,
 ): Promise<EndpointTokenResult> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}/token`, {
+  const response = await fetch(`/v1/channel-endpoints/${id}/token`, {
     method: 'POST',
     headers: headers(tenantId),
   })
@@ -333,7 +336,7 @@ export const revokeChannelEndpointToken = async (
   id: string,
   tenantId: string,
 ): Promise<EndpointTokenResult> => {
-  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}/token`, {
+  const response = await fetch(`/v1/channel-endpoints/${id}/token`, {
     method: 'DELETE',
     headers: headers(tenantId),
   })
@@ -377,7 +380,7 @@ export interface ContextVisibilityOptions {
 export const getContextVisibilityOptions = async (
   tenantId: string,
 ): Promise<ContextVisibilityOptions> => {
-  const response = await fetch(`${getBaseUrl()}/v1/context-map/visibility-options`, {
+  const response = await fetch(`/v1/context-map/visibility-options`, {
     headers: headers(tenantId),
   })
   if (!response.ok) throw new Error('Failed to load context visibility options')

@@ -41,7 +41,11 @@ PREFIX="${PREFIX:-plughub-demo}"
 
 SERVICOS="evaluation-api auth-api analytics-api config-api channel-gateway \
 orchestrator-bridge routing-engine ai-gateway workflow-api scheduler-api \
-dialog-api calendar-api pricing-api quality-ingest"
+dialog-api calendar-api pricing-api quality-ingest rules-engine"
+# RUL-01 (2026-09-29): rules-engine entrou — a suite dele tinha 3 arquivos e nenhum gate a
+# rodava. Ficam de FORA, medidos no mesmo dia e registrados como ficha propria:
+# mailing-api, quality-export, session-replayer, usage-aggregator (GAT-07).
+N=$(echo $SERVICOS | wc -w)
 
 # ── Vermelho DECLARADO ────────────────────────────────────────────────────────
 #
@@ -88,7 +92,7 @@ for s in $SERVICOS; do
   grep -q '\.\[dev\]' "$df" || SEM_DEV="$SEM_DEV $s"
 done
 if [ -z "$SEM_DEV" ]; then
-  ok "A: os 14 Dockerfiles instalam .[dev] — o pytest vem da imagem, nao da mao"
+  ok "A: os $N Dockerfiles instalam .[dev] — o pytest vem da imagem, nao da mao"
 else
   bad "A: sem .[dev] em:$SEM_DEV — a suite so rodaria por estado herdado"
 fi
@@ -105,7 +109,7 @@ done
 if [ -n "$SEM_PYTEST" ] && [ "$SEM_PYTEST" = " $SERVICOS" ]; then
   huh "B: nenhuma imagem respondeu — docker indisponivel?"
 elif [ -z "$SEM_PYTEST" ]; then
-  ok "B: pytest importa nas 14 IMAGENS (nao no container que alguem tocou)"
+  ok "B: pytest importa nas $N IMAGENS (nao no container que alguem tocou)"
 else
   bad "B: imagem sem pytest:$SEM_PYTEST"
 fi
@@ -145,7 +149,7 @@ echo
 if [ -n "$VERMELHOS" ]; then
   bad "C: contagem de falhas fora do declarado:$VERMELHOS"
 elif [ "$TOT_FAIL" -eq 0 ] && [ "$BASELINE_TOTAL" -eq 0 ]; then
-  ok "C: $TOT_PASS passando, ZERO falhando nas 14 suites"
+  ok "C: $TOT_PASS passando, ZERO falhando nas $N suites"
 elif [ "$TOT_FAIL" -eq "$BASELINE_TOTAL" ]; then
   ok "C: $TOT_PASS passando; $TOT_FAIL falhando, e as $TOT_FAIL sao as DECLARADAS"
 else
@@ -155,7 +159,7 @@ fi
 echo
 echo "-- vermelho DECLARADO --"
 if [ "$BASELINE_TOTAL" -eq 0 ]; then
-  echo "     NENHUM. As 14 suites estao verdes, e o ramo C exige TOT_FAIL == 0:"
+  echo "     NENHUM. As $N suites estao verdes, e o ramo C exige TOT_FAIL == 0:"
   echo "     um vermelho novo pinta o gate sem depender de alguem lembrar da tabela."
 else
   echo "     (ver a tabela BASELINE no cabecalho deste arquivo)"
@@ -167,5 +171,5 @@ if [ "$FAIL" -gt 0 ]; then
 elif [ "$INC" -gt 0 ]; then
   echo "INCONCLUSIVO ($INC)"; exit 2
 else
-  echo "OK — as 14 suites rodam a partir da imagem; vermelho so o declarado"; exit 0
+  echo "OK — as $N suites rodam a partir da imagem; vermelho so o declarado"; exit 0
 fi

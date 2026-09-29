@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { WsServerEvent, WsStatus } from "../types";
 import { agentWsProtocols, AGENT_WS_FORBIDDEN } from "./useMultiPoolWebSocket";
 
-const WS_BASE = import.meta.env.VITE_MCP_WS_URL ?? "/agent-ws";
+const WS_BASE = "/agent-ws";   // AUT-20 — mesma origem; sem base configurável
 const RECONNECT_DELAY_MS = 3_000;
 
 interface UseAgentWebSocketReturn {

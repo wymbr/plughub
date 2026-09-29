@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { WsServerEvent } from "../types";
 import { getAccessToken } from "@/auth/token-store";
 
-const WS_BASE = import.meta.env.VITE_MCP_WS_URL ?? "/agent-ws";
+const WS_BASE = "/agent-ws";   // AUT-20 — mesma origem; sem base configurável
 const RECONNECT_DELAY_MS = 3_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DISCONNECT_DEBOUNCE_MS = 2_000;

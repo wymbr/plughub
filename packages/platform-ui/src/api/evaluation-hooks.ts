@@ -1058,7 +1058,9 @@ export async function saveCurationSamplingRules(
 
 // ── Analytics-API backed hooks (Arc 6 — /reports/evaluations*) ─────────────
 
-const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_URL ?? '/reports'
+// AUT-20 — mesma origem, sem base configurável. A mesma env valia '/analytics' em outros
+// três hooks: defini-la quebraria um dos lados, qualquer que fosse o valor.
+const ANALYTICS_BASE = '/reports'
 
 interface EvaluationResultRow {
   result_id:       string

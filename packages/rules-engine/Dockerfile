@@ -13,7 +13,8 @@ COPY packages/rules-engine ./packages/rules-engine
 
 WORKDIR /app/packages/rules-engine
 
-RUN pip install --no-cache-dir -e .
+# RUL-01: `.[dev]` — a suíte roda a partir da IMAGEM (probe_python_suites.sh), como as demais.
+RUN pip install --no-cache-dir -e ".[dev]"
 
 # Write the startup script that runs both the API server and the pub/sub listener
 RUN printf '#!/bin/sh\nset -e\nuvicorn plughub_rules.api:app --host 0.0.0.0 --port 3201 &\npython -m plughub_rules.main &\nwait\n' > /app/start.sh && \

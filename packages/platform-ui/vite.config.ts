@@ -65,8 +65,10 @@ export default defineConfig({
         target: 'http://localhost:3760',
         changeOrigin: true
       },
-      '^/v1/channels': {
-        // channel-gateway — identity resolver REST (Cliente 360 cadastro manual). Before generic /v1.
+      '^/v1/channels/webhook/(identity|resume)(/|$)': {
+        // channel-gateway — SÓ o que a UI chama (identity resolver, resume do Console). AUT-20:
+        // era `^/v1/channels` inteiro — publicava o gatilho ANÔNIMO de pool e roubava do
+        // registry o `/v1/channels` das GatewayConfigs. Mesma regra do nginx. Before generic /v1.
         target: 'http://localhost:8010',
         changeOrigin: true
       },

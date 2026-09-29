@@ -46,7 +46,7 @@ import { INTERNAL_QUEUE_SUFFIX, mirrorOriginOf } from "./poolLabel";
 import { loadConversationHistory } from "./api";
 import { useTranslation } from "react-i18next";
 
-const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
+const API_BASE = "/v1";   // AUT-20 — mesma origem, pela borda; sem base configurável
 
 // ── Toast id generator ─────────────────────────────────────────────────────
 let toastSeq = 0;

@@ -684,8 +684,8 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `conversations.session_opened/closed` | Core | Analytics, LGPD |
 | `conversations.message_sent` | Core | Analytics |
 | `conversations.participants` | orchestrator-bridge | analytics-api → ClickHouse |
-| `rules.escalation.events` | Rules Engine | **nenhum** (telemetria de medição, destino a definir — ver TODO). A escalação em si é HTTP: `escalator` → `conversation_escalate` no mcp-server |
-| `rules.shadow.events` | Rules Engine | Analytics |
+| `rules.escalation.events` | Rules Engine | **nenhum** — e hoje **nem publicado**: o `main.py` monta o `Escalator` sem publicador, e o tópico não existe no broker. ⚠️ **A escalação por regra NÃO EXISTE** (RUL-01, 2026-09-29): o modo ativo chamava `POST /tools/conversation_escalate`, rota que o mcp-server nunca teve, e engolia o 404. Hoje recusa alto, e a API recusa ATIVAR regra com `target_pool`; o caminho (quem para a IA em curso antes de rotear) é a RUL-02 |
+| `rules.shadow.events` | Rules Engine (só shadow; hoje sem publicador — ver linha acima) | Analytics |
 | `registry.changed` | Agent Registry | Routing Engine, Core, orchestrator-bridge |
 | `config.changed` | Config API | orchestrator-bridge, routing-engine |
 | `gateway.heartbeat` | Channel Gateway | Routing Engine |
@@ -842,7 +842,11 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
   (`main.py:1302`) e `/v1/channels/webhook/{skill_id}` (`:1387`) são rotas do MESMO app na MESMA porta
   (`docker-compose.demo.yml:1185`); o que as separa é `allowed_origins={"external"}` (`:1347`). **Não
   existe borda versionada no repositório** (sem nginx.conf; `vite.config.ts`/`Dockerfile` não publicam
-  `/channel`). `infra/test/probe_edge_surface.sh` **declara** a classificação e reprova prefixo novo sem
+  `/channel`).
+  ⚠️ **Mas a borda do platform-ui (nginx do `Dockerfile`, 5174) alcança o gateway** — e até a
+  AUT-20 (2026-09-29) mandava `^/v1/channels` INTEIRO a ele: sem credencial, o gatilho anônimo de
+  pool criava sessão pela 5174. Hoje só `/v1/channels/webhook/(identity|resume)`, o que a UI chama;
+  regra nova para o gateway nessa borda nomeia o caminho exato. Gate: `probe_ui_same_origin.sh`. `infra/test/probe_edge_surface.sh` **declara** a classificação e reprova prefixo novo sem
   linha na tabela — mas nada verifica o que o deploy realmente publica. Ver
   [`docs/guias/webhook-patterns.md`](docs/guias/webhook-patterns.md) § Exposição na borda e
   [`docs/product/workflow-arc-implementation-spec.md`](docs/product/workflow-arc-implementation-spec.md) §0.1

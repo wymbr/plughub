@@ -251,7 +251,7 @@ interface OrchestrationTabProps {
   supervisorState:     SupervisorState | null;
   sessionMessages?:    ChatMessage[];
   onTerminateSegment?: (instanceId: string) => void;
-  /** Base URL for mcp-server-plughub REST (e.g. "http://localhost:3100") */
+  /** Prefix for mcp-server-plughub REST — "" (same origin, via the edge `^/api`). Never another origin (AUT-20). */
   mcpBase?:            string;
   /** Called after a successful inject-context or force-complete to trigger a state refresh */
   onRefresh?:          () => void;

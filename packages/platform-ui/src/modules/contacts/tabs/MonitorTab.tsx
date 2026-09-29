@@ -1181,13 +1181,12 @@ function AcoesDoProcesso({ sessionId, status, onDone }: {
   const [msg,  setMsg]    = useState<{ tipo: 'ok' | 'erro' | 'nota'; texto: string } | null>(null)
 
   const podeEncerrar = perms.can('agent_assist', 'supervisionar', 'read_write')
-  const mcpBase = import.meta.env['VITE_MCP_SERVER_URL'] ?? 'http://localhost:3100'
 
   const encerrar = async () => {
     setBusy(true); setMsg(null)
     try {
       const token = getAccessToken()
-      const res = await fetch(`${mcpBase}/api/force-complete/${sessionId}`, {
+      const res = await fetch(`/api/force-complete/${sessionId}`, {
         method:  'POST',
         headers: {
           'Content-Type': 'application/json',

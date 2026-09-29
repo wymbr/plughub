@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import { SearchHit } from "../types";
 import { apiFetch } from '@/api/apiFetch'
 
-const ANALYTICS_BASE = import.meta.env.VITE_ANALYTICS_URL ?? "/analytics";
+const ANALYTICS_BASE = "/analytics";   // AUT-20 — mesma origem; sem base configurável
 const TENANT_ID      = import.meta.env.VITE_TENANT_ID ?? "tenant_demo";
 const SEARCH_LIMIT   = 30;
 const DEBOUNCE_MS    = 350;

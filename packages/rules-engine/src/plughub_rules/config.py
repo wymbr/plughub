@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PLUGHUB_", case_sensitive=False)
 
     redis_url:         str = "redis://localhost:6379"
-    mcp_server_url:    str = "http://localhost:3100"
     clickhouse_url:    str = "http://localhost:8123"
     clickhouse_db:     str = "plughub"
 

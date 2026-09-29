@@ -51,9 +51,12 @@ export type RulesEvaluationContext = z.infer<typeof RulesEvaluationContextSchema
  *   • `rules.escalation.events` — shadow_mode: false (rule is ACTIVE)
  *   • `rules.shadow.events`     — shadow_mode: true  (rule is in SHADOW/monitoring mode)
  *
- * The Routing Engine consumes `rules.escalation.events` and re-routes the
- * session to `target_pool`. `rules.shadow.events` is consumed by analytics
- * only — no routing side-effect.
+ * ⚠️ RUL-01 (2026-09-29): nobody consumes `rules.escalation.events`, and nobody
+ * publishes to either topic today — the rules-engine builds its Escalator without a
+ * Kafka publisher, and neither topic exists on the broker. The claim that the Routing
+ * Engine re-routes on this event was false. Rule-driven escalation has no path yet:
+ * the active mode refuses (and the API refuses to activate a rule with target_pool)
+ * until RUL-02 designs who stops the running agent before routing.
  */
 export const RulesEscalationEventSchema = z.object({
   session_id:   z.string(),

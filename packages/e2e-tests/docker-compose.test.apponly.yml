@@ -127,7 +127,6 @@ services:
       - "3201:3201"
     environment:
       PLUGHUB_REDIS_URL: redis://redis:6379
-      PLUGHUB_MCP_SERVER_URL: http://mcp-server-plughub:3100
       PLUGHUB_API_PORT: "3201"
     depends_on:
       mcp-server-plughub:

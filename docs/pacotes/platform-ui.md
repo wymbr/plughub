@@ -698,11 +698,15 @@ npm run preview  # Preview da build local
 
 ```
 VITE_TENANT_ID=tenant_demo
-VITE_API_BASE_URL=http://localhost:3100
-VITE_ANALYTICS_URL=http://localhost:3500
-VITE_CONFIG_API_BASE_URL=http://localhost:3600
-VITE_WORKFLOW_API_BASE_URL=http://localhost:3800
 ```
+
+> **A UI fala só com a própria origem** (AUT-20, 2026-09-29). Não há env de URL de serviço: toda
+> chamada é caminho relativo, roteado pelo nginx do `Dockerfile` (produção) ou pelo proxy do
+> `vite.config.ts` (dev), e as duas tabelas de rotas são a mesma. As envs que esta seção listava
+> (`VITE_API_BASE_URL`, `VITE_ANALYTICS_URL`, `VITE_CONFIG_API_BASE_URL`,
+> `VITE_WORKFLOW_API_BASE_URL`) apontavam a outra origem e, das quatro, só uma era lida. Base de
+> serviço configurável é a porta por onde a outra origem volta. Gate:
+> `infra/test/probe_ui_same_origin.sh`.
 
 ---
 

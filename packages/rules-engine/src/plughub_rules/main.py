@@ -19,7 +19,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-import httpx
 import redis.asyncio as aioredis
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
@@ -38,11 +37,10 @@ async def run() -> None:
     settings   = get_settings()
     redis_main = aioredis.from_url(settings.redis_url, decode_responses=True)
     redis_sub  = aioredis.from_url(settings.redis_url, decode_responses=True)
-    http       = httpx.AsyncClient()
 
     rule_store = RuleStore(redis_main)
     evaluator  = RuleEvaluator()
-    escalator  = Escalator(http)
+    escalator  = Escalator()   # RUL-01: sem HTTP — o modo ativo recusa até a RUL-02
 
     # Kafka producer for evaluation.requested events
     kafka_producer = AIOKafkaProducer(bootstrap_servers=settings.kafka_broker)
@@ -64,7 +62,6 @@ async def run() -> None:
     finally:
         await redis_main.aclose()
         await redis_sub.aclose()
-        await http.aclose()
         await kafka_producer.stop()
 
 

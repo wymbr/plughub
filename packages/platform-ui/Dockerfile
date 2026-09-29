@@ -154,8 +154,11 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # channel-gateway — identity resolver REST (Cliente 360 cadastro manual). Before generic /v1.\n\
-    location ~ ^/v1/channels(/|$) {\n\
+    # channel-gateway — SO o que a UI chama: identity resolver (Cliente 360) e resume do\n\
+    # Console (DialogForm, aprovacao). AUT-20: era ^/v1/channels inteiro, e publicava na\n\
+    # borda o POST /v1/channels/webhook/pool/{id}, ANONIMO (criava sessao ate para pool\n\
+    # inexistente) e roubava do registry o /v1/channels das GatewayConfigs. Before generic /v1.\n\
+    location ~ ^/v1/channels/webhook/(identity|resume)(/|$) {\n\
         set $up_channel_id http://channel-gateway:8010;\n\
         proxy_pass         $up_channel_id;\n\
         proxy_http_version 1.1;\n\
