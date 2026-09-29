@@ -82,7 +82,7 @@ backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · ~~
 ### Fase 3 — instância dedicada segura e operável
 
 `PRD-01` (segredos, TLS, borda com a allowlist dos sete prefixos) · ~~`CAP-10`~~ (transporte MCP autenticado; fechada 2026-09-29)/`CAP-15` · ~~`AUT-20`~~ (UI só na própria origem; fechada 2026-09-29) ·
-`AUT-58` · `CNS-25` · `AUD-03` (direitos do titular) · `PRD-07` (observabilidade, backup testado,
+~~`AUT-58`~~ → `AUT-59..70` · `CNS-25` · `AUD-03` (direitos do titular) · `PRD-07` (observabilidade, backup testado,
 runbook de atualização).
 
 ### Fase 4 — prova
@@ -103,9 +103,9 @@ do Redis, broker) sem perder conversa — e o piloto.
 ## 5. Prioridade das fichas existentes
 
 **P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, ~~`ALW-18`~~ (fechada 2026-09-28), ~~`DUR-01`~~ (fechada 2026-09-28),
-~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), ~~`CAP-10`~~ (fechada 2026-09-29), `CAP-15`, ~~`AUT-20`~~ (fechada 2026-09-29), `AUT-58`, `AUD-03`.
+~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), ~~`CAP-10`~~ (fechada 2026-09-29), `CAP-15`, ~~`AUT-20`~~ (fechada 2026-09-29), ~~`AUT-58`~~ (fechada 2026-09-29), `AUD-03` — e as portas abertas PELA BORDA que a AUT-58 mediu: `AUT-59` (evaluation), `AUT-60` (mailing), `AUT-61` (pricing), `AUT-62` (dialog), `AUT-63` (calendar), `AUT-64` (workflow), `AUT-69` (catálogo ABAC).
 
-**P1 — necessário nos primeiros meses:** `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,
+**P1 — necessário nos primeiros meses:** `AUT-65`, `AUT-66`, `AUT-67`, `AUT-68` (rotas abertas só na rede interna), `AUT-70` (serviços fora da varredura), `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,
 `USG-03`, `USG-04`, `AIG-02`, `AIG-01`, `KPI-01..05`, `AUD-01`, `AUD-02`, `CAP-07`, `CAP-08`, `CAP-14`,
 `CNS-25`, `CNS-23`, `CTX-08`, `ALW-15`, `FMT-11`, `ALW-14`, `AUT-57`, `AUT-21`, `AUT-51`, `PUL-01`,
 `ORF-03`, `DLG-15`, `DLG-33`, `SES-01`, `ROT-01`, `GAT-02`, `AUT-25`, `AUT-26`, `PID-11`, `SUR-03`,

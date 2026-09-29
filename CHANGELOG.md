@@ -1,5 +1,42 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (7) — AUT-58: o eixo de credencial por rota cobre os 16 serviços Python, e achou portas abertas pela borda
+
+**A ficha pedia estender o censo por rota** (`_route_principal_census.py`), que cobria só a
+analytics-api e o scheduler-api. Estendido aos 16 serviços Python, ele não bastava: a leitura
+estática não vê dependência de router, middleware, nem guard que **falha aberto de propósito** — o
+`_require_any_evaluation` da evaluation-api diz no próprio docstring *"Bearer opcional (degrada p/
+permitir quando ausente/legado)"*.
+
+**Instrumento novo: medir, não ler.** `_route_anon_sweep.py` chama cada rota de cada serviço como
+ANÔNIMO, de dentro da rede do compose, sem efeito colateral: GET com ids e tenant inexistentes;
+escrita com corpo de tipo inválido (guard de dependência responde 401/403 antes da validação, rota
+aberta responde 422 sem executar); escrita sem corpo com id inexistente (nada a apagar); escrita sem
+corpo e sem id — 12 rotas — **não disparada**, e dito. A leitura estática ficou para o que ela sabe:
+`_route_guard_body_check.py` confere que o handler chama um guard do serviço (com fecho transitivo:
+guard que delega a recusa também conta). O juiz (`_route_baseline_judge.py`) compara a medição com a
+tabela `route_credential_baseline.tsv` e reprova rota sem linha, linha órfã, porta que reabre, guard
+declarado que falha aberto e dívida que fecha sem a tabela acompanhar; o autoteste injeta uma
+regressão e uma rota nova e exige as duas reprovações. Mutação à mão: declarar como guard uma rota
+cujo guard falha aberto reprova; apagar uma linha reprova.
+
+**O que a medição achou (346 rotas).** 152 fechadas, 44 com guard no corpo conferido no código, 32
+isentas com motivo (pré-autenticação, callbacks de provedor, links cujo token é a credencial, a
+leitura de config aberta por decisão), e **117 em dívida**. Pela BORDA pública (5174), sem
+credencial: resultados, instâncias e respostas de pesquisa (evaluation-api), fatura e recursos de
+faturamento (pricing-api); com um `X-Tenant-ID` que qualquer um escreve, mailings, campanhas e
+formulários (mailing-api, dialog-api) — o defeito da SCH-01, em mais três serviços. Na rede interna:
+rules-engine, ai-gateway (gasta a conta de LLM), quality-ingest/export e as RPC internas do gateway.
+O próprio instrumento pegou um empate real: o pacote do channel-gateway contém dois apps
+(`speech_check/` é outro contêiner) e o guard de um absolvia a rota do outro.
+
+**Decisão do dono: instrumento e fichas, fecho serviço a serviço.** Uma ficha por serviço, com a
+lista medida: `AUT-59` evaluation, `AUT-60` mailing, `AUT-61` pricing, `AUT-62` dialog, `AUT-63`
+calendar, `AUT-64` workflow, `AUT-69` catálogo ABAC — **P0**, pela borda —, e `AUT-65` rules,
+`AUT-66` ai-gateway, `AUT-67` quality, `AUT-68` RPC do gateway, `AUT-70` serviços fora da varredura
+(TypeScript e usage-aggregator) — P1. Fechar uma é virar as linhas dela para `fechada`, e o gate
+não deixa a tabela mentir.
+
 ## 2026-09-29 (6) — TNT-01: o tenant de uma leitura é o da sessão — e a analytics-api lia outro tenant
 
 **A ficha, como nasceu (achado da AUT-20).** Sete telas do Console e da Análise tiravam o tenant

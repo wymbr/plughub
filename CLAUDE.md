@@ -1009,6 +1009,11 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   (403 `tenant_mismatch`) mora no ramo de usuário do `optional_pool_principal`, por onde passam
   as três dependências de principal de pool. Serviço e token de sistema escolhem o tenant.
   Gate: `probe_tenant_from_session.sh`.
+- **Toda rota de serviço Python tem UMA linha em `infra/test/route_credential_baseline.tsv`** (AUT-58):
+  `fechada`, `guard_corpo:<g>` (conferido no código), `isenta` com motivo, ou `divida:<ficha>`. Quem
+  mede é uma varredura ANÔNIMA ao vivo, não a leitura do código — o código não mostra guard que falha
+  aberto de propósito. Rota nova entra com linha; fechar uma dívida é virar a linha. Gate:
+  `probe_route_anon_sweep.sh`.
 
 ---
 

@@ -61,7 +61,8 @@ RAIZ = pathlib.Path(__file__).resolve().parents[2]
 # sendo ela (e o que o probe mede por padrao, e o que a isencao declarada cobre), mas o
 # escopo e parametrizavel desde a SCH-01 (2026-09-17): o scheduler-api tinha 9 rotas
 # decidindo com um header de tenant e nada mais, e nenhum censo do repositorio olhava
-# para la. Estender servico a servico e divida NOMEADA (ficha `AUT-58`).
+# para la. A cobertura de TODOS os servicos e da varredura anonima (AUT-58,
+# `probe_route_anon_sweep.sh`): este censo segue sendo o da ASSINATURA, onde e mais forte.
 ESCOPO = os.environ.get("ROUTE_CENSUS_SCOPE", "packages/analytics-api/src")
 
 # Dependencias que EXIGEM identidade verificavel. Cada uma recusa quando nao ha como

@@ -887,6 +887,10 @@ probe_ui_same_origin.sh
 # da analytics com tenant_id numa classe conhecida (censo AST), C vivo: outro tenant 403, o proprio 200,
 # e a leitura cruzada medida (d-00 de t_poss_1213d358) recusada.
 probe_tenant_from_session.sh
+# AUT-58 (2026-09-29): varredura ANONIMA ao vivo das rotas dos 16 servicos Python contra a tabela
+# route_credential_baseline.tsv (fechada / guard_corpo conferido / isenta / divida:<ficha>); autoteste
+# injeta regressao e rota nova e exige as duas reprovacoes.
+probe_route_anon_sweep.sh
 probe_entry_pool_fww.sh
 probe_evaluator_pool_validation.sh
 probe_f4_direction_and_classes.sh
