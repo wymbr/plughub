@@ -1104,6 +1104,8 @@ nunca aparece no chat do cliente. Gate: `probe_wch01_chat_call.sh`.
 
 Endpoints: `GET /v1/pricing/invoice/{tenant_id}` (JSON + `?format=xlsx`), `POST /v1/pricing/resources/{tenant_id}`, `POST /v1/pricing/reserve/{tenant_id}/{pool_id}/activate|deactivate`. Config API namespace `pricing`: `unit_prices`, `reserve_markup_pct`, `billing_cycle_day`, `currency`. Platform-UI BillingPage at `/config/billing` (role: admin). Quota limits written to Redis on plan activation — not seeded by Config API.
 
+**Auth (AUT-61, 2026-09-29):** every route but `/health` requires a caller — reads `billing.visualizar` or `gerenciar`, writes `billing.gerenciar` (not `config.platform`), and the path `tenant_id` must be the token's (403 `tenant_mismatch`). `X-Admin-Token` is the system door (seed) and an EMPTY token closes it, never opens the gate; `X-Service-Token` opens READS only (analytics-api reads capacity).
+
 → See [`docs/arcos/pricing.md`](docs/arcos/pricing.md)
 
 ---

@@ -1070,6 +1070,7 @@ services:
       # o scoping degrada p/ irrestrito. Sem token (dashboards/embeds) segue irrestrito.
       PLUGHUB_AUTH_JWT_SECRET:      changeme_auth_jwt_secret_demo_32c   # == auth-api
       PLUGHUB_PRICING_API_URL:     http://pricing-api:3900   # Fase 2 Pools — teto configurado do total (fallback gracioso p/ provisionada)
+      PLUGHUB_PRICING_SERVICE_TOKEN: changeme_pricing_service_token_demo   # AUT-61 — == o da pricing-api
       PLUGHUB_AGENT_REGISTRY_URL:  http://agent-registry:3300   # Arc 6 Fase 2 — lente deploy lê skill_deployments (markers); indisponível → série sem markers
       PLUGHUB_CONFIG_API_URL:      http://config-api:3600   # R8b — limiar de divergência + N mínimo (namespace evaluation)
       PLUGHUB_EVALUATION_API_URL:  http://evaluation-api:3400   # micro-fatia 1b — epoch overlay (provisória + pendentes por versão); indisponível → epoch só finalizada
@@ -1340,7 +1341,8 @@ services:
       PLUGHUB_PRICING_DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_PRICING_CONFIG_API_URL:  http://config-api:3600
       PLUGHUB_PRICING_ADMIN_TOKEN:     demo_pricing_admin_token
-      PLUGHUB_PRICING_JWT_SECRET:      changeme_auth_jwt_secret_demo_32c   # G-PROBE — Bearer+ABAC config.plataforma
+      PLUGHUB_PRICING_JWT_SECRET:      changeme_auth_jwt_secret_demo_32c   # Bearer + ABAC billing.{visualizar,gerenciar} (AUT-61)
+      PLUGHUB_PRICING_SERVICE_TOKEN:   changeme_pricing_service_token_demo   # AUT-61 — leitura de serviço (analytics-api)
       PLUGHUB_PRICING_REDIS_URL:       redis://redis:6379   # quota sync — {t}:quota:max_concurrent_sessions
     depends_on:
       postgres:

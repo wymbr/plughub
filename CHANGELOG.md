@@ -1,5 +1,64 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (10) — AUT-61: a pricing-api exige credencial nas leituras, confere o tenant do caminho e fecha com segredo ausente
+
+**Medido antes, pela borda pública (5174), sem credencial:** `GET /v1/pricing/invoice/{tenant}`
+respondia 200 com a fatura de qualquer tenant. Recursos, capacidade e o log de reservas também.
+
+As escritas tinham portão (`enforce_write`, do `py-authz`), e ele tinha **dois furos**:
+- `admin_token` vazio **desligava** o portão inteiro (só com um WARNING). Um deploy que esquecesse
+  a env ficava aberto para escrita de cobrança;
+- o `tenant_id` do **caminho** nunca era comparado ao do token. Pior, `delete_resource` casava só
+  por `id`, então quem pudesse apagar num tenant apagava recurso de qualquer outro.
+
+**O catálogo passou a decidir o mapa** (`infra/modules.yaml`, módulo `billing`, que já existia e
+gateava a tela):
+- `visualizar` = *"Visualizar fatura e recursos"*: leitura;
+- `gerenciar` = *"Gerenciar recursos e ativar reservas"*: escrita.
+
+A escrita conferia `config.platform`, campo que nem a tela nem o catálogo associam a cobrança.
+**Medido antes de trocar:** os dois portadores de `config.platform` (`admin@` e a fixture `probe@`)
+têm `billing.gerenciar`, então a troca não revoga ninguém.
+
+**Portas do `_gate` (uma casa para leitura e escrita):**
+1. `X-Admin-Token` (sistema, `pricing-seed`). Configurado, passa; **vazio FECHA a porta, nunca abre
+   o portão**;
+2. `X-Service-Token`, **só nas leituras**. É a analytics-api, que lê a capacidade contratada como
+   denominador do total; serviço não escreve cobrança;
+3. `Bearer` com o grant do catálogo, e **o tenant do caminho tem de ser o do token** (403
+   `tenant_mismatch`).
+
+O `enforce_write` saiu deste serviço, e o verificador segue o canônico (`verify_user_jwt` +
+`abac_can`). As decisões que ele trouxe ficam: credencial ausente é 401, não 403.
+
+**Chamadores migrados no mesmo trabalho:**
+- **analytics-api** (`pricing_client`): `pricing_service_token` + env no compose. Provado ao vivo:
+  410 com o token; sem ele, `None` com WARNING (degrada para a capacidade provisionada);
+- **platform-ui**: o **"Exportar XLSX" era `<a href download>`**, navegação pura que não leva
+  Bearer, e com o portão baixaria um 401. Virou botão que busca com `apiFetch` e salva o blob. O
+  toggle de reserva passou de `fetch` com o token da sessão para `apiFetch`, que renova o token em
+  401. Provado no navegador: fatura, recursos e XLSX, todas 200, com download por blob;
+- **`pricing-seed`**: nada a mudar. Ele já manda `X-Admin-Token` em toda requisição.
+
+**Testes:**
+- o fixture de negócio que **desligava** o portão (`admin_token=""`) passou a entrar pela porta de
+  sistema declarada;
+- `test_upsert_resource_open_when_admin_token_unset` foi **invertido** (segredo ausente, 401);
+- os testes de Bearer passaram de `config.platform` para `billing.*`;
+- entraram leitura anônima (401), leitura do próprio tenant (200), tenant alheio (403), serviço lê e
+  não escreve, `delete` escopado por tenant, e o censo HTTP com piso.
+
+Contraprova: sem o portão da fatura, o censo e o teste de tenant ficam vermelhos; sem a comparação
+de tenant, o teste de tenant fica vermelho. pricing-api 61 · `probe_python_suites.sh` 16/16 ·
+`probe_internal_service_callers.sh` verde.
+
+**Gate:** as 4 leituras viraram `fechada`. As 2 rotas de reserva, que a varredura não dispara porque
+criariam estado, viraram `guard_corpo:require_admin`, conferido no código pelo juiz. Pela borda, o
+anônimo recebe 401 nas duas, sem linha nova no log de ativação.
+
+**Fora, e dito:** a tela mostra os botões de ativar reserva a quem só tem `visualizar`. O clique
+recebe 403 com toast; esconder o botão por grant é ajuste de UI, não de portão.
+
 ## 2026-09-29 (9) — AUT-60: a mailing-api exige credencial em toda rota, e o tenant do usuário é o do token
 
 **Medido antes, pela borda pública (5174):** 22 de 23 rotas decidiam só com o `X-Tenant-ID`,

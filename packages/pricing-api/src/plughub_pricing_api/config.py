@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # `config.plataforma` além do admin-token. Mesmo segredo HS256 da auth-api.
     jwt_secret: str = ""
 
+    # AUT-61 — porta de SERVIÇO, só de LEITURA (a analytics-api lê a capacidade contratada).
+    # Vazio NÃO libera: só fecha esta porta. Escrita de sistema continua pelo admin_token.
+    service_token: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

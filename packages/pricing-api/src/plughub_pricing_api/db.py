@@ -183,10 +183,12 @@ async def upsert_resource(
     return _row_to_dict(row)
 
 
-async def delete_resource(pool: asyncpg.Pool, resource_id: str) -> bool:
+async def delete_resource(pool: asyncpg.Pool, tenant_id: str, resource_id: str) -> bool:
+    # AUT-61: casava só por `id`. O `tenant_id` do caminho não restringia nada — quem pudesse
+    # apagar num tenant apagava recurso de qualquer outro pelo id.
     result = await pool.execute(
-        "DELETE FROM pricing.installation_resources WHERE id = $1",
-        resource_id,
+        "DELETE FROM pricing.installation_resources WHERE id = $1 AND tenant_id = $2",
+        resource_id, tenant_id,
     )
     return result.endswith("1")
 

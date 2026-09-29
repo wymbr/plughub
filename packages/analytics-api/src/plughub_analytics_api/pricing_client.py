@@ -36,8 +36,11 @@ async def get_configured_agent_capacity(base_url: str, tenant_id: str) -> int | 
 
     value: int | None = None
     try:
+        from .config import get_settings   # AUT-61: leitura de serviço
+        token = get_settings().pricing_service_token
+        headers = {"X-Service-Token": token} if token else {}
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{base_url.rstrip('/')}/v1/pricing/capacity/{tenant_id}")
+            resp = await client.get(f"{base_url.rstrip('/')}/v1/pricing/capacity/{tenant_id}", headers=headers)
             resp.raise_for_status()
             raw = resp.json().get("agent_capacity_total")
             value = int(raw) if raw is not None else None

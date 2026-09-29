@@ -348,6 +348,21 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
     setTimeout(() => setToast(null), 3500)
   }
 
+  const handleExportXlsx = async () => {
+    try {
+      const res = await apiFetch(`/v1/pricing/invoice/${encodeURIComponent(tenantId)}?format=xlsx`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const url = URL.createObjectURL(await res.blob())
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `invoice-${tenantId}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      showToast(`❌ ${String(err)}`)
+    }
+  }
+
   const handleToggle = async (group: ReserveGroup) => {
     if (!adminToken) {
       showToast(t('invoice.adminTokenRequired'))
@@ -356,9 +371,9 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
     setToggling(group.pool_id)
     try {
       const action = group.active ? 'deactivate' : 'activate'
-      const res = await fetch(
+      const res = await apiFetch(
         `/v1/pricing/reserve/${encodeURIComponent(tenantId)}/${encodeURIComponent(group.pool_id)}/${action}`,
-        { method: 'POST', headers: { 'Authorization': `Bearer ${adminToken}` } }
+        { method: 'POST' },
       )
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { detail?: string }
@@ -402,13 +417,15 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
             <span className="ml-1 text-gray/60">{invoice.installation_id}</span>
           </p>
         </div>
-        <a
-          href={`/v1/pricing/invoice/${encodeURIComponent(tenantId)}?format=xlsx`}
-          download
+        {/* AUT-61: era um `<a href download>` — navegação pura, que não leva Bearer. Com a
+            fatura exigindo credencial, o link baixaria um 401. Busca com `apiFetch` e salva o blob. */}
+        <button
+          type="button"
+          onClick={handleExportXlsx}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-secondary text-white rounded-md hover:opacity-90 transition-opacity shrink-0 ml-4"
         >
           ⬇️ {t('invoice.exportXlsx')}
-        </a>
+        </button>
       </div>
 
       {/* Base items table */}

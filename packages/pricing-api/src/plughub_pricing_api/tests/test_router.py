@@ -80,9 +80,12 @@ def client():
     caminho. O portão em si ganhou cobertura própria em `TestAdminGate` — que antes não
     existia em lugar nenhum, ou seja, ninguém verificava que um token ERRADO é recusado.
     """
-    app.dependency_overrides[get_settings] = lambda: Settings(admin_token="", jwt_secret="")
+    # AUT-61 (2026-09-29): `admin_token` vazio deixou de ABRIR o portão (fecha a porta de
+    # sistema). O cliente de negócio agora entra pela porta de sistema, declarada aqui —
+    # não pelo portão desligado, que não existe mais.
+    app.dependency_overrides[get_settings] = lambda: Settings(admin_token=_BIZ_TOKEN, jwt_secret="")
     try:
-        yield TestClient(app)
+        yield TestClient(app, headers={"X-Admin-Token": _BIZ_TOKEN})
     finally:
         app.dependency_overrides.pop(get_settings, None)
 
@@ -101,6 +104,8 @@ def gated_client():
 
 _GATE_TOKEN  = "token_de_teste_nao_vazio"
 _GATE_SECRET = "segredo_hs256_de_teste_com_32_chars!"
+_BIZ_TOKEN   = "token-de-sistema-dos-testes-de-negocio"
+_SVC_TOKEN   = "token-de-servico-do-teste-aut61"
 
 
 def _bearer(module_config: dict | None = None, exp_delta: int = 3600) -> str:
@@ -113,6 +118,7 @@ def _bearer(module_config: dict | None = None, exp_delta: int = 3600) -> str:
     header  = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     payload = _b64(json.dumps({
         "sub": "u1",
+        "tenant_id": "t1",
         "module_config": module_config or {},
         "exp": int(time.time()) + exp_delta,
     }).encode())
@@ -198,16 +204,20 @@ class TestResources:
         assert len(data["resources"]) == 1
 
     @patch("plughub_pricing_api.router.pricing_db.upsert_resource", new_callable=AsyncMock)
-    def test_upsert_resource_open_when_admin_token_unset(self, mock_upsert, client):
-        # Nome anterior: `test_upsert_resource_requires_admin` — que era o oposto do que
-        # ele fazia. Sem header nenhum e com `admin_token` vazio, o portão ABRE; o teste
-        # nunca exerceu "requires admin". Quem exerce é `TestAdminGate`, abaixo.
+    def test_upsert_resource_refused_when_admin_token_unset(self, mock_upsert):
+        # AUT-61: invertido. Afirmava que, com `admin_token` vazio, o portão ABRIA — era a
+        # postura "deploy interno". Hoje segredo ausente FECHA a porta de sistema, e sem
+        # Bearer a resposta é 401.
         mock_upsert.return_value = MOCK_RESOURCE
-        r = client.post("/v1/pricing/resources/t1", json={
-            "resource_type": "ai_agent",
-            "quantity": 5,
-        })
-        assert r.status_code == 200
+        app.dependency_overrides[get_settings] = lambda: Settings(admin_token="", jwt_secret=_GATE_SECRET)
+        try:
+            r = TestClient(app).post("/v1/pricing/resources/t1", json={
+                "resource_type": "ai_agent", "quantity": 5,
+            }, headers={"X-Admin-Token": ""})
+        finally:
+            app.dependency_overrides.pop(get_settings, None)
+        assert r.status_code == 401
+        mock_upsert.assert_not_awaited()
 
     @patch("plughub_pricing_api.router.pricing_db.upsert_resource", new_callable=AsyncMock)
     def test_upsert_resource_blocked_wrong_token(self, mock_upsert, client):
@@ -330,7 +340,7 @@ class TestAdminGate:
 
     @patch("plughub_pricing_api.router.pricing_db.set_reserve_active", new_callable=AsyncMock)
     @patch("plughub_pricing_api.router.pricing_db.record_activation", new_callable=AsyncMock)
-    def test_bearer_with_config_platform_passes(self, mock_record, mock_set, gated_client):
+    def test_bearer_with_billing_gerenciar_passes(self, mock_record, mock_set, gated_client):
         """Controle positivo do caminho Bearer.
 
         ⚠️ Estava VERMELHO desde sempre, e a causa nao era o gate: o teste concedia
@@ -345,7 +355,9 @@ class TestAdminGate:
         """
         mock_set.return_value    = 2
         mock_record.return_value = MOCK_LOG
-        tok = _bearer({"config": {"platform": {"access": "read_write"}}})
+        # AUT-61: o campo passou de `config.platform` para `billing.gerenciar`, o que o
+        # catálogo declara ("Gerenciar recursos e ativar reservas").
+        tok = _bearer({"billing": {"gerenciar": {"access": "read_write"}}})
         r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 200
 
@@ -360,7 +372,7 @@ class TestAdminGate:
         (Este passava por ACIDENTE antes: com o campo em portugues o grant nunca era
         encontrado, entao o 403 vinha de "sem grant", nao de "grant insuficiente" — o
         teste afirmava o codigo certo pela razao errada.)"""
-        tok = _bearer({"config": {"platform": {"access": "read_only"}}})
+        tok = _bearer({"billing": {"visualizar": {"access": "read_only"}}})
         r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 403
 
@@ -399,3 +411,88 @@ class TestActivationLog:
         mock_log.assert_called_once()
         call_args = mock_log.call_args
         assert call_args.args[2] == "peak_pool"
+
+
+# ── AUT-61 — leituras, tenant e porta de serviço ───────────────────────────────
+
+@pytest.fixture
+def svc_client():
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        admin_token=_GATE_TOKEN, jwt_secret=_GATE_SECRET, service_token=_SVC_TOKEN,
+    )
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+class TestReadGate:
+    """AUT-61: as leituras não tinham portão — a fatura de qualquer tenant saía 200 pela
+    borda, sem credencial. Cada ramo afirma o código exato, com os controles positivos."""
+
+    _READ = "/v1/pricing/resources/t1"
+
+    def test_anonymous_read_is_401(self, svc_client):
+        assert svc_client.get(self._READ).status_code == 401
+
+    @patch("plughub_pricing_api.router.pricing_db.list_resources", new_callable=AsyncMock)
+    def test_visualizar_reads_own_tenant(self, mock_list, svc_client):
+        mock_list.return_value = []
+        tok = _bearer({"billing": {"visualizar": {"access": "read_only"}}})
+        r = svc_client.get(self._READ, headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200
+
+    def test_other_tenant_in_path_is_403(self, svc_client):
+        tok = _bearer({"billing": {"visualizar": {"access": "read_only"}}})
+        r = svc_client.get("/v1/pricing/invoice/outro", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 403
+        assert r.json()["detail"] == "tenant_mismatch"
+
+    def test_config_platform_no_longer_reads_billing(self, svc_client):
+        tok = _bearer({"config": {"platform": {"access": "read_write"}}})
+        r = svc_client.get(self._READ, headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 403
+
+    @patch("plughub_pricing_api.router.pricing_db.get_capacity", new_callable=AsyncMock)
+    def test_service_token_reads(self, mock_cap, svc_client):
+        mock_cap.return_value = {}
+        r = svc_client.get("/v1/pricing/capacity/qualquer", headers={"X-Service-Token": _SVC_TOKEN})
+        assert r.status_code == 200
+
+    def test_service_token_does_not_write(self, svc_client):
+        r = svc_client.post("/v1/pricing/reserve/t1/p/activate", headers={"X-Service-Token": _SVC_TOKEN})
+        assert r.status_code == 401
+
+    @patch("plughub_pricing_api.router.pricing_db.delete_resource", new_callable=AsyncMock)
+    def test_delete_is_scoped_by_tenant(self, mock_delete, svc_client):
+        """`delete_resource` casava só por id; agora recebe o tenant do caminho."""
+        mock_delete.return_value = True
+        tok = _bearer({"billing": {"gerenciar": {"access": "read_write"}}})
+        r = svc_client.delete("/v1/pricing/resources/t1/res-x", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200
+        assert mock_delete.await_args.args[1:] == ("t1", "res-x")
+
+
+def test_every_route_but_health_refuses_an_anonymous_caller():
+    """Censo por HTTP sobre o OpenAPI do app REAL, com PISO (um censo que varre zero rotas
+    passa por ausência de amostra — medido na AUT-59)."""
+    import re
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        admin_token=_GATE_TOKEN, jwt_secret=_GATE_SECRET, service_token=_SVC_TOKEN,
+    )
+    try:
+        c = TestClient(app)
+        abertas, n = [], 0
+        for path, ops in app.openapi()["paths"].items():
+            for method in ops:
+                if method not in {"get", "post", "put", "patch", "delete"} or path == "/health":
+                    continue
+                n += 1
+                r = c.request(method.upper(), re.sub(r"\{[^}]+\}", "x", path),
+                              headers={"content-type": "application/json"}, content='"x"')
+                if r.status_code != 401:
+                    abertas.append(f"{method.upper()} {path} -> {r.status_code}")
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+    assert n >= 8, f"censo varreu só {n} rotas"
+    assert not abertas, f"rotas que não recusam anônimo: {abertas}"

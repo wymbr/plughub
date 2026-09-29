@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # no pricing como denominador do TOTAL (per-pool segue a provisionada).
     # Vazio ou indisponível → degrada graciosamente para a provisionada.
     pricing_api_url: str = ""
+    # AUT-61 — a pricing-api passou a exigir credencial também nas leituras; a capacidade
+    # contratada é leitura de SERVIÇO. env `PLUGHUB_PRICING_SERVICE_TOKEN`. Vazio → 401 e o
+    # denominador degrada para a provisionada, COM o warning de `pricing_client`.
+    pricing_service_token: str = ""
 
     # ── Agent Registry (Arc 6 Fase 2 — lente `deploy` no bench) ───────────────
     # Origem do deploy timeline (skill_deployments) lido em query-time pela lente

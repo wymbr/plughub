@@ -23,7 +23,9 @@ from typing import Annotated
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from plughub_authz import enforce_write
+import hmac
+
+from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 from pydantic import BaseModel, Field
 
 from . import db as pricing_db
@@ -47,47 +49,78 @@ def get_redis(request: Request):
     return getattr(request.app.state, "redis", None)
 
 
-# Write gate DUAL — admin-token (seed/sistema) OU Bearer + ABAC `config.platform`
-# (billing/pricing é tratado como config de plataforma).
-#
-# MIGRADO para `plughub_authz` em 2026-08-28 (passo 2 da consolidação dos seis
-# verificadores). O que este arquivo tinha e deixou de ter:
-#
-#   · `_verify_hs256` em stdlib — uma das TRÊS bibliotecas em uso no repo para a mesma
-#     verificação (stdlib aqui e no config-api, PyJWT em três serviços, `python-jose`
-#     no auth-api). Divergência 1 da tabela.
-#   · `_check_config_field` com `.get(min_access, 0)` — divergência 4: um `min_access`
-#     digitado errado virava rank 0 e QUALQUER grant não-`none` passava. O canônico
-#     levanta `ValueError`.
-#
-# DUAS MUDANÇAS DE COMPORTAMENTO, ambas decididas (D6, 2026-08-28):
-#
-#   1. credencial AUSENTE agora é **401**, não 403. Este serviço era o outlier
-#      (divergência 5): o config-api já devolvia 401. São perguntas diferentes — "não
-#      sei quem é" × "sei, e não pode" — e colapsá-las apaga a distinção justamente no
-#      log de quem investiga acesso negado. Medido antes de trocar: a UI não tem
-#      interceptor global de 401 (o refresh é agendado por expiração em
-#      `AuthContext.tsx`, não disparado por resposta), então não há loop de logout.
-#   2. a mensagem dizia `config.plataforma`; o campo em `infra/modules.yaml` é
-#      **`platform`**. O gate sempre conferiu `platform` — só o texto mentia, e mandava
-#      quem tomou 403 procurar um grant inexistente.
-def require_admin(
-    request: Request,
-    settings: Settings = Depends(get_settings),
-) -> None:
-    enforce_write(
-        request=request,
-        admin_token=settings.admin_token,
-        jwt_secret=getattr(settings, "jwt_secret", ""),
-        module="config",
-        field="platform",
-        what="escrita de pricing/billing",
-    )
+# Portão — história curta. Até 2026-08-28 este arquivo tinha um verificador HS256 próprio
+# (stdlib); migrou para `plughub_authz.enforce_write`, que trouxe duas decisões que FICAM:
+# credencial ausente é 401 (não 403 — "não sei quem é" ≠ "sei, e não pode"), e o campo
+# nomeado na recusa é o que o portão confere. Em 2026-09-29 (AUT-61) o `enforce_write` saiu
+# daqui: ele desliga o portão com `admin_token` vazio e não compara o tenant do caminho, e
+# as LEITURAS não tinham portão nenhum. Ver `_gate`.
+def _gate(request: Request, settings: Settings, grants: tuple, *, service_ok: bool, what: str) -> None:
+    """Portão de TODA rota de pricing (AUT-61, 2026-09-29).
+
+    Medido antes, pela borda pública (5174), sem credencial: `GET /v1/pricing/invoice/{t}`
+    respondia 200 com a fatura de qualquer tenant; recursos, capacidade e o log de reservas
+    também. As escritas tinham o `enforce_write`, mas com DOIS furos: `admin_token` vazio
+    desligava o portão, e o tenant do CAMINHO nunca era comparado ao do token.
+
+    Portas, nesta ordem:
+      1. `X-Admin-Token` (sistema: `pricing-seed`) — só se configurado; vazio FECHA a porta.
+      2. `X-Service-Token` (só nas LEITURAS com `service_ok`) — a analytics-api.
+      3. `Bearer` + algum dos `grants` de `billing`, e o `tenant_id` do caminho = o do token.
+
+    O catálogo decide o mapa (`infra/modules.yaml`, módulo `billing`):
+    `visualizar` = "Visualizar fatura e recursos"; `gerenciar` = "Gerenciar recursos e ativar
+    reservas". A escrita deixou `config.platform`, o campo que o gate usava sem que o
+    catálogo o dissesse. Medido antes de trocar: os dois portadores de `config.platform`
+    (`admin@` e a fixture `probe@`) têm `billing.gerenciar` — a troca não revoga ninguém.
+    """
+    adm = request.headers.get("x-admin-token")
+    if adm and settings.admin_token and hmac.compare_digest(adm, settings.admin_token):
+        return
+    svc = request.headers.get("x-service-token")
+    if service_ok and svc and settings.service_token and hmac.compare_digest(svc, settings.service_token):
+        return
+    token = bearer_from_header(request.headers.get("authorization"))
+    if not token:
+        raise HTTPException(status_code=401, detail=f"{what} exige credencial")
+    if not settings.jwt_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="pricing-api sem PLUGHUB_PRICING_JWT_SECRET — nao consigo verificar credencial",
+        )
+    claims = verify_user_jwt(token, settings.jwt_secret)
+    if not claims:
+        raise HTTPException(status_code=401, detail="credencial invalida ou expirada")
+    if not any(abac_can(claims, "billing", campo, minimo) for campo, minimo in grants):
+        pedido = " ou ".join(f"billing.{c} ({m})" for c, m in grants)
+        logger.warning("pricing NEGADO: sub=%s %s — sem %s", claims.get("sub"), what, pedido)
+        raise HTTPException(status_code=403, detail=f"{what} exige {pedido}")
+    token_tenant = str(claims.get("tenant_id") or "")
+    if not token_tenant:
+        raise HTTPException(status_code=401, detail="credencial sem tenant")
+    pedido_tenant = request.path_params.get("tenant_id")
+    if pedido_tenant != token_tenant:
+        logger.warning("pricing RECUSA: sub=%s pediu tenant=%s com credencial de %s (%s)",
+                       claims.get("sub"), pedido_tenant, token_tenant, what)
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+
+VER       = (("visualizar", "read_only"), ("gerenciar", "read_write"))
+GERENCIAR = (("gerenciar", "read_write"),)
+
+
+def require_read(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    _gate(request, settings, VER, service_ok=True, what="leitura de pricing/billing")
+
+
+def require_admin(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    """Escrita. Nome mantido: é o que as rotas e os testes já referenciam."""
+    _gate(request, settings, GERENCIAR, service_ok=False, what="escrita de pricing/billing")
 
 
 # ─── Invoice ──────────────────────────────────────────────────────────────────
 
-@router.get("/v1/pricing/invoice/{tenant_id}")
+@router.get("/v1/pricing/invoice/{tenant_id}", dependencies=[Depends(require_read)])
 async def get_invoice(
     tenant_id:       str,
     installation_id: str   = Query(default="default"),
@@ -123,7 +156,7 @@ async def get_invoice(
 
 # ─── Resources ────────────────────────────────────────────────────────────────
 
-@router.get("/v1/pricing/resources/{tenant_id}")
+@router.get("/v1/pricing/resources/{tenant_id}", dependencies=[Depends(require_read)])
 async def list_resources(
     tenant_id:       str,
     installation_id: str = Query(default="default"),
@@ -175,7 +208,7 @@ async def delete_resource(
     pool: asyncpg.Pool = Depends(get_pool),
     redis = Depends(get_redis),
 ):
-    deleted = await pricing_db.delete_resource(pool, resource_id)
+    deleted = await pricing_db.delete_resource(pool, tenant_id, resource_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Resource not found")
     await sync_tenant(redis, pool, tenant_id)   # C mudou → re-grava quota de admissão
@@ -184,7 +217,7 @@ async def delete_resource(
 
 # ─── Configured capacity (Fase 2 — Pools/Infra report) ───────────────────────
 
-@router.get("/v1/pricing/capacity/{tenant_id}")
+@router.get("/v1/pricing/capacity/{tenant_id}", dependencies=[Depends(require_read)])
 async def get_capacity(
     tenant_id:       str,
     installation_id: str = Query(default="default"),
@@ -252,7 +285,7 @@ async def deactivate_reserve(
 
 # ─── Activation log ───────────────────────────────────────────────────────────
 
-@router.get("/v1/pricing/reserve/{tenant_id}/activity")
+@router.get("/v1/pricing/reserve/{tenant_id}/activity", dependencies=[Depends(require_read)])
 async def get_activation_log(
     tenant_id:       str,
     reserve_pool_id: str | None = Query(default=None),
