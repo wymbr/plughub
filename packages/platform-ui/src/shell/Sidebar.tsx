@@ -169,7 +169,9 @@ const Sidebar: React.FC = () => {
       label: t('nav.audit'),
       href:  '/audit',
       icon:  Search,
-      abac:  { module: 'audit', field: 'sessions' },
+      // AUD-03: qualquer campo do módulo abre o item — o DPO que só atende pedido do
+      // titular (`data_requests`) não tem `sessions`, e ficaria sem a tela.
+      abac:  { module: 'audit', anyOf: ['sessions', 'mcp_calls', 'data_requests'] },
     },
 
     // ── Configuração ───────────────────────────────────────────────

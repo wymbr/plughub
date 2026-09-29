@@ -798,6 +798,38 @@ async def persist_survey_response(
     return {"instance_id": instance_id, "response_id": response_id, "created": created}
 
 
+async def survey_subject_export(
+    pool: asyncpg.Pool, *, tenant_id: str, customer_keys: list[str], session_ids: list[str],
+) -> list[dict[str, Any]]:
+    """AUD-03 — pesquisas de UM titular: instâncias e respostas, com o texto livre, os
+    verbatims e as referências de áudio/transcrição (é o que torna isto dado pessoal).
+
+    Casa por `customer_key` (o chamador passa o canônico e os fundidos) **ou** pela
+    sessão pesquisada (`origin_session_id`): `customer_key` é opcional no registro, e
+    a pesquisa sem ele só é alcançável pela sessão. Instância sem resposta também entra
+    — o fato de ter sido pesquisado é dado do titular.
+    """
+    keys = [k for k in customer_keys if k]
+    sids = [s for s in session_ids if s]
+    if not keys and not sids:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT i.instance_id, i.survey_id, i.grain, i.origin_session_id, i.segment_id,
+                      i.agent_key, i.pool_id, i.customer_key, i.channel, i.status,
+                      i.session_at, i.responded_at AS instance_responded_at, i.created_at,
+                      r.response_id, r.signals, r.open_text, r.verbatims, r.audio_ref,
+                      r.transcript_ref, r.response_channel, r.responded_at
+                 FROM survey.survey_instance i
+                 LEFT JOIN survey.survey_response r ON r.instance_id = i.instance_id
+                WHERE i.tenant_id = $1
+                  AND (i.customer_key = ANY($2::text[]) OR i.origin_session_id = ANY($3::text[]))
+                ORDER BY i.created_at""",
+            tenant_id, keys, sids,
+        )
+    return _rows(rows)
+
+
 async def list_survey_responses(
     pool: asyncpg.Pool,
     *,

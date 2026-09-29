@@ -474,8 +474,9 @@ produto, e por isso não caducam com ela.
 |---|---|---|---|
 | AUD-01 | `original_content` desmascarado na trilha — exige endpoint batch em Core | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
 | AUD-02 | Logs `user_access` — campo ABAC já declarado, sem produtor | `aberto` | idem |
-| AUD-03 | Pipeline SAR / erasure (direito de acesso e de eliminação) | `aberto` | idem |
 | AUD-04 | `config_snapshot` para o DPO | `aberto` | idem |
+| AUD-06 | **Eliminação do titular (LGPD art. 18, VI) — ANONIMIZAR e manter a linha de métrica.** Decidido pelo dono em 2026-09-29: conteúdo e identificadores (texto, `customer_id`/telefone, gravações, anexos, stream durável, contatos do outbound, texto livre de pesquisa) são apagados ou trocados por marcador; as linhas de métrica (durações, desfechos, notas) ficam, sem ligação com a pessoa — relatório passado não muda. Executa quem tem `audit.data_requests` em `read_write` (o grau entra COM esta ficha), sem segunda aprovação, com prévia do que foi achado por loja e trilha em `audit_access_log`. Percorre as MESMAS lojas do dossiê de acesso (`data_subject.py`), que é o pré-requisito. No ClickHouse é mutação (`ALTER … UPDATE/DELETE`; há precedente em `analytics-api/main.py`). Fica fora do que a ficha apaga: `audit_access_log` (a trilha é obrigação própria) | `aberto` | `CHANGELOG.md` § 2026-09-29 (15) |
+| AUD-07 | **Retenção nas lojas que guardam dado pessoal PARA SEMPRE.** Medido na AUD-03: `session_stream_events` (Postgres, **com `original_content` desmascarado** — 21 689 linhas, 36 com conteúdo desmascarado), `transcripts`, ClickHouse `messages`/`session_timeline`/`sessions`, pesquisas (`open_text`, verbatims) e as tabelas de avaliação não têm TTL nem expurgo. `mailing_entries.expires_at` e `collect_instances.expires_at` são filtros lógicos: nada apaga a linha. Só anexos/gravações (job horário) e duas tabelas do ClickHouse (2 anos) expiram. E o doc de voz promete gravação por 5 anos enquanto o código usa 30 dias. Decidir a política por classe de dado e prover o expurgo, começando pelo stream desmascarado | `aberto` | `CHANGELOG.md` § 2026-09-29 (15); `session-replayer/stream_persister.py` |
 
 ---
 

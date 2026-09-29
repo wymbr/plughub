@@ -7,6 +7,9 @@ Routes (all prefixed /v1/audit):
       Auth: Bearer JWT (auth-api HS256) — ABAC gate: module_config.audit.sessions
       Side-effect: writes an immutable row to audit_access_log (ClickHouse).
 
+  POST /v1/audit/data-requests/access
+      Dossiê de acesso do titular (AUD-03). ABAC gate: module_config.audit.data_requests.
+
   GET /v1/audit/mcp-calls
       Returns MCP tool call audit records for a tenant.
       Auth: Bearer JWT (auth-api HS256) — ABAC gate: module_config.audit.mcp_calls
@@ -30,6 +33,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
 from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 
 logger = logging.getLogger("plughub.analytics.audit")
@@ -467,3 +471,95 @@ async def audit_mcp_calls(
         target_id=session_id or "", result="ok", row_count=len(calls),
     )
     return JSONResponse(content={"calls": calls, "total": len(calls)})
+
+
+# ── POST /v1/audit/data-requests/access — AUD-03 ──────────────────────────────
+
+class DataSubjectAccessRequest(BaseModel):
+    """Quem é o titular. Os identificadores vão no CORPO, nunca na URL: URL fica em log
+    de proxy e de acesso, e telefone/e-mail/CPF ali seriam o vazamento que esta rota
+    existe para prevenir."""
+    tenant_id:   str = ""
+    customer_id: str = ""
+    phone:       str = ""
+    email:       str = ""
+    cpf:         str = ""
+
+
+@router.post(
+    "/data-requests/access",
+    # O corpo é lido à mão (ver abaixo), então o FastAPI não o descreveria. Declará-lo
+    # aqui mantém o contrato no OpenAPI — e é o que faz a varredura anônima DISPARAR a
+    # rota e medir o 401, em vez de classificá-la como escrita não medida.
+    openapi_extra={"requestBody": {"required": False, "content": {"application/json": {
+        "schema": DataSubjectAccessRequest.model_json_schema()}}}},
+)
+async def audit_data_subject_access(request: Request):
+    """
+    Dossiê de ACESSO do titular (LGPD art. 18, II): o que a plataforma guarda de UMA
+    pessoa, loja por loja, com o `status` de cada uma. Ver `data_subject.py`.
+
+    Gate: `module_config.audit.data_requests` (read_only) — o DPO. Toda chamada, aceita
+    ou recusada, grava uma linha em `audit_access_log`. O `target_id` da linha é o
+    `customer_id` (ou só os TIPOS de identificador, se nenhum cliente foi achado):
+    telefone e e-mail não vão para a trilha, que é lida por mais gente que o dossiê.
+    """
+    from .config import get_settings
+    from .data_subject import build_access_dossier
+
+    # O corpo é lido AQUI, não declarado na assinatura: declarado, o FastAPI o valida
+    # antes do handler, e um anônimo com corpo inválido recebia 422 sem passar pelo
+    # portão nem deixar linha na trilha (medido pela varredura anônima da AUT-58). Lido
+    # à mão, o portão decide primeiro e a validação vem depois dele.
+    try:
+        raw = await request.json()
+    except ValueError:
+        raw = None
+    try:
+        body = DataSubjectAccessRequest.model_validate(raw if isinstance(raw, dict) else {})
+        body_ok = raw is None or isinstance(raw, dict)
+    except ValidationError:
+        body, body_ok = DataSubjectAccessRequest(), False
+    anchors = [{"kind": k, "value": v.strip()}
+               for k, v in (("phone", body.phone), ("email", body.email), ("cpf", body.cpf))
+               if v and v.strip()]
+    target = body.customer_id or ("anchors:" + ",".join(a["kind"] for a in anchors))
+    try:
+        actor_sub, actor_kind, claims_tenant = _check_audit_access(request, "data_requests")
+    except AuditDenied as denied:
+        await _record_access(
+            request, tenant_id=denied.tenant_id or body.tenant_id,
+            actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
+            endpoint="audit.data_requests.access", target_kind="data_subject",
+            target_id=target, result="denied", row_count=0,
+        )
+        return JSONResponse(status_code=denied.status, content={"detail": str(denied)})
+
+    if not body_ok:
+        return JSONResponse(status_code=422, content={"detail": "corpo invalido"})
+    effective_tenant = claims_tenant or body.tenant_id
+    if claims_tenant and body.tenant_id and body.tenant_id != claims_tenant:
+        await _record_access(
+            request, tenant_id=claims_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
+            endpoint="audit.data_requests.access", target_kind="data_subject",
+            target_id=target, result="denied", row_count=0,
+        )
+        return JSONResponse(status_code=403, content={"detail": "tenant_mismatch"})
+    if not effective_tenant:
+        return JSONResponse(status_code=422, content={"detail": "tenant_id obrigatorio"})
+    if not body.customer_id and not anchors:
+        return JSONResponse(status_code=422,
+                            content={"detail": "informe customer_id, phone, email ou cpf"})
+
+    dossier = await build_access_dossier(
+        get_settings(), _store(request), effective_tenant,
+        customer_id=body.customer_id.strip(), anchors=anchors,
+    )
+    ids = dossier.get("customer_ids") or []
+    await _record_access(
+        request, tenant_id=effective_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
+        endpoint="audit.data_requests.access", target_kind="data_subject",
+        target_id=(ids[0] if ids else target), result="ok",
+        row_count=dossier["sessions"]["count"],
+    )
+    return JSONResponse(content=dossier)

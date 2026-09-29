@@ -616,6 +616,15 @@ modules:
         domain: [none, read_only]
         scopable: false
         default: none
+      # AUD-03 (2026-09-29): direitos do titular. Entra com a feature, como a AUT-41
+      # decidiu para os campos adiados. Hoje só o ACESSO existe, então `read_only`
+      # basta; `read_write` entra com a eliminação, e não antes — grau sem portão vivo
+      # é promessa sem mecanismo. Sem `role_defaults`: ninguém nasce DPO.
+      data_requests:
+        label: Pedidos do titular (acesso aos dados de uma pessoa)
+        domain: [none, read_only]
+        scopable: false
+        default: none
 
 # ── Pares de CONTRATAÇÃO ──────────────────────────────────────────────────────
 # MOD-08 / fase G1b do `adr-abac-module-granularity-and-delegation.md`.

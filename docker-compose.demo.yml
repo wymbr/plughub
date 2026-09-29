@@ -1078,6 +1078,11 @@ services:
       PLUGHUB_CONFIG_API_URL:      http://config-api:3600   # R8b — limiar de divergência + N mínimo (namespace evaluation)
       PLUGHUB_EVALUATION_API_URL:  http://evaluation-api:3400   # micro-fatia 1b — epoch overlay (provisória + pendentes por versão); indisponível → epoch só finalizada
       PLUGHUB_EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo   # AUT-59 — a cobertura é leitura de serviço
+      # AUD-03 — lojas do dossiê de acesso do titular (cada uma só responde a serviço)
+      PLUGHUB_CHANNEL_GATEWAY_URL:           http://channel-gateway:8010
+      PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo   # == o do gateway
+      PLUGHUB_MAILING_API_URL:               http://mailing-api:3660
+      PLUGHUB_MAILING_SERVICE_TOKEN:         changeme_mailing_service_token_demo   # == PLUGHUB_MAILING_SERVICE_TOKEN
     depends_on:
       redis:
         condition: service_healthy

@@ -764,6 +764,91 @@ class IdentityIndex:
             })
         return out
 
+    async def subject_record(self, tenant_id: str, customer_id: str) -> dict[str, Any] | None:
+        """AUD-03 — tudo o que o cadastro de identidade guarda de UM titular.
+
+        Segue a fusão nos DOIS sentidos: um `customer_id` já fundido é trocado pelo
+        canônico (`merged_into`), e os ids que foram fundidos NELE entram em
+        `merged_from` — é por eles que as sessões antigas da pessoa são encontradas.
+        As âncoras aparecem como TIPO e procedência, nunca como hash: o hash salgado não
+        é dado do titular, e publicá-lo num dossiê serviria só a quem quisesse testar
+        valores contra ele.
+        """
+        if self._db is None or not customer_id:
+            return None
+        async with self._db.acquire() as conn:
+            cid = customer_id
+            for _ in range(8):   # cadeia de fusão; 8 é folga, não expectativa
+                nxt = await conn.fetchval(
+                    "SELECT merged_into FROM identity.customers "
+                    "WHERE customer_id = $1 AND tenant_id = $2 AND status = 'merged'",
+                    cid, tenant_id,
+                )
+                if not nxt:
+                    break
+                cid = nxt
+            row = await conn.fetchrow(
+                "SELECT customer_id, status, attributes, created_at, updated_at "
+                "FROM identity.customers WHERE customer_id = $1 AND tenant_id = $2",
+                cid, tenant_id,
+            )
+            if not row:
+                return None
+            merged_from: list[str] = []
+            fila = [cid]
+            while fila and len(merged_from) < 200:
+                alvo = fila.pop()
+                filhos = await conn.fetch(
+                    "SELECT from_customer FROM identity.customer_merges "
+                    "WHERE tenant_id = $1 AND into_customer = $2",
+                    tenant_id, alvo,
+                )
+                for f in filhos:
+                    if f["from_customer"] not in merged_from:
+                        merged_from.append(f["from_customer"])
+                        fila.append(f["from_customer"])
+            keys = await conn.fetch(
+                "SELECT kind, verification_class, provenance, verified_at, created_at "
+                "FROM identity.customer_secondary_keys WHERE tenant_id = $1 AND customer_id = $2 "
+                "ORDER BY created_at",
+                tenant_id, cid,
+            )
+            refs = await conn.fetch(
+                "SELECT system, external_id, resolved_at "
+                "FROM identity.customer_external_refs WHERE tenant_id = $1 AND customer_id = $2",
+                tenant_id, cid,
+            )
+        attrs = row["attributes"]
+        if isinstance(attrs, str):
+            try:
+                attrs = json.loads(attrs)
+            except Exception:
+                attrs = {}
+
+        def _iso(v):
+            return v.isoformat() if hasattr(v, "isoformat") else (str(v) if v else None)
+
+        return {
+            "customer_id":   row["customer_id"],
+            "requested_id":  customer_id,
+            "status":        row["status"],
+            "attributes":    attrs or {},
+            "created_at":    _iso(row["created_at"]),
+            "updated_at":    _iso(row["updated_at"]),
+            "merged_from":   merged_from,
+            "anchors": [
+                {"kind": k["kind"], "verification_class": k["verification_class"],
+                 "provenance": k["provenance"], "verified_at": _iso(k["verified_at"]),
+                 "created_at": _iso(k["created_at"])}
+                for k in keys
+            ],
+            "external_refs": [
+                {"system": r["system"], "external_id": r["external_id"],
+                 "resolved_at": _iso(r["resolved_at"])}
+                for r in refs
+            ],
+        }
+
     async def get_customer(
         self, tenant_id: str, customer_id: str,
     ) -> dict[str, Any] | None:

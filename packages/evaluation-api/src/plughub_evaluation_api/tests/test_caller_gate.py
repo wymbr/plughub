@@ -175,3 +175,21 @@ async def test_every_route_but_health_refuses_an_anonymous_caller(app):
                     abertas.append(f"{method.upper()} {path} → {r.status_code}")
     assert n >= 50, f"censo varreu só {n} rotas — o instrumento não está vendo o app"
     assert not abertas, f"rotas que não recusam anônimo: {abertas}"
+
+
+@pytest.mark.asyncio
+async def test_aud03_data_subject_surveys_is_service_only(app):
+    """AUD-03: as pesquisas de UMA pessoa (texto livre, verbatims) saem para a
+    analytics-api, que confere o DPO. Usuário, mesmo com todo campo de evaluation: não."""
+    body = {"tenant_id": "t1", "customer_keys": ["cus_1"], "session_ids": ["s1"]}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/v1/evaluation/data-subject/surveys", json=body,
+                         headers=_tok(report="read_write", formularios="read_write"))
+        assert r.status_code == 401, r.text   # `_require_service`: sem X-Service-Token
+        with patch("plughub_evaluation_api.db.survey_subject_export",
+                   new=AsyncMock(return_value=[{"instance_id": "i1"}])) as db:
+            r = await c.post("/v1/evaluation/data-subject/surveys", json=body,
+                             headers={"X-Service-Token": _SVC})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"surveys": [{"instance_id": "i1"}]}
+    assert db.await_args.kwargs["customer_keys"] == ["cus_1"]

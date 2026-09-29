@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     # Vazio → a chamada sai sem header, recebe 401 e o overlay degrada COM log.
     evaluation_service_token: str = ""
 
+    # ── AUD-03 — lojas do dossiê de acesso do titular ─────────────────────────
+    # Cada uma responde só a serviço. Vazio NÃO derruba o dossiê: a seção da loja sai
+    # `unavailable: … not set`, nomeada — nunca vazia em silêncio.
+    channel_gateway_url: str = ""
+    channel_gateway_service_token: str = ""   # == PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN
+    mailing_api_url: str = ""
+    mailing_service_token: str = ""           # == PLUGHUB_MAILING_SERVICE_TOKEN
+
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without
     # requiring a Bearer token. NEVER enable in production.

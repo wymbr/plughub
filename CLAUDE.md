@@ -1313,10 +1313,10 @@ MCP tool `agent_event(category, value, tags?)` para agentes publicarem KPIs de n
 ## Audit LGPD — Compliance Role (Fase 1)
 
 Módulo ABAC `audit` para DPO/compliance, **ortogonal às roles** — quem tem `module_config.audit.*` no
-JWT tem acesso escalonado. **DOIS campos no catálogo**: `sessions` e `mcp_calls`, em
-`GET /v1/audit/…` na analytics-api. Os outros três da Fase 1 (`user_access`, `data_requests`,
-`config_snapshot`) são *deferred* (`AUD-01..04`) e **não estão declarados** — campo sem portão vivo é
-promessa sem mecanismo; cada um entra com a sua feature.
+JWT tem acesso escalonado. **TRÊS campos no catálogo**: `sessions`, `mcp_calls` e `data_requests`
+(este desde a AUD-03), em `/v1/audit/…` na analytics-api. `user_access` e `config_snapshot` são
+*deferred* (`AUD-02`, `AUD-04`) e **não estão declarados** — campo sem portão vivo é promessa sem
+mecanismo; cada um entra com a sua feature.
 
 > **A declaração no catálogo só passou a existir em 2026-09-08 (AUT-41), e esta seção era uma das
 > três casas que afirmavam o contrário.** Medido: `infra/modules.yaml` e o `auth.module_registry`
@@ -1345,8 +1345,13 @@ promessa sem mecanismo; cada um entra com a sua feature.
   tabela que ninguém preenche é o *"existe ≠ está pronto"*. `/v1/audit/mcp-calls` lê de
   `session_timeline`.
 
-**Deferred:** `original_content` desmascarado · logs `user_access` · pipeline SAR/erasure ·
-`config_snapshot` (ver `AUD-01..04` em `pending.md`).
+- **Dossiê de acesso do titular** (AUD-03): `POST /v1/audit/data-requests/access` monta, loja por
+  loja, o que a plataforma guarda de UMA pessoa. O pivô é a SESSÃO (quase toda loja é chaveada por
+  ela), e as lojas donas respondem só a serviço. **Identificador da pessoa vai no corpo e nunca na
+  trilha**; loja fora do ar sai `unavailable`, nunca vazia; `not_covered` diz o que não foi olhado.
+
+**Deferred:** `original_content` desmascarado (`AUD-01`) · logs `user_access` (`AUD-02`) ·
+`config_snapshot` (`AUD-04`) · eliminação por anonimização (`AUD-06`) · retenção (`AUD-07`).
 
 → See [`docs/arcos/audit-lgpd.md`](docs/arcos/audit-lgpd.md)
 

@@ -285,6 +285,41 @@ def _attrs(row) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+async def list_for_subject(db, *, tenant_id: str, session_ids: list[str]) -> list[dict]:
+    """AUD-03 — anexos e gravações de um conjunto de sessões, para o dossiê do titular.
+
+    Metadado, nunca conteúdo: o dossiê diz QUE o arquivo existe, de que classe é e até
+    quando fica. Entregar os bytes é outra decisão (e outra porta, com a sua trilha —
+    a de gravação exige `contacts.recording`). Inclui o que já expirou e ainda não foi
+    purgado, com `deleted_at`: enquanto o arquivo existe, ele é dado do titular.
+    """
+    if not session_ids:
+        return []
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT file_id, session_id, original_name, mime_type, size_bytes,
+                   artifact_class, status, created_at, expires_at, deleted_at
+            FROM   session_attachments
+            WHERE  tenant_id = $1 AND session_id = ANY($2::text[])
+            ORDER  BY created_at
+            """,
+            tenant_id, session_ids,
+        )
+
+    def _iso(v):
+        return v.isoformat() if hasattr(v, "isoformat") else (str(v) if v else None)
+
+    return [
+        {"file_id": str(r["file_id"]), "session_id": r["session_id"],
+         "original_name": r["original_name"], "mime_type": r["mime_type"],
+         "size_bytes": r["size_bytes"], "artifact_class": r["artifact_class"],
+         "status": r["status"], "created_at": _iso(r["created_at"]),
+         "expires_at": _iso(r["expires_at"]), "deleted_at": _iso(r["deleted_at"])}
+        for r in rows
+    ]
+
+
 async def _list_session(db, serving_url: str, *, tenant_id: str, session_id: str,
                         artifact_class: str) -> list["AttachmentMeta"]:
     async with db.acquire() as conn:

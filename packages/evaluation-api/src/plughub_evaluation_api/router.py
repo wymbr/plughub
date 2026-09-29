@@ -1602,6 +1602,25 @@ async def create_survey_response(body: SurveyResponseCreate, request: Request) -
     return JSONResponse(status_code=201 if result["created"] else 200, content=result)
 
 
+class SurveySubjectExportRequest(BaseModel):
+    tenant_id:     str
+    customer_keys: list[str] = []
+    session_ids:   list[str] = []
+
+
+@router.post("/v1/evaluation/data-subject/surveys",
+             dependencies=[Depends(_require_service)])
+async def survey_data_subject_export(body: SurveySubjectExportRequest, request: Request) -> dict:
+    """AUD-03 — dossiê de acesso do titular (LGPD art. 18, II). SÓ SERVIÇO: quem monta
+    o dossiê é a analytics-api, que confere o DPO e grava a trilha. O tenant do corpo
+    vale porque só serviço chega aqui (o `require_caller` do router confere o de usuário)."""
+    rows = await _db.survey_subject_export(
+        _pool(request), tenant_id=body.tenant_id,
+        customer_keys=body.customer_keys[:200], session_ids=body.session_ids[:5000],
+    )
+    return {"surveys": rows}
+
+
 @router.get("/v1/evaluation/survey/responses",
             dependencies=[Depends(_require_any_evaluation)])
 async def list_survey_responses(

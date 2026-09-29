@@ -1,49 +1,78 @@
 {
   "accessWarning": "Acesso restrito — todos os acessos são registrados em log imutável.",
   "tabs": {
-    "sessions":        "Sessões",
-    "mcp_calls":       "MCP Calls",
-    "user_access":     "Acessos",
-    "data_requests":   "Req. de Dados",
+    "sessions": "Sessões",
+    "mcp_calls": "MCP Calls",
+    "user_access": "Acessos",
+    "data_requests": "Req. de Dados",
     "config_snapshot": "Config Masking"
   },
   "comingSoon": "em breve",
   "sessions": {
     "accessNotice": "Todo acesso a mensagens de sessão é registrado no log de auditoria imutável.",
-    "loadError":    "Erro ao carregar",
-    "lookup":       "Consultar",
-    "results":      "{{count}} mensagens — sessão {{sessionId}}",
+    "loadError": "Erro ao carregar",
+    "lookup": "Consultar",
+    "results": "{{count}} mensagens — sessão {{sessionId}}",
     "columns": {
       "timestamp": "Timestamp",
-      "type":      "Tipo",
-      "author":    "Autor",
-      "role":      "Role",
-      "content":   "Conteúdo"
+      "type": "Tipo",
+      "author": "Autor",
+      "role": "Role",
+      "content": "Conteúdo"
     }
   },
   "mcpCalls": {
-    "maskedOnly":   "Somente calls com campos mascarados",
-    "refresh":      "↻ Atualizar",
-    "loadError":    "Erro ao carregar",
-    "noRecords":    "Nenhum registro encontrado",
-    "allowed":      "Permitido",
-    "blocked":      "Bloqueado",
+    "maskedOnly": "Somente calls com campos mascarados",
+    "refresh": "↻ Atualizar",
+    "loadError": "Erro ao carregar",
+    "noRecords": "Nenhum registro encontrado",
+    "allowed": "Permitido",
+    "blocked": "Bloqueado",
     "injectionYes": "Sim",
     "columns": {
       "timestamp": "Timestamp",
-      "server":    "Server",
-      "tool":      "Tool",
-      "allowed":   "Permitido",
+      "server": "Server",
+      "tool": "Tool",
+      "allowed": "Permitido",
       "injection": "Injeção",
-      "masked":    "Mascarados",
-      "ms":        "ms",
-      "session":   "Sessão"
+      "masked": "Mascarados",
+      "ms": "ms",
+      "session": "Sessão"
     }
   },
   "stub": {
     "inDevelopment": "{{label}} — em desenvolvimento",
-    "userAccess":    "Logs de acesso de usuários",
-    "dataRequests":  "Solicitações SAR / Erasure",
-    "configSnapshot":"Snapshot de configuração de masking"
+    "userAccess": "Logs de acesso de usuários",
+    "dataRequests": "Solicitações SAR / Erasure",
+    "configSnapshot": "Snapshot de configuração de masking"
+  },
+  "dataRequests": {
+    "notice": "Dossiê de acesso do titular (LGPD art. 18, II). Toda consulta, aceita ou recusada, é registrada na trilha imutável — sem o telefone ou o e-mail informados.",
+    "loadError": "Erro ao montar o dossiê",
+    "lookup": "Montar dossiê",
+    "download": "Baixar JSON",
+    "fields": {
+      "customer_id": "customer_id",
+      "phone": "Telefone",
+      "email": "E-mail",
+      "cpf": "CPF"
+    },
+    "resolved": "Titular: {{ids}}",
+    "notResolved": "Nenhum cadastro encontrado ({{status}}) — as sessões ainda são procuradas pelo telefone/e-mail informado.",
+    "columns": {
+      "store": "Loja",
+      "status": "Status",
+      "count": "Itens"
+    },
+    "sections": {
+      "identity": "Cadastro de identidade",
+      "sessions": "Sessões",
+      "messages": "Mensagens (mascaradas)",
+      "insights": "Insights de contato",
+      "attachments": "Anexos e gravações (metadado)",
+      "outbound": "Outbound (mailing, entregas, contatos)",
+      "surveys": "Pesquisas"
+    },
+    "notCovered": "Lojas que este dossiê ainda NÃO percorre:"
   }
 }

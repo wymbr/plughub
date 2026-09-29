@@ -1952,6 +1952,45 @@ async def webhook_identity_customer_get(customer_id: str, request: Request, tena
     return cust
 
 
+class SubjectExportRequest(BaseModel):
+    tenant_id:   str
+    customer_id: str = ""
+    session_ids: list[str] = []
+
+
+@app.post("/v1/channels/webhook/identity/subject-export", status_code=200)
+async def webhook_identity_subject_export(body: SubjectExportRequest, request: Request) -> dict:
+    """
+    AUD-03 — o que este serviço guarda de UM titular, para o dossiê de acesso (LGPD
+    art. 18, II). Interna (IDN-06): só a analytics-api, que monta o dossiê e grava a
+    trilha, chama. O corpo carrega o `customer_id` e as sessões já achadas lá; a
+    resposta traz o registro de identidade (com as fusões) e os anexos e gravações
+    dessas sessões — metadado, nunca bytes.
+
+    Cada parte diz se ficou INDISPONÍVEL, em vez de voltar vazia: um dossiê que omite
+    uma loja em silêncio afirma ao titular que ela não guarda nada dele.
+    """
+    tenant = _identity_caller(request, body.tenant_id)
+    out: dict = {"customer": None, "customer_status": "not_requested",
+                           "attachments": [], "attachments_status": "ok"}
+    if body.customer_id:
+        if _webhook_adapter is None:
+            out["customer_status"] = "unavailable: identity resolver not initialised"
+        else:
+            rec = await _webhook_adapter.subject_record(tenant, body.customer_id)
+            out["customer"] = rec
+            out["customer_status"] = "ok" if rec else "not_found"
+    sids = [s for s in body.session_ids if s][:5000]
+    if sids:
+        store_db = getattr(_attachment_store, "_db", None)
+        if store_db is None:
+            out["attachments_status"] = "unavailable: attachment store not initialised"
+        else:
+            from .attachment_store import list_for_subject
+            out["attachments"] = await list_for_subject(store_db, tenant_id=tenant, session_ids=sids)
+    return out
+
+
 # ── Survey web vehicle (dialog primitive §9.2/§19) ────────────────────────────
 # Link tokenizado → página pública /survey/{token} que renderiza o MESMO
 # DialogForm e grava pela MESMA trilha (session.signals). Prefixos /v1/survey e

@@ -150,3 +150,18 @@ async def test_every_route_but_health_refuses_an_anonymous_caller():
                     abertas.append(f"{method.upper()} {path} → {r.status_code}")
     assert n >= 20, f"censo varreu só {n} rotas"
     assert not abertas, f"rotas que não recusam anônimo: {abertas}"
+
+
+@pytest.mark.asyncio
+async def test_data_subject_export_is_service_only():
+    """AUD-03: o dossiê do titular sai por aqui para a analytics-api, que confere o DPO.
+    Usuário com o grant máximo de outbound não lê os contatos de uma pessoa: 403."""
+    r = await _req("POST", "/v1/data-subject/export",
+                   _tok(configurar="read_write", operacao="read_write"), json={"customer_ids": ["c"]})
+    assert r.status_code == 403
+    with patch("plughub_mailing_api.router.db_subject_export",
+               new=AsyncMock(return_value={"entries": [], "deliveries": [], "contact_log": []})) as db:
+        r = await _req("POST", "/v1/data-subject/export", {"X-Service-Token": _SVC, "X-Tenant-ID": "t9"},
+                       json={"customer_ids": ["c"], "contact_values": ["+55"]})
+    assert r.status_code == 200, r.text
+    assert db.await_args.args[1:] == ("t9", ["c"], ["+55"])

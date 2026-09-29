@@ -942,6 +942,71 @@ async def db_contact_eligibility(
     return {"allowed": allowed, "reason": reason, "retry_after": retry_after, "claimed": claimed}
 
 
+async def db_subject_export(
+    pool: asyncpg.Pool, tenant_id: str, customer_ids: list[str], contact_values: list[str],
+) -> dict:
+    """AUD-03 — o que o outbound guarda de UM titular: entradas de mailing (com os
+    contatos EM CLARO, que é por isso que precisam estar no dossiê), entregas e o log
+    de contato.
+
+    Casa por `customer_id` (o canônico e os fundidos nele) **ou** por qualquer valor
+    de `contacts` igual a um telefone/e-mail informado: `customer_id` é nulável aqui,
+    e a entrada importada sem cadastro só é alcançável pelo contato.
+    """
+    ids = [c for c in customer_ids if c]
+    vals = [v for v in contact_values if v]
+    if not ids and not vals:
+        return {"entries": [], "deliveries": [], "contact_log": []}
+    async with pool.acquire() as conn:
+        entries = await conn.fetch(
+            """
+            SELECT * FROM outbound.mailing_entries e
+            WHERE e.tenant_id = $1
+              AND (e.customer_id = ANY($2::text[])
+                   OR EXISTS (SELECT 1 FROM jsonb_each_text(e.contacts) kv
+                              WHERE kv.value = ANY($3::text[])))
+            ORDER BY e.added_at
+            """,
+            tenant_id, ids, vals,
+        )
+        entry_ids = [r["id"] for r in entries]
+        deliveries = await conn.fetch(
+            """
+            SELECT id, campaign_id, mailing_entry_id, result, attempts, session_id, root_session_id,
+                   claimed_at, contacted_at, created_at, updated_at
+            FROM outbound.campaign_deliveries
+            WHERE tenant_id = $1 AND mailing_entry_id = ANY($2::uuid[])
+            ORDER BY created_at
+            """,
+            tenant_id, entry_ids,
+        ) if entry_ids else []
+        log = await conn.fetch(
+            """
+            SELECT customer_id, channel, campaign_id, contacted_at, result
+            FROM outbound.contact_log
+            WHERE tenant_id = $1 AND customer_id = ANY($2::text[])
+            ORDER BY contacted_at
+            """,
+            tenant_id, ids,
+        ) if ids else []
+
+    def _d(r) -> dict:
+        out = {}
+        for k, v in dict(r).items():
+            if hasattr(v, "isoformat"):
+                v = _iso(v)
+            elif v is not None and not isinstance(v, (str, int, float, bool)):
+                v = str(v)   # UUID
+            out[k] = v
+        return out
+
+    return {
+        "entries":     [_row_to_entry(r) for r in entries],
+        "deliveries":  [_d(r) for r in deliveries],
+        "contact_log": [_d(r) for r in log],
+    }
+
+
 async def db_unsubscribe(
     pool: asyncpg.Pool, tenant_id: str, data: dict, identity: Any = None,
 ) -> dict:

@@ -19,7 +19,7 @@ Defined in `infra/modules.yaml` under the `audit` module key. Five fields:
 | `sessions` | read_only | View session messages (masked) + immutable access log |
 | `mcp_calls` | read_only | View MCP tool calls with masked input fields |
 | `user_access` | read_only | Authentication logs and refresh token rotation *(stub)* |
-| `data_requests` | read_write | SAR / erasure requests CRUD *(stub)* |
+| `data_requests` | read_only | Dossiê de acesso do titular (AUD-03); `read_write` entra com a eliminação (AUD-06) |
 | `config_snapshot` | read_only | Active masking rules and retention policies *(stub)* |
 
 The `PermissionChecker` (platform-ui) and `_check_audit_field` (analytics-api) both use the same `_ACCESS_ORDER` map:
@@ -134,12 +134,29 @@ Session messages in ClickHouse store masked `content` only. To expose `original_
 
 Auth-api currently logs refresh token rotation and failed logins to PostgreSQL but does not stream them to analytics. Requires a `user_access.events` Kafka topic and a new ClickHouse table.
 
-### Phase 4 — SAR/Erasure pipeline
+### Phase 4 — direitos do titular
 
-Subject Access Requests (data_requests) require:
-- CRUD endpoints in a dedicated `audit-api` or extension of `auth-api`
-- Pseudonymization step for `sessions_stream` in Core
-- Anonymization job for ClickHouse analytics tables (UPDATE/DELETE not native in ClickHouse — requires TTL or partition replacement strategy)
+**Acesso — feito em 2026-09-29 (AUD-03).** `POST /v1/audit/data-requests/access` (analytics-api,
+gate `audit.data_requests`). Percurso em `data_subject.py`:
+1. telefone/e-mail/CPF → `customer_id` no resolvedor de identidade, **sem provisionar**;
+2. registro de identidade com as fusões (`merged_from`) — sem elas as sessões antigas ficam de fora;
+3. sessões no ClickHouse por `customer_id` **e** pelo telefone/e-mail informado (na voz SIP o
+   `customer_id` da sessão é o número; `ani` nunca é preenchido);
+4. por sessão/id: mensagens (mascaradas), insights, anexos e gravações (metadado, nunca bytes),
+   outbound e pesquisas. As três lojas donas ganharam leitura **só de serviço**:
+   `POST /v1/channels/webhook/identity/subject-export` · `POST /v1/data-subject/export` (mailing) ·
+   `POST /v1/evaluation/data-subject/surveys`.
+
+Cada seção traz `status` (`ok` · `not_found` · `unavailable: <motivo>`), e `not_covered` lista as
+lojas que o dossiê ainda não percorre (stream durável do Postgres, estado de pipeline, avaliações,
+Redis, Kafka). A trilha grava o `customer_id` — ou só os TIPOS de identificador —, nunca o telefone
+ou o e-mail. Tela: aba *Req. de Dados* em `/audit`, com download do JSON.
+
+**Eliminação — `AUD-06`.** Anonimizar e manter a linha de métrica (decisão do dono); executa quem
+tiver `data_requests` em `read_write`, sem segunda aprovação. Percorre as mesmas lojas.
+
+**Retenção — `AUD-07`.** Lojas com dado pessoal e sem TTL, a começar pelo `session_stream_events`,
+que guarda `original_content` desmascarado.
 
 ### Phase 5 — config_snapshot
 

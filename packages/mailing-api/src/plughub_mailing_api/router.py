@@ -52,6 +52,7 @@ from .db import (
     db_list_mailings,
     db_list_policies,
     db_set_delivery_result,
+    db_subject_export,
     db_unsubscribe,
     db_update_campaign,
     db_update_mailing,
@@ -598,6 +599,22 @@ async def contact_eligibility(
     calendar = getattr(request.app.state, "calendar", None)
     identity = getattr(request.app.state, "identity", None)
     return await db_contact_eligibility(_pool(request), tenant, req, calendar, identity)
+
+
+class SubjectExportBody(BaseModel):
+    customer_ids:   list[str] = []
+    contact_values: list[str] = []
+
+
+@router.post("/v1/data-subject/export")
+async def data_subject_export(
+    body: SubjectExportBody, request: Request,
+    x_tenant_id: str | None = Header(default=None),
+) -> dict:
+    """AUD-03 — dossiê de acesso do titular (LGPD art. 18, II). SÓ SERVIÇO: quem o
+    monta é a analytics-api, que confere o DPO e grava a trilha; nenhuma tela chama."""
+    tenant = _principal(request, SO_SERVICO, "exportar dados do titular", x_tenant_id)
+    return await db_subject_export(_pool(request), tenant, body.customer_ids, body.contact_values)
 
 
 @router.post("/v1/unsubscribe")

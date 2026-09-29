@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (15) — AUD-03: o dossiê de acesso do titular
+
+**A ficha era grande demais para um trabalho só, e o dono a dividiu:** o **acesso** fica aqui; a
+**eliminação** virou a `AUD-06` (anonimizar e manter a linha de métrica); a **retenção**, a `AUD-07`.
+Executa quem tem o campo, sem segunda aprovação.
+
+**O inventário que veio antes (medido):**
+- quase toda loja da plataforma é chaveada por SESSÃO, não por pessoa. Carregam `customer_id` só o
+  cadastro de identidade, o outbound, as pesquisas e o `sessions` do ClickHouse. O pivô tem de ser
+  pessoa → sessões → cada loja;
+- **`sessions.ani` nunca é preenchido** (0 de 2 945), e na voz SIP o `customer_id` da sessão **é o
+  número de quem ligou** (`+5511…`). A primeira versão procurava sessões só pelo cliente resolvido e
+  **perdia as chamadas** de quem pedia pelo telefone. Achado ao procurar uma pessoa com gravação;
+  corrigido: o telefone e o e-mail informados entram direto na busca;
+- nada existia para o titular além do stub da tela e do descadastro do outbound.
+
+**O que foi feito:**
+- **`POST /v1/audit/data-requests/access`** (analytics-api), com o portão das outras `/v1/audit` e o
+  campo novo **`audit.data_requests`** (`read_only`, sem `role_defaults`: ninguém nasce DPO). O
+  percurso mora em `data_subject.py`: resolve sem provisionar, segue as fusões, acha as sessões e
+  monta cadastro, sessões, mensagens (mascaradas), insights, anexos e gravações (metadado), outbound e
+  pesquisas;
+- cada seção diz o seu **`status`**, e loja fora do ar ou sem configuração sai **`unavailable`
+  nomeada**, nunca vazia. Um dossiê que omite uma loja em silêncio afirma ao titular que ela não
+  guarda nada dele. `not_covered` lista o que ainda não é olhado: o stream durável do Postgres, o
+  estado de pipeline, as avaliações, o Redis e o Kafka;
+- **três lojas donas ganharam leitura SÓ DE SERVIÇO**:
+  - channel-gateway: cadastro com as fusões e as âncoras, só o TIPO (hash salgado não é dado do
+    titular), mais os anexos das sessões;
+  - mailing-api: entradas, casadas por `customer_id` **ou** por valor de contato (a entrada importada
+    sem cadastro só é alcançável assim), com entregas e log de contato;
+  - evaluation-api: instâncias e respostas de pesquisa, por `customer_key` **ou** pela sessão;
+- **o identificador da pessoa vai no corpo, nunca na URL e nunca na trilha**: o `target_id` do
+  `audit_access_log` é o `customer_id`, ou só os tipos (`anchors:phone`);
+- **o corpo é lido à mão, depois do portão.** Declarado, o FastAPI o validava antes do handler, e o
+  anônimo com corpo inválido recebia 422 **sem deixar linha na trilha**. Quem achou foi a varredura
+  anônima da AUT-58;
+- tela: a aba *Req. de Dados* da Auditoria deixou de ser stub (formulário, status por loja, download
+  do JSON). O item de menu da Auditoria abre para **qualquer** campo do módulo: o DPO que só atende
+  pedido não tem `sessions`.
+
+**Medido ao vivo** (token de DPO assinado com o segredo do demo, sem mexer em usuário): anônimo 401
+na 3500 e na 5174; grant de outro campo de auditoria 403. Um cliente trouxe 38 sessões, 292
+mensagens e 2 pesquisas. Pelo telefone, a chamada SIP trouxe 13 mensagens e as **2 gravações**.
+Outro cliente trouxe **2 entradas de mailing e 1 log de contato**. Cada loja foi provada com uma
+pessoa que TEM dado nela, e não só pelo zero. A trilha registrou recusas e acessos sem telefone nem
+e-mail. A aba não foi aberta no navegador: nenhum usuário do demo tem `audit.*`, e conceder seria
+mudar permissão no banco.
+
+**Instrumentos:**
+- `test_data_subject_access.py` (12 casos): portão, trilha sem dado pessoal, tenant do token, corpo
+  inválido depois do portão, seção `unavailable` nomeada, fusão e telefone sem cadastro. Contraprova:
+  com o portão lendo outro campo, 5 vermelhos;
+- testes de porta só de serviço no mailing e na evaluation;
+- baseline com 4 linhas novas, e a varredura mede as quatro;
+- analytics 866 · gateway 1 447 · mailing 36 · evaluation 253 · `probe_python_suites` 16/16;
+- os cinco gates de menu verdes.
+
 ## 2026-09-29 (14) — AUT-69: o catálogo de módulos ABAC da auth-api deixa de ser público
 
 **Medido antes, pela borda (5174):** `GET /auth/modules` respondia 200 ao anônimo, com os 11
