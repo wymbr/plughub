@@ -25,7 +25,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
-from ..router import router
+from ..router import health_router, router
 from ..config import settings
 
 # Bearer JWT com os grants ABAC da config humana (G-PROBE fase 1): forms/campaigns
@@ -207,11 +207,20 @@ def _open_token_gates(monkeypatch):
     definido pelo teste e a recusa é o comportamento afirmado.
     """
     monkeypatch.setattr(settings, "admin_token", "", raising=False)
-    monkeypatch.setattr(settings, "service_token", "", raising=False)
+    # AUT-59: segredo vazio deixou de ser no-op (recusa 503), então os testes de NEGÓCIO
+    # passam a se identificar como SERVIÇO — o `_client` manda `_SVC_HEADER` por padrão.
+    # A classe que mede a recusa ABAC troca o segredo, e o header padrão vira "errado",
+    # caindo no Bearer — a proposição dela. O portão em si é medido em
+    # `test_caller_gate.py`, sem este atalho.
+    monkeypatch.setattr(settings, "service_token", _SVC_TOKEN, raising=False)
+
+
+_SVC_TOKEN = "svc-token-padrao-dos-testes"
+_SVC_HEADER = {"x-service-token": _SVC_TOKEN}
 
 
 async def _client(app: FastAPI) -> AsyncClient:
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_SVC_HEADER)
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
@@ -219,9 +228,10 @@ async def _client(app: FastAPI) -> AsyncClient:
 class TestHealth:
     @pytest.mark.asyncio
     async def test_health_ok(self):
-        app = _app_with_mocks(MagicMock(), MagicMock())
-        async with await _client(app) as c:
-            resp = await c.get("/health")
+        app = FastAPI()
+        app.include_router(health_router)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+            resp = await c.get("/health")  # sem credencial nenhuma: a isenção declarada
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
 
@@ -333,17 +343,17 @@ class TestConfigAbacGate:
     @staticmethod
     def _tok(**fields: str) -> dict:
         cfg = {f: {"access": acc, "scope": []} for f, acc in fields.items()}
-        t = pyjwt.encode({"sub": "u", "module_config": {"evaluation": cfg}},
+        t = pyjwt.encode({"sub": "u", "tenant_id": "t1", "module_config": {"evaluation": cfg}},
                          settings.jwt_secret, algorithm="HS256")
         return {"Authorization": f"Bearer {t}"}
 
     @pytest.mark.asyncio
-    async def test_list_forms_open_no_token_200(self):
-        # Fase 1: LISTA é read compartilhado → aberta (sem Bearer).
+    async def test_list_forms_no_token_401(self):
+        # Fase 1 deixava a LISTA aberta (sem Bearer); a AUT-59 fechou: sem chamador, 401.
         with patch("plughub_evaluation_api.router._db.list_forms", new=AsyncMock(return_value=[])):
             async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
                 resp = await c.get("/v1/evaluation/forms?tenant_id=t1")
-        assert resp.status_code == 200
+        assert resp.status_code == 401
 
     @pytest.mark.asyncio
     async def test_create_form_no_token_401(self):

@@ -126,8 +126,9 @@ def test_com_o_grant_o_review_continua_sendo_oferecido():
 
 # ─── _can_view_transcript ─────────────────────────────────────────────────────
 
-def test_view_anonymous_allowed():
-    assert _can_view_transcript(None, None) is True
+def test_view_anonymous_denied():
+    """AUT-59: anônimo não lê transcrição. Era True — a "postura de demo"."""
+    assert _can_view_transcript(None, None) is False
 
 
 def test_view_empty_module_config_denied():

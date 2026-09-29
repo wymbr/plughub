@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from . import db as _db
 from .sampling import should_sample, should_sample_quota, compute_priority, origin_from_source
-from .router import router, _ingest_from_completed_event
+from .router import router, health_router, _ingest_from_completed_event
 from .contestation_router import contestation_router
 from plughub_tasks import supervisionar
 
@@ -656,6 +656,7 @@ def create_app() -> FastAPI:
         if hasattr(app.state, "db_pool"):
             await app.state.db_pool.close()
 
+    app.include_router(health_router)  # AUT-59 — a única rota sem chamador, declarada
     app.include_router(router)
     app.include_router(contestation_router)  # Arc 13 — contestation, curation, calibration
     return app

@@ -83,18 +83,22 @@ async def _fetch_config_ttl(
 
 
 async def _fetch_evaluation_form(
-    eval_api_url: str, form_id: str, tenant_id: str
+    eval_api_url: str, form_id: str, tenant_id: str, service_token: str = "",
 ) -> dict | None:
     """
     GET /v1/evaluation/forms/{form_id}?tenant_id=... — fetches the EvaluationForm so the
-    Replayer can inject it into the ReplayContext (Arc 6). Public-read endpoint, no auth.
+    Replayer can inject it into the ReplayContext (Arc 6).
+    AUT-59 (2026-09-29): deixou de ser leitura pública — a evaluation-api exige chamador
+    em toda rota, e o replayer se identifica com `X-Service-Token`
+    (`EVALUATION_SERVICE_TOKEN`). Sem ele, 401 e o form some do contexto COM warning.
     Uses urllib in a thread executor to stay non-blocking. Returns None on any error.
     """
     loop = asyncio.get_event_loop()
     url = f"{eval_api_url.rstrip('/')}/v1/evaluation/forms/{form_id}?tenant_id={tenant_id}"
 
     def _get():
-        with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
+        req = urllib.request.Request(url, headers={"X-Service-Token": service_token} if service_token else {})
+        with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
             return json.loads(resp.read())
 
     try:
@@ -121,6 +125,7 @@ class SessionReplayerConsumer:
         self._postgres_dsn       = os.getenv("DATABASE_URL",     "postgresql://plughub:plughub@localhost:5432/plughub")
         self._config_api_url     = os.getenv("CONFIG_API_URL",   "http://localhost:3600")
         self._eval_api_url       = os.getenv("EVALUATION_API_URL", "http://localhost:3400")
+        self._eval_service_token = os.getenv("EVALUATION_SERVICE_TOKEN", "")  # AUT-59
         # F5 — o ContextStorePersister pede o ctx MASCARADO ao mcp-server (o masking
         # mora lá e só lá). Sem token o persister RECUSA e loga; nunca degrada para
         # gravar cru, que seria criar um cofre de PII por omissão de env.
@@ -361,7 +366,7 @@ class SessionReplayerConsumer:
         evaluation_form = None
         if req.form_id:
             evaluation_form = await _fetch_evaluation_form(
-                self._eval_api_url, req.form_id, req.tenant_id,
+                self._eval_api_url, req.form_id, req.tenant_id, self._eval_service_token,
             )
 
         try:

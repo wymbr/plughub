@@ -686,7 +686,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
   const analyticsApiUrl  = deps.analyticsApiUrl  ?? process.env["ANALYTICS_API_URL"]    ?? "http://localhost:3500"
   const agentRegistryUrl = deps.agentRegistryUrl ?? process.env["AGENT_REGISTRY_URL"]   ?? "http://localhost:3300"
   // G-PROBE fase 2 — credencial de serviço para os endpoints de sistema/agente da
-  // evaluation-api (ex.: pre-review). Lida do env; header omitido quando vazia (demo).
+  // evaluation-api. Lida do env; header omitido quando vazia — e desde a AUT-59 isso é 401
+  // em TODA rota da evaluation-api, não "demo aberto".
   const evalServiceToken = deps.serviceToken ?? process.env["PLUGHUB_EVALUATION_SERVICE_TOKEN"] ?? ""
 
   // ── LÁPIDE — `readAgentIdentity` (CAP-01/CAP-02, 2026-09-01) ──────────────
@@ -1025,7 +1026,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           try {
             const notesRes = await fetch(
               `${evaluationApiUrl}/v1/evaluation/calibration-notes?campaign_id=${encodeURIComponent(campaignId)}&published_to_kb=true&limit=20`,
-              { headers: { "X-Tenant-ID": tenant_id } }
+              // AUT-59 — a evaluation-api exige chamador em toda rota; esta é leitura de serviço.
+              { headers: { "X-Tenant-ID": tenant_id, ...(evalServiceToken ? { "X-Service-Token": evalServiceToken } : {}) } }
             )
             if (notesRes.ok) {
               const notesData = await notesRes.json() as { notes?: unknown[] }
@@ -1046,6 +1048,7 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
             const q = campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ""
             const rubRes = await fetch(
               `${evaluationApiUrl}/v1/evaluation/rubric-templates/effective?tenant_id=${encodeURIComponent(tenant_id)}${q}`,
+              { headers: { ...(evalServiceToken ? { "X-Service-Token": evalServiceToken } : {}) } },  // AUT-59
             )
             if (rubRes.ok) {
               const r = await rubRes.json() as { body?: string; source?: string }
@@ -1375,7 +1378,7 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
 
         const resp = await fetch(
           `${apiBase}/v1/evaluation/instances/${encodeURIComponent(parsed.instance_id)}/threads`,
-          { headers: { "X-Tenant-ID": tenant_id } }
+          { headers: { "X-Tenant-ID": tenant_id, ...(evalServiceToken ? { "X-Service-Token": evalServiceToken } : {}) } },  // AUT-59
         )
 
         if (!resp.ok) {
@@ -1620,7 +1623,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
 
         const resp = await fetch(`${apiBase}/v1/evaluation/results/${result_id}/lock`, {
           method:  "POST",
-          headers: { "content-type": "application/json" },
+          // AUT-59 — o lock é de SERVIÇO: a rota não filtra por tenant, então não é porta de usuário.
+          headers: { "content-type": "application/json", ...(evalServiceToken ? { "X-Service-Token": evalServiceToken } : {}) },
           body:    JSON.stringify({ locked_by: "workflow", lock_reason }),
         })
 

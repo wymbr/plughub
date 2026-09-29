@@ -61,15 +61,18 @@ def svc_token(monkeypatch):
 
 @pytest.fixture
 def no_svc_token(monkeypatch):
-    """service_token vazio → no-op (postura demo)."""
+    """service_token vazio — desde a AUT-59 RECUSA (503), não é mais no-op."""
     monkeypatch.setattr(settings, "service_token", "")
 
 
 # ─── _require_service (STRICT) ────────────────────────────────────────────────
 
-def test_service_noop_when_unset(no_svc_token):
-    # vazio = aberto (demo), espelha _require_admin.
-    _require_service(_Req())  # não levanta
+def test_service_refuses_when_unset(no_svc_token):
+    """AUT-59: segredo ausente não abre a porta — 503 nomeado, o defeito é do deploy."""
+    with pytest.raises(HTTPException) as exc:
+        _require_service(_Req(**{"X-Service-Token": "qualquer"}))
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "service_token_not_configured"
 
 
 def test_service_ok_with_correct_token(svc_token):
@@ -102,8 +105,12 @@ def test_service_case_insensitive_header(svc_token):
 
 # ─── _require_service_or_eval_write (dual UI/ops) ─────────────────────────────
 
-def test_dual_noop_when_unset(no_svc_token):
-    _require_service_or_eval_write(_Req())  # demo aberto
+def test_dual_without_service_secret_still_requires_bearer(no_svc_token):
+    """AUT-59: sem segredo de serviço some só o ramo de serviço — o Bearer+ABAC fica."""
+    with pytest.raises(HTTPException) as exc:
+        _require_service_or_eval_write(_Req())
+    assert exc.value.status_code == 401
+    _require_service_or_eval_write(_Req(**_auth(_bearer(formularios="read_write"))))
 
 
 def test_dual_ok_with_service_token(svc_token):
@@ -147,8 +154,9 @@ def test_dual_wrong_service_falls_to_bearer(svc_token):
 
 # ─── _has_any_evaluation_access ───────────────────────────────────────────────
 
-def test_anyof_none_payload_allowed():
-    assert _has_any_evaluation_access(None) is True
+def test_anyof_none_payload_denied():
+    """AUT-59: "não há usuário" não é grant. Era True — a postura de demo."""
+    assert _has_any_evaluation_access(None) is False
 
 
 def test_anyof_admin_role_denied_without_grant():
@@ -194,10 +202,16 @@ def test_anyof_all_none_denied():
     assert _has_any_evaluation_access(jwt) is False
 
 
-# ─── _require_any_evaluation (Bearer opcional) ────────────────────────────────
+# ─── _require_any_evaluation (serviço OU Bearer — AUT-59) ─────────────────────
 
-def test_require_anyof_anonymous_allowed():
-    _require_any_evaluation(_Req())  # sem Bearer → demo aberto
+def test_require_anyof_anonymous_denied():
+    with pytest.raises(HTTPException) as exc:
+        _require_any_evaluation(_Req())
+    assert exc.value.status_code == 401
+
+
+def test_require_anyof_service_allowed(svc_token):
+    _require_any_evaluation(_Req(**{"X-Service-Token": svc_token}))
 
 
 def test_require_anyof_with_grant_allowed():
@@ -215,6 +229,8 @@ def test_require_anyof_no_eval_grant_denied():
     assert exc.value.status_code == 403
 
 
-def test_require_anyof_invalid_bearer_degrades_allowed():
-    # token inválido → _decode_jwt_optional retorna None → degrada p/ permitir (demo).
-    _require_any_evaluation(_Req(**{"Authorization": "Bearer not-a-jwt"}))
+def test_require_anyof_invalid_bearer_denied():
+    # AUT-59: token inválido era indistinguível do ausente, e os dois passavam.
+    with pytest.raises(HTTPException) as exc:
+        _require_any_evaluation(_Req(**{"Authorization": "Bearer not-a-jwt"}))
+    assert exc.value.status_code == 401

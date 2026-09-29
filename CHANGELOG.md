@@ -1,5 +1,74 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (8) — AUT-59: a evaluation-api exige chamador em toda rota, e o tenant do usuário é o do token
+
+**Medido antes, pela borda pública (5174), sem credencial nenhuma:** `GET /v1/evaluation/results`,
+`/instances`, `/survey/responses` e a transcrição de um resultado respondiam 200. A varredura da
+AUT-58 contou 35 rotas abertas. Metade não chamava guard nenhum. A outra metade chamava
+`_require_any_evaluation`, que deixava o anônimo passar **por decisão** (*"Bearer opcional — degrada
+p/ permitir quando ausente/legado"*). O docstring chamava isso de "postura de demo".
+
+**O conserto não é um guard por rota** — foi exatamente isso que falhou: bastava a rota nova
+esquecê-lo. A exigência mínima virou `require_caller`, **dependência do ROUTER** (`router` e
+`contestation_router`):
+- **serviço** (`X-Service-Token` certo) passa e escolhe o tenant;
+- **senão, Bearer obrigatório** (401), com algum campo de `evaluation` (403);
+- **o tenant do usuário é o do TOKEN.** `tenant_id` da query, `X-Tenant-ID` e `tenant_id` do corpo
+  que divergirem dele dão 403 `tenant_mismatch` — a mesma regra da TNT-01. O
+  `_get_tenant` da contestação lia o header **antes** do token.
+
+Os guards finos (campo, escopo, rodada) continuam por rota, em cima disso. `/health` mora num
+`health_router` próprio: a isenção é uma declaração, não a falta de uma dependência.
+
+**Os três no-ops de segredo vazio caíram:**
+- `_require_service` e `_require_admin` com token vazio viraram 503 `service_token_not_configured`
+  (e `admin_token_not_configured`);
+- o dual `_require_service_or_eval_write` perdeu o `return` e exige o Bearer.
+
+Header de serviço **presente** com segredo **ausente** também é 503, e não 401: quem manda o header
+espera ser reconhecido, e o defeito é do deploy.
+
+**O lock virou só-serviço.** O comentário dizia *"internal, firewall-protected in production"*; a
+varredura mediu a rota respondendo pela borda. Pior: `_db.lock_result` casa só por `id`, sem tenant,
+então qualquer usuário congelaria o resultado de qualquer tenant. Nenhuma tela chama o lock; o
+chamador é a tool `evaluation_lock`.
+
+**Chamadores migrados no mesmo trabalho:**
+- **analytics-api** (`coverage_client`): nova setting `evaluation_service_token` + env no compose;
+- **session-replayer** (`_fetch_evaluation_form`): env `EVALUATION_SERVICE_TOKEN`. O docstring dizia
+  *"Public-read endpoint, no auth"*;
+- **mcp-server** (`evaluation.ts`): calibration-notes, rubrica efetiva, threads e lock;
+- **platform-ui**: os 20 `fetch` crus de `evaluation-hooks.ts` viraram `apiFetch`. Antes só mandavam o
+  Bearer quando o chamador o repassava.
+
+Provado ao vivo:
+- o replayer lê o form com token e toma 401 sem ele (com WARNING);
+- a cobertura e a rubrica efetiva respondem 200;
+- as telas Avaliações, Formulários, Rubrica, Curadoria e Relatórios fazem 12 chamadas, todas 200;
+- pela 5174, o anônimo toma 401.
+
+**Instrumentos.** `probe_route_anon_sweep.sh` reprovou com 59 divergências (*"DÍVIDA FECHOU"* /
+*"MELHORIA NÃO DECLARADA"*) até as linhas virarem `fechada`; hoje a dívida AUT-59 está zerada. A
+suíte ganhou `test_caller_gate.py`, que monta o app REAL e tem um ramo por código, inclusive o
+positivo (sem ele, um portão que recusasse tudo passaria).
+
+⚠️ **O primeiro censo estrutural era vazio.** Ele procurava `APIRoute` em `app.routes`, mas esta
+versão do FastAPI guarda os routers incluídos como `_IncludedRouter`. O censo varria **zero** rotas e
+passava por ausência de amostra. Medido com a dependência removida do `contestation_router`: os
+testes HTTP ficavam vermelhos e o censo verde. Foi trocado por um censo HTTP sobre o OpenAPI, com
+**piso** de 50 rotas, e a mesma mutação agora o reprova.
+
+Suítes: evaluation-api 252 · `probe_python_suites.sh` 15/15 · `probe_evaluator_pool_validation.sh`
+(o único gate AUTO que fala com a evaluation-api) verde.
+
+**O que NÃO foi feito, e é dito:**
+- **`evaluation_review_submit`** (mcp-server) recebe 401 **desde a 5a**: a rota exige revisor humano
+  por JWT. Não ganhou credencial de serviço, porque isso abriria a porta em vez de consertar a
+  chamada. Fica na **REV-02**.
+- Cerca de 30 smokes e testes históricos de `infra/test/` (`?`/`=` no `gates.manifest`, fora do
+  runner) e os cenários e2e 24/25/28 leem a evaluation-api **sem credencial**. Hoje tomam 401. Não
+  foram migrados um a um: nenhum roda no runner, e a dívida de triagem já está nomeada no manifesto.
+
 ## 2026-09-29 (7) — AUT-58: o eixo de credencial por rota cobre os 16 serviços Python, e achou portas abertas pela borda
 
 **A ficha pedia estender o censo por rota** (`_route_principal_census.py`), que cobria só a

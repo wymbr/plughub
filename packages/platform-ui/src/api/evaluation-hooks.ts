@@ -50,7 +50,7 @@ export function useForms(tenantId: string, accessToken?: string) {
     try {
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/forms?tenant_id=${tenantId}`, { headers })
+      const r = await apiFetch(`${BASE}/forms?tenant_id=${tenantId}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       const raw: EvaluationForm[] = Array.isArray(d) ? d : (d?.forms ?? d?.data ?? d?.items ?? [])
@@ -146,7 +146,7 @@ export function useRubricTemplates(tenantId: string, campaignId?: string, access
       const q = campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ''
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/rubric-templates?tenant_id=${tenantId}${q}`, { headers })
+      const r = await apiFetch(`${BASE}/rubric-templates?tenant_id=${tenantId}${q}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setTemplates(d?.rubric_templates ?? [])
@@ -252,7 +252,7 @@ export interface BlindRescoreReveal {
 export async function getBlindContext(reviewId: string, tenantId: string, accessToken?: string): Promise<BlindContext> {
   const headers: Record<string, string> = { 'X-Tenant-ID': tenantId }
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-  const r = await fetch(`${BASE}/curations/${reviewId}/blind-context`, { headers })
+  const r = await apiFetch(`${BASE}/curations/${reviewId}/blind-context`, { headers })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
 }
@@ -268,7 +268,7 @@ export async function blindRescore(
 ): Promise<BlindRescoreReveal> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId }
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-  const r = await fetch(`${BASE}/curations/${reviewId}/blind-rescore`, {
+  const r = await apiFetch(`${BASE}/curations/${reviewId}/blind-rescore`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ criterion_responses: criterionResponses }),
@@ -288,7 +288,7 @@ export async function blindResolve(
 ): Promise<{ review: CurationReview; status: string; disagreements: number; calibration_notes: unknown[] }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId }
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-  const r = await fetch(`${BASE}/curations/${reviewId}/blind-resolve`, {
+  const r = await apiFetch(`${BASE}/curations/${reviewId}/blind-resolve`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -428,7 +428,7 @@ export function useCampaigns(tenantId: string, pollMs = 0, accessToken?: string)
     try {
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/campaigns?tenant_id=${tenantId}`, { headers })
+      const r = await apiFetch(`${BASE}/campaigns?tenant_id=${tenantId}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setCampaigns(Array.isArray(d) ? d : (d?.campaigns ?? d?.data ?? d?.items ?? []))
@@ -552,7 +552,7 @@ export function useInstances(campaignId: string, status?: string, pollMs = 0, ac
       const qs = [`campaign_id=${campaignId}`, status ? `status=${status}` : ''].filter(Boolean).join('&')
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/instances?${qs}`, { headers })
+      const r = await apiFetch(`${BASE}/instances?${qs}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setInstances(Array.isArray(d) ? d : (d?.instances ?? d?.data ?? d?.items ?? []))
@@ -617,7 +617,7 @@ export function useResults(
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
 
-      const r = await fetch(`${BASE}/results?${params}`, { headers })
+      const r = await apiFetch(`${BASE}/results?${params}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setResults(Array.isArray(d) ? d : (d?.results ?? d?.data ?? d?.items ?? []))
@@ -647,7 +647,7 @@ export async function reviewResult(
   body: { decision: 'approved' | 'rejected'; round: number; review_note?: string },
   jwtToken: string,
 ) {
-  const r = await fetch(`${BASE}/results/${resultId}/review`, {
+  const r = await apiFetch(`${BASE}/results/${resultId}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}` },
     body: JSON.stringify(body),
@@ -664,7 +664,7 @@ export async function fetchResultWithActions(
 ): Promise<EvaluationResultWithActions> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-  const r = await fetch(`${BASE}/results/${resultId}`, { headers })
+  const r = await apiFetch(`${BASE}/results/${resultId}`, { headers })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
 }
@@ -685,7 +685,7 @@ export function useResult(
     try {
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/results/${resultId}?tenant_id=${encodeURIComponent(tenantId)}`, { headers })
+      const r = await apiFetch(`${BASE}/results/${resultId}?tenant_id=${encodeURIComponent(tenantId)}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       setResult(await r.json()); setError(null)
     } catch (e) { setError(String(e)) } finally { setLoading(false) }
@@ -739,7 +739,7 @@ export function useResultTranscript(
     try {
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(
+      const r = await apiFetch(
         `${BASE}/results/${resultId}/transcript?tenant_id=${encodeURIComponent(tenantId)}&scope=${scope}`,
         { headers },
       )
@@ -765,7 +765,7 @@ export function useContestations(tenantId: string, resultId?: string, accessToke
       if (resultId) params.set('result_id', resultId)
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/contestations?${params}`, { headers })
+      const r = await apiFetch(`${BASE}/contestations?${params}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setContestations(Array.isArray(d) ? d : (d?.contestations ?? d?.data ?? d?.items ?? []))
@@ -792,7 +792,7 @@ export async function createContestation(
 ) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (jwtToken) headers['Authorization'] = `Bearer ${jwtToken}`
-  const r = await fetch(`${BASE}/contestations`, {
+  const r = await apiFetch(`${BASE}/contestations`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -914,7 +914,7 @@ export async function fetchContestationThreads(
 ): Promise<InstanceThreads> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-  const r = await fetch(`${BASE}/instances/${instanceId}/threads`, { headers })
+  const r = await apiFetch(`${BASE}/instances/${instanceId}/threads`, { headers })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   const d = await r.json()
   // Guard de shape: cada thread DEVE ter `entries[]` + estado/score (a UI faz .length/.map).
@@ -982,7 +982,7 @@ export async function submitHumanReview(
   body: { dimension_decisions: HumanDimensionDecision[]; reviewer_id?: string },
   jwtToken: string,
 ): Promise<HumanReviewResponse> {
-  const r = await fetch(`${BASE}/instances/${instanceId}/review`, {
+  const r = await apiFetch(`${BASE}/instances/${instanceId}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}` },
     body: JSON.stringify(body),
@@ -1000,7 +1000,7 @@ export async function submitDimensionContestation(
   body: DimensionContestationPayload,
   jwtToken: string,
 ): Promise<DimensionContestationResponse> {
-  const r = await fetch(`${BASE}/instances/${instanceId}/contest`, {
+  const r = await apiFetch(`${BASE}/instances/${instanceId}/contest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwtToken}` },
     body: JSON.stringify(body),
@@ -1023,7 +1023,7 @@ export function useCurationSamplingRules(campaignId: string | null, accessToken?
     try {
       const headers: Record<string, string> = {}
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/campaigns/${campaignId}/sampling-rules`, { headers })
+      const r = await apiFetch(`${BASE}/campaigns/${campaignId}/sampling-rules`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setRules(Array.isArray(d) ? d : (d?.rules ?? d?.data ?? []))
@@ -1389,7 +1389,7 @@ export function useCurationQueue(
       if (opts.limit)       q.set('limit',       String(opts.limit))
       const headers: Record<string, string> = { 'X-Tenant-ID': tenantId }
       if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-      const r = await fetch(`${BASE}/curations?${q}`, { headers })
+      const r = await apiFetch(`${BASE}/curations?${q}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setReviews(d.reviews ?? [])
@@ -1427,7 +1427,7 @@ export async function resolveCuration(
     'X-User-ID':    userId,
   }
   if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
-  const r = await fetch(`${BASE}/curations/${reviewId}/resolve`, {
+  const r = await apiFetch(`${BASE}/curations/${reviewId}/resolve`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),

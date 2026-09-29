@@ -90,14 +90,12 @@ from plughub_tasks import disparar
 
 logger = logging.getLogger("plughub.evaluation.router")
 
-router = APIRouter()
-
-
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 def _require_admin(request: Request) -> None:
+    # AUT-59: segredo ausente RECUSA (503 nomeado); antes era no-op — "demo aberto".
     if not settings.admin_token:
-        return
+        raise HTTPException(status_code=503, detail="admin_token_not_configured")
     token = request.headers.get("x-admin-token", "")
     if token != settings.admin_token:
         raise HTTPException(status_code=401, detail="unauthorized")
@@ -210,9 +208,13 @@ def _require_service(request: Request) -> None:
     sistema/agente/worker (ingest, claim, pre-review/ai-review, publish-calibration,
     expire/skip/mark-error, dispatch/scan). Sem fallback p/ admin (decisão: token de
     serviço only). `service_token` vazio = no-op (postura demo aberta, espelha
-    `_require_admin`). 401 em token ausente/errado quando configurado."""
+    `_require_admin`). 401 em token ausente/errado quando configurado.
+
+    ⚠️ AUT-59 (2026-09-29): `service_token` vazio deixou de ser no-op e passou a 503
+    `service_token_not_configured`. O "demo aberto" era a porta: todo deploy que
+    esquecesse a env abria ingest/claim/pre-review a qualquer um, sem nada vermelho."""
     if not settings.service_token:
-        return
+        raise HTTPException(status_code=503, detail="service_token_not_configured")
     token = request.headers.get("x-service-token", "")
     if token != settings.service_token:
         raise HTTPException(status_code=401, detail="service credential required")
@@ -225,10 +227,10 @@ def _require_service_or_eval_write(
     pela UI: aceita X-Service-Token de serviço OU Bearer JWT com grant ABAC
     `evaluation.{field}` em read_write (a UI opera com o JWT do operador, sem segredo
     no frontend — decisão Q2). `service_token` vazio = no-op (demo). Quando o serviço
-    está configurado e o header de serviço não casa, exige o Bearer+ABAC."""
-    if not settings.service_token:
-        return
-    if request.headers.get("x-service-token", "") == settings.service_token:
+    está configurado e o header de serviço não casa, exige o Bearer+ABAC.
+    AUT-59: `service_token` vazio não é mais no-op — só o ramo de serviço some, e o
+    Bearer+ABAC continua exigido."""
+    if _is_service(request):
         return
     # Sem credencial de serviço → exige Bearer + ABAC de escrita (caminho da UI).
     jwt_payload = _decode_jwt(request)
@@ -254,13 +256,13 @@ def _has_any_evaluation_access(jwt_payload: dict[str, Any] | None) -> bool:
       · `module_config` VAZIO — o bypass silencioso: bastava um principal sem grants
         para ler tudo. Ausência de grants não é autorização.
 
-    O que FICA, com nome próprio: **sem token → permitido**. Essa é a postura de demo
-    desta API (`analytics_open_access` é a análoga na analytics-api), tem eixo próprio e
-    remover sem decisão quebraria todo chamador interno que não manda Bearer. Estava
-    misturada com as outras duas no mesmo `if`, e é por isso que as três pareciam a
-    mesma coisa."""
+    ⚠️ A TERCEIRA caiu em 2026-09-29 (AUT-59): **sem token → permitido**, a "postura de
+    demo". Medido pela borda pública (5174), sem credencial nenhuma: resultados,
+    transcrições e respostas de pesquisa respondiam 200. Chamador interno agora se
+    identifica com `X-Service-Token` (`_is_service`), e quem não é serviço nem usuário
+    não lê nada. `None` aqui é "não há usuário", e ausência de usuário não é grant."""
     if not jwt_payload:
-        return True
+        return False
     module_config = jwt_payload.get("module_config", {})
     if not module_config:
         # Config vazio = NADA concedido. Antes liberava.
@@ -276,11 +278,100 @@ def _has_any_evaluation_access(jwt_payload: dict[str, Any] | None) -> bool:
 
 def _require_any_evaluation(request: Request) -> None:
     """G-PROBE fase 2 — fecha as LEITURAS de lista com "qualquer acesso evaluation".
-    Bearer opcional (degrada p/ permitir quando ausente/legado); nega só um JWT com
-    `module_config` que não concede nenhum campo de `evaluation`."""
-    jwt_payload = _decode_jwt_optional(request)
+    AUT-59: serviço (`X-Service-Token`) passa; fora isso o Bearer é OBRIGATÓRIO (401) e
+    precisa conceder algum campo de `evaluation` (403). Era "Bearer opcional"."""
+    if _is_service(request):
+        return
+    jwt_payload = _decode_jwt(request)
     if not _has_any_evaluation_access(jwt_payload):
         raise HTTPException(status_code=403, detail="forbidden: requires any evaluation module access")
+
+
+# ─── AUT-59 — o portão de CHAMADOR, na porta de toda rota ─────────────────────
+
+def _path(request: Request) -> str:
+    url = getattr(request, "url", None)
+    return url.path if url is not None else "?"
+
+
+def _is_service(request: Request) -> bool:
+    """O chamador apresentou a credencial de SERVIÇO certa?
+
+    Ausente → False (segue para o Bearer). Errada → False, com WARNING: o dual
+    `_require_service_or_eval_write` sempre tratou token errado como "caia no Bearer", e
+    mudar isso aqui mudaria o contrato dele. Presente com o segredo NÃO configurado →
+    503: quem manda o header é um serviço que espera ser reconhecido, e dizer "não
+    autenticado" esconderia que o defeito é do deploy, não do chamador."""
+    token = request.headers.get("x-service-token", "")
+    if not token:
+        return False
+    if not settings.service_token:
+        logger.error("AUT-59: X-Service-Token recebido, mas PLUGHUB_EVALUATION_SERVICE_TOKEN "
+                     "não está configurado — chamador interno recusado (%s)", _path(request))
+        raise HTTPException(status_code=503, detail="service_token_not_configured")
+    if token != settings.service_token:
+        logger.warning("AUT-59: X-Service-Token incorreto em %s", _path(request))
+        return False
+    return True
+
+
+async def _body_tenant(request: Request) -> str | None:
+    """`tenant_id` no corpo JSON, quando há. O corpo já foi lido pelo FastAPI (fica em
+    cache no Request), então ler de novo não consome o stream."""
+    if "json" not in (request.headers.get("content-type") or ""):
+        return None
+    try:
+        data = json.loads(await request.body() or b"null")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if isinstance(data, dict) and data.get("tenant_id"):
+        return str(data["tenant_id"])
+    return None
+
+
+async def require_caller(request: Request) -> None:
+    """Dependência de TODO o router da evaluation-api (AUT-59, 2026-09-29).
+
+    Medido antes: a varredura anônima (`probe_route_anon_sweep.sh`) achou 35 rotas que
+    respondiam sem credencial — resultados, transcrição, respostas de pesquisa, forms,
+    campanhas —, pela borda pública. Metade não chamava guard nenhum; a outra metade
+    chamava `_require_any_evaluation`, cujo "Bearer opcional" deixava o anônimo passar
+    por DECISÃO. Um portão por rota é o que falhou: bastava a rota nova esquecê-lo.
+    Por isso a exigência mínima vive no ROUTER, e os guards finos (campo, escopo,
+    rodada) continuam por rota, em cima dela.
+
+    Regra:
+      · serviço (`X-Service-Token`) passa e escolhe o tenant — é para isso que existe;
+      · senão, Bearer de usuário OBRIGATÓRIO (401), com algum campo de `evaluation` (403);
+      · o tenant do usuário é o do TOKEN: `tenant_id` da query, `X-Tenant-ID` e
+        `tenant_id` do corpo que divergirem dele recusam com 403 `tenant_mismatch` —
+        mesma decisão da TNT-01 na analytics-api.
+    """
+    if _is_service(request):
+        return
+    payload = _decode_jwt(request)
+    if not _has_any_evaluation_access(payload):
+        raise HTTPException(status_code=403, detail="forbidden: requires any evaluation module access")
+    token_tenant = payload.get("tenant_id")
+    if not token_tenant:
+        logger.warning("AUT-59 RECUSA: token de usuário sem tenant_id (sub=%s)", payload.get("sub"))
+        raise HTTPException(status_code=403, detail="user_token_without_tenant")
+    pedidos = {
+        "query":  request.query_params.get("tenant_id"),
+        "header": request.headers.get("x-tenant-id"),
+        "body":   await _body_tenant(request),
+    }
+    for origem, pedido in pedidos.items():
+        if pedido and pedido != token_tenant:
+            logger.warning("AUT-59 RECUSA: sub=%s pediu tenant=%s (%s) com credencial de %s (%s)",
+                           payload.get("sub"), pedido, origem, token_tenant, _path(request))
+            raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+
+# `/health` é o ÚNICO endpoint sem chamador, e mora num router próprio para que a
+# isenção seja uma DECLARAÇÃO e não a ausência de uma dependência.
+health_router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_caller)])
 
 
 # ─── DB / infra accessors ─────────────────────────────────────────────────────
@@ -412,8 +503,8 @@ def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None
 
     ⚠️ `module_config` VAZIO passou a NEGAR em 2026-08-27 (passo 8). Antes liberava, e o
     efeito era ler TRANSCRIÇÃO com zero grants — o bypass silencioso alcançando conteúdo,
-    não só listas. Token anônimo continua permitido: é a postura de demo desta API, tem
-    eixo próprio e está declarada em `_has_any_evaluation_access`.
+    não só listas. Token anônimo também NEGA desde a AUT-59 (2026-09-29) — e nem chega
+    aqui: `require_caller` o barra na porta do router.
 
     Mesma semântica any-of de `_has_any_evaluation_access` (G-PROBE fase 2) — e a mesma
     IMPLEMENTAÇÃO, por delegação: duas cópias divergiriam no primeiro ajuste."""
@@ -488,7 +579,7 @@ def _compute_result_scope(
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 
-@router.get("/health")
+@health_router.get("/health")
 async def health(request: Request) -> dict:
     return {"status": "ok", "service": "evaluation-api"}
 
@@ -2452,14 +2543,18 @@ async def review_result(result_id: str, tenant_id: str, body: ReviewBody, reques
 @router.post("/v1/evaluation/results/{result_id}/lock")
 async def lock_result_endpoint(result_id: str, body: LockBody, request: Request) -> dict:
     """
-    Permanently lock a result. Called by:
-    - Admin operators (X-Admin-Token) for manual locks
-    - evaluation_lock MCP tool (called from congelar_resultado workflow step, no admin token)
+    Permanently lock a result. Called by the evaluation_lock MCP tool (congelar_resultado
+    workflow step), with X-Service-Token. (Dizia também "Admin operators (X-Admin-Token)":
+    nenhum código conferia esse token aqui.)
     Returns 409 if result is already locked (idempotent for workflow retries).
     """
+    # AUT-59 — SÓ serviço. O comentário daqui dizia "no hard auth requirement — the
+    # endpoint is internal, firewall-protected in production", e a varredura mediu o
+    # contrário: a rota respondia pela borda pública. E `_db.lock_result` casa só por
+    # `id`, sem tenant — um usuário de qualquer tenant congelaria resultado alheio.
+    # Nenhuma tela chama o lock; o chamador é a tool `evaluation_lock` (mcp-server).
+    _require_service(request)
     pool = _pool(request)
-    # Allow workflow calls without admin token; admin token gates manual/admin locks
-    # (no hard auth requirement — the endpoint is internal, firewall-protected in production)
     row = await _db.lock_result(
         pool, result_id,
         lock_reason=body.lock_reason,

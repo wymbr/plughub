@@ -42,8 +42,12 @@ async def fetch_deploy_coverage(
     coverage: list[dict] = []
     try:
         url = f"{base_url.rstrip('/')}/v1/evaluation/reports/deploy-coverage"
+        # AUT-59: a evaluation-api recusa chamador anônimo; esta leitura é de SERVIÇO.
+        from .config import get_settings
+        token = get_settings().evaluation_service_token
+        headers = {"X-Service-Token": token} if token else {}
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(url, params={
+            resp = await client.get(url, headers=headers, params={
                 "tenant_id": tenant_id,
                 "pool_id":   pool_id,
                 "from_dt":   since,

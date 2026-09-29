@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     admin_token: str = ""
     # G-PROBE fase 2 — credencial de serviço (backend↔backend / agente / worker / e2e)
     # para os endpoints de sistema (ingest/claim/dispatch/seed/...). Strict X-Service-Token;
-    # vazio = no-op (postura demo aberta, espelha admin_token). env
+    # vazio = RECUSA (503 `service_token_not_configured`) desde a AUT-59; era no-op. env
     # PLUGHUB_EVALUATION_SERVICE_TOKEN. NÃO é segredo de frontend — a UI usa Bearer+ABAC.
     service_token: str = ""
 

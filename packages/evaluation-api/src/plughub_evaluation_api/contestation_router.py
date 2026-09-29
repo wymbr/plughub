@@ -44,7 +44,10 @@ from . import sampling as _sampling
 
 logger = logging.getLogger("plughub.evaluation.contestation")
 
-contestation_router = APIRouter()
+# AUT-59 — a mesma exigência mínima de chamador do router principal (ver `require_caller`).
+from .router import require_caller  # noqa: E402  (router não importa este módulo: sem ciclo)
+
+contestation_router = APIRouter(dependencies=[Depends(require_caller)])
 
 
 def _kb_headers() -> dict[str, str]:

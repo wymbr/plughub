@@ -904,6 +904,7 @@ services:
       # S2.2 Slice B: Replayer busca o EvaluationForm da campanha (GET /v1/evaluation/forms/{id})
       # para injetar no ReplayContext. Dentro da rede docker o host é o nome do serviço.
       EVALUATION_API_URL: http://evaluation-api:3400
+      EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo   # AUT-59 — GET do form exige chamador
       PLUGHUB_TENANT_ID: tenant_demo
       # EVALUATOR_POOL / REPLAY_SPEED_FACTOR removidos (config-consolidation item 7b):
       # vêm do config-api namespace `evaluation` (evaluator_pool=avaliacao_ia,
@@ -1071,6 +1072,7 @@ services:
       PLUGHUB_AGENT_REGISTRY_URL:  http://agent-registry:3300   # Arc 6 Fase 2 — lente deploy lê skill_deployments (markers); indisponível → série sem markers
       PLUGHUB_CONFIG_API_URL:      http://config-api:3600   # R8b — limiar de divergência + N mínimo (namespace evaluation)
       PLUGHUB_EVALUATION_API_URL:  http://evaluation-api:3400   # micro-fatia 1b — epoch overlay (provisória + pendentes por versão); indisponível → epoch só finalizada
+      PLUGHUB_EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo   # AUT-59 — a cobertura é leitura de serviço
     depends_on:
       redis:
         condition: service_healthy

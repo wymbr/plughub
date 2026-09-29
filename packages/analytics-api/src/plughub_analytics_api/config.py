@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # por (pool, deploy_version), lida em query-time pela lente `deploy&mode=epoch`.
     # Indisponível → epoch sem overlay provisório/pendentes (degrada, nunca 500).
     evaluation_api_url: str = ""
+    # AUT-59 — a evaluation-api passou a exigir chamador em TODA rota; a leitura de
+    # cobertura se identifica como serviço. env `PLUGHUB_EVALUATION_SERVICE_TOKEN`.
+    # Vazio → a chamada sai sem header, recebe 401 e o overlay degrada COM log.
+    evaluation_service_token: str = ""
 
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without
@@ -80,8 +84,8 @@ class Settings(BaseSettings):
     # credencial de 2026-08-29 os deixa 401 — e três dos quatro degradavam para
     # um ZERO plausível, em silêncio.
     #
-    # ⚠️ Vazio NÃO libera. É o oposto da postura de `_require_service` da
-    # evaluation-api (lá vazio = no-op, herança de demo aberto): aqui o header só
+    # ⚠️ Vazio NÃO libera — e desde a AUT-59 é também a postura de `_require_service`
+    # da evaluation-api (lá era no-op, herança de demo aberto): aqui o header só
     # ACRESCENTA uma porta, nunca remove a exigência. Apresentar credencial de
     # serviço a um serviço que não tem uma é erro do DEPLOY, e sai 401 nomeado.
     # env: `PLUGHUB_ANALYTICS_SERVICE_TOKEN` (o prefixo do serviço é `PLUGHUB_`).
