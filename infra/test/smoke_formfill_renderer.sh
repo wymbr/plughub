@@ -27,6 +27,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_auth.sh"; plughub_auth_cu
 
 COMPOSE="docker compose -f docker-compose.demo.yml"
 TENANT="tenant_demo"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 CG="http://localhost:8010"
 DIALOG="http://localhost:3760"
 UI="http://localhost:5174"
@@ -36,7 +38,7 @@ FORM="dialog_formfill_demo"
 BRIEFING_SID="${BRIEFING_SID:-sess_briefing_demo}"
 
 echo "0) DialogForm '$FORM' publicado?"
-if curl -fsS "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" >/dev/null 2>&1; then
+if curl -fsS "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" >/dev/null 2>&1; then
   echo "  ✓ publicado"
 else
   echo "  → seedando via infra/test/seed_dialog_formfill_demo_form.sh"

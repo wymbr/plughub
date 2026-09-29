@@ -27,6 +27,8 @@ CHDB="${CHDB:-plughub_demo}"
 DIALOG="${DIALOG:-http://localhost:3760}"
 CFG="${CFG:-http://localhost:3600}"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 
 inconclusive=0
 huh() { echo "  ? $*"; inconclusive=$((inconclusive+1)); }
@@ -105,14 +107,14 @@ fi
 echo
 echo "-- EIXO 2b. exposicao x dano no renderer do Console ----------"
 if command -v jq >/dev/null 2>&1; then
-  IDS="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" "${DIALOG}/v1/dialog/forms" \
+  IDS="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" -H "X-Service-Token: $DIALOG_SVC" "${DIALOG}/v1/dialog/forms" \
          | jq -r '(if type=="object" then (.forms // .items // .data) else . end)[]? | .form_id // .id' 2>/dev/null)"
   if [ -z "$IDS" ]; then
     huh "dialog-api nao listou forms — 2b nao medido"
   else
     echo "  FORMS_TOTAL=$(echo "$IDS" | wc -l | tr -d ' ')   (testemunha de presenca)"
     for id in $IDS; do
-      N="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" "${DIALOG}/v1/dialog/forms/${id}" \
+      N="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" -H "X-Service-Token: $DIALOG_SVC" "${DIALOG}/v1/dialog/forms/${id}" \
            | jq '[.. | objects | select(.masked == true)] | length' 2>/dev/null)"
       [ "${N:-0}" != "0" ] && echo "  . ${id}  campos_masked=${N}"
     done
@@ -143,11 +145,11 @@ if command -v jq >/dev/null 2>&1; then
   N_SK="$(psql_count "SELECT count(*) FROM public.skills WHERE flow::text ~ '${RE_ANON}';")"
   N_SL="$(psql_count "SELECT count(*) FROM public.pool_skill_slots WHERE slot IN ('current','next') AND yaml_snapshot::text ~ '${RE_ANON}';")"
   N_PV="$(psql_count "SELECT count(*) FROM public.pool_skill_slots WHERE slot = 'previous' AND yaml_snapshot::text ~ '${RE_ANON}';")"
-  IDS="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" "${DIALOG}/v1/dialog/forms" \
+  IDS="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" -H "X-Service-Token: $DIALOG_SVC" "${DIALOG}/v1/dialog/forms" \
         | jq -r '(if type=="object" then (.forms // .items // .data) else . end)[]? | .form_id // .id' 2>/dev/null)"
   N_FM=0
   for id in $IDS; do
-    C="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" "${DIALOG}/v1/dialog/forms/${id}" \
+    C="$(curl -s --max-time 10 -H "X-Tenant-ID: ${TENANT}" -H "X-Service-Token: $DIALOG_SVC" "${DIALOG}/v1/dialog/forms/${id}" \
          | jq '[.. | objects | select(.masked == true)] | length' 2>/dev/null)"
     N_FM=$((N_FM + ${C:-0}))
   done

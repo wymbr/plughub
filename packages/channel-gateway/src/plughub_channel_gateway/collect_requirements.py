@@ -62,6 +62,8 @@ O QUE ESTE MÓDULO DECIDE
 
 from __future__ import annotations
 
+from .dialog_headers import dialog_headers
+
 import logging
 import time
 from typing import Any
@@ -208,7 +210,7 @@ class DialogFormMaskProbe:
                 r = await c.get(
                     f"{self._url}/v1/dialog/forms/{form_id}",
                     params={"status": "published"},
-                    headers={"X-Tenant-ID": tenant_id},
+                    headers=dialog_headers(tenant_id),   # AUT-62
                 )
                 r.raise_for_status()
                 form = r.json()

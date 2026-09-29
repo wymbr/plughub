@@ -13,6 +13,8 @@ Snapshot: o form publicado é congelado no create (pina a versão). Store = Redi
 """
 from __future__ import annotations
 
+from .dialog_headers import dialog_headers
+
 import json
 import logging
 import os
@@ -761,7 +763,7 @@ class SurveyWebService:
             r = await c.get(
                 f"{self._dialog}/v1/dialog/forms/{form_id}",
                 params={"status": "published"},
-                headers={"X-Tenant-ID": tenant_id},
+                headers=dialog_headers(tenant_id),   # AUT-62
             )
             r.raise_for_status()
             form = r.json()

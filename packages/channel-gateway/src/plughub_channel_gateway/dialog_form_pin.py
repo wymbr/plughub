@@ -42,6 +42,8 @@ submit num documento que pode não ser o exibido, com cara de garantia.
 """
 from __future__ import annotations
 
+from .dialog_headers import dialog_headers
+
 import logging
 
 import httpx
@@ -83,7 +85,7 @@ async def resolve_published_version(
             r = await c.get(
                 f"{url}/v1/dialog/forms/{form_id}",
                 params={"status": "published"},
-                headers={"X-Tenant-ID": tenant_id},
+                headers=dialog_headers(tenant_id),   # AUT-62
             )
             r.raise_for_status()
             form = r.json()

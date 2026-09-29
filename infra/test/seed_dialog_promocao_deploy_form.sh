@@ -39,4 +39,4 @@ curl -fsS -X POST -H "X-Admin-Token: ${DIALOG_ADMIN_TOKEN}" "${DIALOG_API}/v1/di
 echo "✓ DialogForm publicado: ${FORM_ID}"
 echo
 echo "Verifique o render (form_get expande os fields[]):"
-echo "  curl -s '${DIALOG_API}/v1/dialog/forms/${FORM_ID}?status=published' -H 'X-Tenant-ID: ${TENANT}' | jq ."
+echo "  curl -s '${DIALOG_API}/v1/dialog/forms/${FORM_ID}?status=published' -H 'X-Tenant-ID: ${TENANT}' -H 'X-Service-Token: <PLUGHUB_DIALOG_SERVICE_TOKEN>' | jq ."

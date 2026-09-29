@@ -30,6 +30,8 @@ CH_USER="${PLUGHUB_CLICKHOUSE_USER:-plughub}"
 CH_PASS="${PLUGHUB_CLICKHOUSE_PASSWORD:-plughub}"
 CH_DB="${PLUGHUB_CLICKHOUSE_DB:-plughub_demo}"
 TENANT="${PLUGHUB_TENANT_ID:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 
 # Data em que o carimbo entrou em producao. Ver CHANGELOG 2026-09-05.
 STAMP_EPOCH="${PLUGHUB_FORM_STAMP_EPOCH:-2026-09-05 19:30:00}"
@@ -112,7 +114,7 @@ else
   VER=${PAR##*|}
   DIALOG="${PLUGHUB_DIALOG_API_URL:-http://localhost:3760}"
   CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-         "${DIALOG}/v1/dialog/forms/${FID}?version=${VER}" -H "X-Tenant-ID: ${TENANT}")
+         "${DIALOG}/v1/dialog/forms/${FID}?version=${VER}" -H "X-Tenant-ID: ${TENANT}" -H "X-Service-Token: $DIALOG_SVC")
   if [ "$CODE" = "200" ]; then
     ok "${FID} v${VER} resolve na dialog-api (HTTP 200)"
   else

@@ -2,12 +2,15 @@
 router.py
 FastAPI routes for the Dialog API — generic scripted-dialog form store.
 
-Tenant scoping via header X-Tenant-ID (all endpoints).
-Escrita = portao DUAL (X-Admin-Token de sistema OU Bearer + ABAC
-`config.dialog_forms` read_write), delegado ao verificador canonico
-`plughub_authz`. Leituras sao ABERTAS: o `form_get` do mcp-server e o survey
-web do channel-gateway sao chamadores de runtime sem credencial, e o conteudo
-e masked-by-construction (nenhum valor de PII no store).
+Portao em TODA rota (AUT-62, 2026-09-29) — ver `_caller`.
+
+⚠️ As leituras eram ABERTAS por decisao declarada aqui: *"o `form_get` do mcp-server e o
+survey web do channel-gateway sao chamadores de runtime sem credencial, e o conteudo e
+masked-by-construction"*. A premissa de conteudo continua certa; a de REDE, nao: a borda
+publica (5174) roteia `/v1/dialog` para ca, e com um `X-Tenant-ID` qualquer um lia os
+formularios de TODOS os tenants (medido: 200). O dono decidiu fechar: runtime entra por
+`X-Service-Token`, e usuario le o PROPRIO tenant com qualquer Bearer valido — sem campo
+especifico, porque o Console renderiza formulario para operador que nao edita formulario.
 
 Endpoints (all under /v1/dialog/forms):
   GET    /                         → list latest version metadata per form (?include_deleted)
@@ -28,8 +31,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
-from plughub_authz import enforce_write
+import hmac
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from plughub_authz import abac_can, bearer_from_header, verify_user_jwt
 from pydantic import BaseModel, Field
 
 from .format_guard import conflitos_de_formato
@@ -45,7 +50,6 @@ from .db import (
 )
 
 logger = logging.getLogger("plughub.dialog.router")
-router = APIRouter(prefix="/v1/dialog/forms")
 
 
 def _pool(request: Request):
@@ -70,21 +74,73 @@ def _archived_409(exc: FormArchivedError) -> HTTPException:
     )
 
 
-def _require_admin(request: Request, x_admin_token: str | None) -> None:
+def _settings(request: Request):
+    return request.app.state.settings
+
+
+def _caller(request: Request, x_tenant_id: str | None, *, write: bool) -> str:
+    """Decide QUEM chama e se pode — e devolve o tenant que vale para a chamada.
+
+    Portas, nesta ordem:
+      1. `X-Admin-Token` (sistema: os seeds de `infra/dialog`) — lê e escreve. Só se
+         configurado: vazio FECHA a porta. Era o contrário: o `enforce_write` DESLIGAVA o
+         portão inteiro com o token vazio.
+      2. `X-Service-Token` — SÓ leitura: o runtime (mcp-server, channel-gateway) resolve
+         formulário, nunca o edita.
+      3. `Bearer` do auth-api, e o tenant é o do TOKEN: `X-Tenant-ID` divergente é 403
+         `tenant_mismatch` (TNT-01). Escrita exige `config.dialog_forms` (read_write);
+         leitura basta ser usuário do tenant.
+    Nas duas primeiras o tenant vem do header — não há token de onde tirá-lo.
     """
-    Portao de escrita. O `x_admin_token` fica na assinatura para o header aparecer no
-    OpenAPI; quem o LE e o `enforce_write`, a partir do request — uma so leitura, para
-    nao existirem duas respostas para "este header confere?".
-    """
-    settings = request.app.state.settings
-    enforce_write(
-        request     = request,
-        admin_token = settings.admin_token,
-        jwt_secret  = getattr(settings, "jwt_secret", ""),
-        module      = "config",
-        field       = "dialog_forms",
-        what        = "escrita de DialogForm",
-    )
+    st = _settings(request)
+    adm = request.headers.get("x-admin-token")
+    if adm and st.admin_token and hmac.compare_digest(adm, st.admin_token):
+        return _require_tenant(x_tenant_id)
+    svc = request.headers.get("x-service-token")
+    if not write and svc and st.service_token and hmac.compare_digest(svc, st.service_token):
+        return _require_tenant(x_tenant_id)
+
+    token = bearer_from_header(request.headers.get("authorization"))
+    if not token:
+        raise HTTPException(status_code=401, detail="DialogForm exige credencial")
+    if not st.jwt_secret:
+        raise HTTPException(status_code=503,
+                            detail="dialog-api sem PLUGHUB_DIALOG_JWT_SECRET — nao consigo verificar credencial")
+    claims = verify_user_jwt(token, st.jwt_secret)
+    if not claims:
+        raise HTTPException(status_code=401, detail="credencial invalida ou expirada")
+    if write and not abac_can(claims, "config", "dialog_forms", "read_write"):
+        logger.warning("dialog NEGADO: sub=%s escrita sem config.dialog_forms", claims.get("sub"))
+        raise HTTPException(status_code=403, detail="escrita de DialogForm exige config.dialog_forms (read_write)")
+    tenant = str(claims.get("tenant_id") or "")
+    if not tenant:
+        raise HTTPException(status_code=401, detail="credencial sem tenant")
+    if x_tenant_id and x_tenant_id != tenant:
+        logger.warning("dialog RECUSA: sub=%s pediu tenant=%s com credencial de %s",
+                       claims.get("sub"), x_tenant_id, tenant)
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+    return tenant
+
+
+def _exige_credencial(request: Request) -> None:
+    """Dependência do ROUTER: credencial presente e válida ANTES do corpo — senão o anônimo
+    numa escrita via 422 (corpo) em vez de 401. Capacidade e tenant ficam no `_caller`."""
+    st = _settings(request)
+    for header, segredo in (("x-admin-token", st.admin_token), ("x-service-token", st.service_token)):
+        v = request.headers.get(header)
+        if v and segredo and hmac.compare_digest(v, segredo):
+            return
+    token = bearer_from_header(request.headers.get("authorization"))
+    if not token:
+        raise HTTPException(status_code=401, detail="DialogForm exige credencial")
+    if not st.jwt_secret:
+        raise HTTPException(status_code=503,
+                            detail="dialog-api sem PLUGHUB_DIALOG_JWT_SECRET — nao consigo verificar credencial")
+    if not verify_user_jwt(token, st.jwt_secret):
+        raise HTTPException(status_code=401, detail="credencial invalida ou expirada")
+
+
+router = APIRouter(prefix="/v1/dialog/forms", dependencies=[Depends(_exige_credencial)])
 
 
 class FormUpsert(BaseModel):
@@ -129,7 +185,7 @@ async def list_forms(
     include_deleted: bool = Query(default=False),
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
 ) -> dict:
-    tenant_id = _require_tenant(x_tenant_id)
+    tenant_id = _caller(request, x_tenant_id, write=False)
     forms = await db_list_forms(_pool(request), tenant_id, include_deleted=include_deleted)
     return {"forms": forms}
 
@@ -142,7 +198,7 @@ async def get_form(
     version: int | None = Query(default=None),
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
 ) -> dict:
-    tenant_id = _require_tenant(x_tenant_id)
+    tenant_id = _caller(request, x_tenant_id, write=False)
     form = await db_get_form(_pool(request), tenant_id, form_id, status=status, version=version)
     if form is None:
         raise HTTPException(status_code=404, detail=f"dialog form not found: {form_id}")
@@ -156,8 +212,7 @@ async def create_form(
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
 ) -> dict:
-    tenant_id = _require_tenant(x_tenant_id)
-    _require_admin(request, x_admin_token)
+    tenant_id = _caller(request, x_tenant_id, write=True)
     try:
         return await db_create_form(_pool(request), tenant_id, body.to_doc())
     except FormArchivedError as exc:
@@ -172,8 +227,7 @@ async def put_form(
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
 ) -> dict:
-    tenant_id = _require_tenant(x_tenant_id)
-    _require_admin(request, x_admin_token)
+    tenant_id = _caller(request, x_tenant_id, write=True)
     if body.form_id != form_id:
         raise HTTPException(status_code=400, detail="form_id in body must match path")
     try:
@@ -190,8 +244,7 @@ async def publish_form(
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
 ) -> dict:
-    tenant_id = _require_tenant(x_tenant_id)
-    _require_admin(request, x_admin_token)
+    tenant_id = _caller(request, x_tenant_id, write=True)
 
     # §D8 — o campo nomeia o tipo UMA vez. `masked: "cpf"` ja deriva o formato;
     # declarar `format` junto e DIFERENTE e contradicao que o schema aceitaria,
@@ -239,8 +292,7 @@ async def delete_form(
     quem já está vinculado: ele sai do catálogo e de vínculos novos, e segue resolvível por
     id (é o que mantém contato em andamento, composição de nota e histórico de pé).
     """
-    tenant_id = _require_tenant(x_tenant_id)
-    _require_admin(request, x_admin_token)
+    tenant_id = _caller(request, x_tenant_id, write=True)
     result = await db_delete_form(_pool(request), tenant_id, form_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"dialog form not found: {form_id}")
@@ -256,8 +308,7 @@ async def undelete_form(
 ) -> dict:
     """Restaura form arquivado. Rota própria, e não flag no DELETE: restaurar é ato, aparece
     no OpenAPI e é auditável como tal."""
-    tenant_id = _require_tenant(x_tenant_id)
-    _require_admin(request, x_admin_token)
+    tenant_id = _caller(request, x_tenant_id, write=True)
     result = await db_undelete_form(_pool(request), tenant_id, form_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"dialog form not found: {form_id}")

@@ -57,6 +57,8 @@ RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AR="${AGENT_REGISTRY_URL:-http://localhost:3300}"
 DA="${DIALOG_API_URL:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 echo "${BLD}gate_published_alias_census — artefato publicado lendo alias de core.*${RST}"
@@ -65,10 +67,10 @@ echo
 command -v python3 >/dev/null || { echo "  ${YEL}—${RST} INCONCLUSIVO: python3 ausente"; exit 2; }
 curl -sf -o /dev/null "$AR/v1/pools?tenant_id=$TENANT" -H "x-tenant-id: $TENANT" \
   || { echo "  ${YEL}—${RST} INCONCLUSIVO: agent-registry não responde em $AR"; exit 2; }
-curl -sf -o /dev/null "$DA/v1/dialog/forms" -H "X-Tenant-ID: $TENANT" \
+curl -sf -o /dev/null "$DA/v1/dialog/forms" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" \
   || { echo "  ${YEL}—${RST} INCONCLUSIVO: dialog-api não responde em $DA"; exit 2; }
 
-cd "$RAIZ" && AR="$AR" DA="$DA" TENANT="$TENANT" python3 - <<'PY'
+cd "$RAIZ" && AR="$AR" DA="$DA" TENANT="$TENANT" DIALOG_SVC="$DIALOG_SVC" python3 - <<'PY'
 import io, json, os, re, sys, urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -126,7 +128,7 @@ def get(url, hdr):
         return json.loads(resp.read().decode())
 
 H_AR = {"x-tenant-id": T}
-H_DA = {"X-Tenant-ID": T}
+H_DA = {"X-Tenant-ID": T, "X-Service-Token": __import__("os").environ.get("DIALOG_SVC", "")}  # AUT-62
 
 # ── alias → canônica `core.*`, do mapa declarado ─────────────────────────────
 try:

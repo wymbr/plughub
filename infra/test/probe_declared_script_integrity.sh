@@ -57,6 +57,8 @@ export PYTHONIOENCODING=utf-8
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG="${DIALOG:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 CH_DB="${CH_DB:-plughub_demo}"
 CT_ENGINE="${CT_ENGINE:-plughub-demo-skill-flow-service-1}"
 CT_CH="${CT_CH:-plughub-demo-clickhouse-1}"
@@ -85,7 +87,7 @@ docker exec "$CT_ENGINE" node -e "0" >/dev/null 2>&1 || inc "container '$CT_ENGI
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 # ── 1. As formas PUBLICADAS ───────────────────────────────────────────────────
-LISTA="$(curl -s -H "X-Tenant-ID: $TENANT" "$DIALOG/v1/dialog/forms" 2>/dev/null)"
+LISTA="$(curl -s -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" "$DIALOG/v1/dialog/forms" 2>/dev/null)"
 IDS="$(printf '%s' "$LISTA" | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)
@@ -105,7 +107,7 @@ for f in (it or []):
     if f.get('status') == 'published': print(f.get('form_id',''))
 " | while read -r fid; do
   [ -n "$fid" ] || continue
-  curl -s -H "X-Tenant-ID: $TENANT" "$DIALOG/v1/dialog/forms/$fid" 2>/dev/null \
+  curl -s -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" "$DIALOG/v1/dialog/forms/$fid" 2>/dev/null \
     | python3 "$RAIZ/infra/test/_declared_script_texts.py" >> "$TMP/textos.jsonl" 2>/dev/null
   echo >> "$TMP/textos.jsonl"
 done

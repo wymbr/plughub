@@ -49,6 +49,8 @@ RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NODE_IMG="${NODE_IMG:-node:20-alpine}"
 DA="${DIALOG_API:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 FORMA="${WRAPUP_FORM:-dialog_wrapup_arvore_v1}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
@@ -68,7 +70,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # ── A — a forma REAL, publicada; e ela precisa DECLARAR o que o probe julga ────
-curl -sf "$DA/v1/dialog/forms/$FORMA?status=published" -H "X-Tenant-ID: $TENANT" \
+curl -sf "$DA/v1/dialog/forms/$FORMA?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" \
   -o "$TMP/form.json" || inconclusivo "dialog-api não serviu '$FORMA' em $DA"
 
 echo "A — controle positivo: a forma tem pergunta checklist com capture.kind"

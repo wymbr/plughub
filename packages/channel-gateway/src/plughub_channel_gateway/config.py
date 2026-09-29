@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # Dialog primitive — dialog-api (form store) URL. The survey web vehicle
     # snapshots the published DialogForm at token creation. PLUGHUB_DIALOG_API_URL.
     dialog_api_url:             str = "http://localhost:3760"
+    # AUT-62 — a dialog-api exige credencial também na leitura. PLUGHUB_DIALOG_SERVICE_TOKEN
+    # (== o da dialog-api). Vazio ⇒ 401 e cada leitor degrada logando. Ver `dialog_headers`.
+    dialog_service_token:       str = ""
     # Survey web token TTL (seconds). Default 7 days.
     survey_web_ttl_s:           int = 604800
     # Survey response store (S8/S9) — evaluation-api persiste a resposta operacional

@@ -16,6 +16,8 @@ cd "$(dirname "$0")/../.." || exit 2
 DIALOG="${DIALOG_API:-http://localhost:3760}"
 TOKEN="${DIALOG_ADMIN_TOKEN:-demo_dialog_admin_token}"
 TENANT="${PLUGHUB_TENANT_ID:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 REG_CT="${REG_CT:-plughub-demo-agent-registry-1}"
 SCHEMAS_JS="/app/packages/agent-registry/node_modules/@plughub/schemas/dist/index.js"
 EDITOR="packages/platform-ui/src/modules/dialog-forms/DialogFormsPage.tsx"
@@ -73,7 +75,7 @@ case "$SAIDA" in
 esac
 
 # ── B — o censo continua zero (regressão) ────────────────────────────────────
-CENSO=$(curl -s -m 10 -H "X-Tenant-ID: $TENANT" "$DIALOG/v1/dialog/forms" 2>/dev/null)
+CENSO=$(curl -s -m 10 -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" "$DIALOG/v1/dialog/forms" 2>/dev/null)
 if ! echo "$CENSO" | jq -e '.forms' >/dev/null 2>&1; then
   inc "B. dialog-api não listou formas — o censo NÃO foi refeito"
 else
@@ -81,7 +83,7 @@ else
   N=0; COM=0
   for f in $IDS; do
     N=$((N + 1))
-    C=$(curl -s -m 10 -H "X-Tenant-ID: $TENANT" "$DIALOG/v1/dialog/forms/$f" 2>/dev/null)
+    C=$(curl -s -m 10 -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" "$DIALOG/v1/dialog/forms/$f" 2>/dev/null)
     if echo "$C" | grep -q '"pattern"'; then
       COM=$((COM + 1)); echo "       ainda usa pattern: $f"
     fi
@@ -147,7 +149,7 @@ fi
 
 for f in "$F_CONF" "$F_OK"; do
   curl -s -o /dev/null -m 10 -X DELETE -H "X-Admin-Token: $TOKEN" \
-    -H "X-Tenant-ID: $TENANT" "$DIALOG/v1/dialog/forms/$f"
+    -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" "$DIALOG/v1/dialog/forms/$f"
 done
 
 # ── D — o editor perdeu o campo livre e ganhou os dois seletores ─────────────

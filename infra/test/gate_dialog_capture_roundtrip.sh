@@ -53,6 +53,8 @@ set -uo pipefail
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DA="${DIALOG_API_URL:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 FORM="${FORM_ID:-dialog_wrapup_arc12_v1}"
 # Segunda forma REAL: a do ramo E (bloco `form`). Sao dois artefatos porque sao
 # duas populacoes — nenhuma forma do repositorio declara captura Arc 12 E
@@ -76,15 +78,15 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # ── o artefato REAL, publicado — não uma fixture que envelhece à parte ──────────
-curl -sf "$DA/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" \
+curl -sf "$DA/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" \
   -o "$TMP/form.json" \
   || inconclusivo "dialog-api não serviu o form publicado '$FORM' em $DA"
 
-curl -sf "$DA/v1/dialog/forms/$FORM_COM_FIELDS?status=published" -H "X-Tenant-ID: $TENANT" \
+curl -sf "$DA/v1/dialog/forms/$FORM_COM_FIELDS?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" \
   -o "$TMP/form_fields.json" \
   || inconclusivo "dialog-api não serviu o form publicado '$FORM_COM_FIELDS' em $DA"
 
-curl -sf "$DA/v1/dialog/forms/$FORM_ARVORE?status=published" -H "X-Tenant-ID: $TENANT" -o "$TMP/form_arvore.json" || inconclusivo "dialog-api nao serviu a forma com arvore: $FORM_ARVORE"
+curl -sf "$DA/v1/dialog/forms/$FORM_ARVORE?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" -o "$TMP/form_arvore.json" || inconclusivo "dialog-api nao serviu a forma com arvore: $FORM_ARVORE"
 
 # ── transpila a UNIDADE SOB TESTE (o import é type-only ⇒ elidido) ─────────────
 cp "$RAIZ/packages/platform-ui/src/modules/dialog-forms/dialog-blocks.ts" "$TMP/blocks.ts"

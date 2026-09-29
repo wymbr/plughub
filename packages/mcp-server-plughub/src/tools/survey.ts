@@ -34,6 +34,7 @@ import type {
   SurveySignal,
 } from "@plughub/schemas"
 import type { KafkaProducer } from "../infra/kafka"
+import { dialogHeaders } from "../lib/dialog-headers"   // AUT-62
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -159,7 +160,7 @@ async function fetchDialogForm(
 ): Promise<DialogForm> {
   const resp = await fetch(
     `${dialogApiUrl}/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`,
-    { headers: { "X-Tenant-ID": tenantId } },
+    { headers: dialogHeaders(tenantId) },
   )
   if (!resp.ok) {
     const body = await resp.text().catch(() => "")

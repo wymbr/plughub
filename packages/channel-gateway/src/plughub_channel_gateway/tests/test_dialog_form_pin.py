@@ -110,3 +110,27 @@ async def test_version_invalida_nao_vira_pin(monkeypatch, valor):
     """Zero e negativo saem junto: `version` começa em 1 no store."""
     monkeypatch.setattr(httpx, "AsyncClient", _client(lambda u, p, h: _resp(200, {"version": valor})))
     assert await resolve_published_version("http://dialog:3760", "t1", "f1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["svc-dialog-aut62", ""])
+async def test_leitura_leva_o_token_de_servico_quando_configurado(monkeypatch, token):
+    """AUT-62 — a dialog-api fechou a leitura; o runtime entra por `X-Service-Token`.
+
+    Com token: o header vai. Sem token: NÃO vai um header vazio (que a dialog-api leria
+    como credencial ausente de qualquer jeito) — a chamada sai sem ele, toma 401, e o pin
+    degrada logando, pelo caminho que já existia."""
+    from plughub_channel_gateway.config import get_settings
+    monkeypatch.setattr(get_settings(), "dialog_service_token", token, raising=False)
+    vistos = {}
+
+    def handler(url, params, headers):
+        vistos["headers"] = headers
+        return _resp(200, {"form_id": "f1", "version": 3, "status": "published"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client(handler))
+    assert await resolve_published_version("http://dialog:3760", "t1", "f1") == 3
+    if token:
+        assert vistos["headers"]["X-Service-Token"] == token
+    else:
+        assert "X-Service-Token" not in vistos["headers"]

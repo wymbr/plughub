@@ -131,7 +131,7 @@ else bad "S5 engine anônimo → $s — a LEITURA fechou junto; isto quebra o pr
 [ -n "$CREATED" ] && curl -s -m 10 -X DELETE "$CAL/v1/calendars/$CREATED" -H "X-Admin-Token: $CAL_TOKEN" >/dev/null 2>&1
 
 # ── dialog-api ────────────────────────────────────────────────────────────────
-head_ "DIALOG-API — escrita fechada, leitura aberta"
+head_ "DIALOG-API — escrita fechada; leitura fechada ao anônimo, aberta ao runtime (AUT-62)"
 
 FORM_ID="dialog_probe_write_gate"
 FORM="{\"form_id\":\"$FORM_ID\",\"name\":\"probe\",\"default_locale\":\"pt-BR\",\"locales\":[\"pt-BR\"],\"nodes\":[{\"id\":\"n1\",\"type\":\"statement\",\"text\":\"probe\"}]}"
@@ -173,12 +173,21 @@ docker exec plughub-demo-postgres-1 psql -U plughub -d plughub_demo -q \
   && info "limpeza: form de probe removido" \
   || info "limpeza NÃO executada (postgres fora de alcance) — verifique $FORM_ID à mão"
 
+# AUT-62 (2026-09-29): a leitura era ABERTA por decisão, e este ramo a afirmava. A borda
+# pública publicava `/v1/dialog`, e com um X-Tenant-ID qualquer um lia os formulários de
+# todos os tenants; o dono decidiu fechar. O runtime (form_get, survey web) lê pela porta
+# de SERVIÇO — S9b prova que ela vive, senão NPS e wrap-up cairiam no on_failure.
+DLG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 s=$(status "$DLG/v1/dialog/forms" "${TENH[@]}")
-if [ "$s" = "200" ]; then ok "S9 leitura anônima → 200 (form_get do mcp-server e survey web dependem disto)"
-else bad "S9 leitura anônima → $s — fechou a leitura; NPS e wrap-up caem no on_failure"; fi
+if [ "$s" = "401" ]; then ok "S9 leitura anônima → 401 (era 200 até a AUT-62)"
+else bad "S9 leitura anônima → $s — a leitura de qualquer tenant está aberta"; fi
+
+s=$(status "$DLG/v1/dialog/forms" "${TENH[@]}" -H "X-Service-Token: $DLG_SVC")
+if [ "$s" = "200" ]; then ok "S9b leitura de SERVIÇO → 200 (form_get do mcp-server e survey web dependem disto)"
+else bad "S9b leitura de serviço → $s — o runtime não lê formulário; NPS e wrap-up caem no on_failure"; fi
 
 # testemunha de PRESENÇA: o seed rodou com o token e os forms de produção existem
-n=$(curl -s -m 10 "$DLG/v1/dialog/forms" "${TENH[@]}" 2>/dev/null | grep -o '"form_id"' | wc -l)
+n=$(curl -s -m 10 "$DLG/v1/dialog/forms" "${TENH[@]}" -H "X-Service-Token: $DLG_SVC" 2>/dev/null | grep -o '"form_id"' | wc -l)
 if [ "${n:-0}" -ge 3 ]; then ok "S10 $n forms no tenant — o dialog-seed atravessou o portão novo"
 else bad "S10 só ${n:-0} form(s) — sinal de que o seed levou 401; DIALOG_ADMIN_TOKEN do dialog-seed precisa espelhar PLUGHUB_DIALOG_ADMIN_TOKEN"; fi
 

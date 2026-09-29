@@ -30,6 +30,8 @@ set -uo pipefail
 
 DC="docker compose -f docker-compose.demo.yml"
 TENANT="tenant_demo"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 CG="http://localhost:8010"
 AUTH="${AUTH:-http://localhost:3202}"
 DIALOG="http://localhost:3760"
@@ -60,7 +62,7 @@ TOK=$($CURL -X POST "$AUTH/auth/login" $JSON \
 SUB=$(echo "$TOK" | cut -d. -f2 | tr '_-' '/+' | { read -r p; printf '%s' "$p$(printf '%*s' $(( (4 - ${#p} % 4) % 4 )) '' | tr ' ' '=')"; } | base64 -d 2>/dev/null | jq -r '.sub // empty')
 [ -n "$SUB" ] || die "não extraí o sub do JWT"
 INST="human-${SUB}"
-$CURL -f "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" >/dev/null 2>&1 \
+$CURL -f "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" >/dev/null 2>&1 \
   || DIALOG_API="$DIALOG" TENANT="$TENANT" bash infra/test/seed_dialog_wrapup_arc12_form.sh \
   || die "não consegui publicar $FORM"
 ok "token + form $FORM publicado (agente = $INST)"

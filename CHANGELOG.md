@@ -1,5 +1,53 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (11) — AUT-62: a dialog-api exige credencial também na leitura, e o tenant do usuário é o do token
+
+**Decisão do dono, revertendo uma decisão declarada.** A leitura era **aberta de propósito**. O
+router dizia que *"o `form_get` do mcp-server e o survey web do channel-gateway são chamadores de
+runtime sem credencial, e o conteúdo é masked-by-construction"*. A premissa de conteúdo segue
+certa. A de **rede** não: a borda pública (5174) roteia `/v1/dialog` para a dialog-api, e com um
+`X-Tenant-ID` qualquer um lia os formulários de **todos** os tenants (medido: 200).
+
+As escritas tinham o `enforce_write`, com os dois furos já vistos na pricing: `admin_token` vazio
+desligava o portão, e o tenant vinha do header, não do token.
+
+**O portão (`_caller`, e `_exige_credencial` no router antes do corpo):**
+- `X-Admin-Token` (os seeds de `infra/dialog`) lê e escreve. Vazio **fecha** a porta;
+- `X-Service-Token` **só lê**: o runtime resolve formulário, nunca o edita;
+- `Bearer`: **leitura = qualquer usuário do PRÓPRIO tenant**, sem campo específico. O Console
+  (`DialogFormRenderer`) renderiza formulário para operador que só tem `agent_assist.atender`, e
+  exigir `config.dialog_forms` quebraria o atendimento. **Escrita = `config.dialog_forms`**
+  (read_write);
+- o tenant do usuário é o do token; header divergente é 403 `tenant_mismatch`.
+
+**Chamadores migrados no mesmo trabalho, cada serviço com UMA casa para o header:**
+- **channel-gateway**: `dialog_headers.py`, lido pelos três leitores (survey web, pin de versão,
+  sonda de máscara do collect). Teste novo afirma que o header vai com token e não vai vazio;
+- **mcp-server**: `lib/dialog-headers.ts`, lido pelos quatro (`form_get` ×2, survey, captura do
+  segmento), com o token lido a cada chamada;
+- provado de dentro dos dois containers: 200 com o token;
+- **platform-ui**: nada a mudar. As três telas já usavam `apiFetch`. Provado no navegador: o editor
+  lista e abre formulário, 200 e 200.
+
+**Os gates que liam anonimamente.** 15 gates AUTO ficaram INCONCLUSIVOS ou vermelhos na primeira
+rodada, pelo motivo esperado. Todos migrados para a porta de serviço e rodados: os 15 estão
+**verdes**. Também foram migrados 3 helpers e as dicas "Verifique:" dos seeds. O
+`probe_config_service_write_gate` **afirmava a leitura aberta** (S9: *"leitura anônima → 200"*).
+Passou a afirmar o contrário (S9: anônimo recebe 401) e a provar a porta do runtime (S9b: serviço
+recebe 200, senão NPS e wrap-up cairiam no `on_failure`).
+
+**Instrumentos:**
+- `test_caller_gate.py` (11 casos, com os positivos e o censo HTTP com piso). Contraprova: sem a
+  dependência do router, o censo reprova;
+- dialog-api 38 · `probe_python_suites.sh` 16/16 · `probe_internal_service_callers.sh` verde;
+- `probe_route_anon_sweep.sh`: as 7 linhas viraram `fechada`, e a borda responde 401.
+
+**Fora, e dito:**
+- `probe_console_restore_after_reload` (não triado) ficou INCONCLUSIVO por um claim de fila que não
+  aconteceu. A leitura do formulário, que é o que mudou, passou nele;
+- navegar DIRETO para `/config/dialog-forms` cai numa regra do nginx para o config-api (URL de SPA
+  sob `/config`); pela SPA a tela abre. É anterior a esta ficha e não tem relação com ela.
+
 ## 2026-09-29 (10) — AUT-61: a pricing-api exige credencial nas leituras, confere o tenant do caminho e fecha com segredo ausente
 
 **Medido antes, pela borda pública (5174), sem credencial:** `GET /v1/pricing/invoice/{tenant}`

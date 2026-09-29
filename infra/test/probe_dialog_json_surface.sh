@@ -46,6 +46,8 @@ MCP="${MCP_SERVER:-http://localhost:3100}"
 DLG="${DIALOG_API:-http://localhost:3760}"
 AUTH="${AUTH_API:-http://localhost:3202}"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 FAIL=0; INC=0
@@ -158,7 +160,7 @@ assert f[0]['masked'] is False, f[0]['masked']
 # ── S6 — ancoragem em forma REAL ──────────────────────────────────────────────
 head_ "S6 — o veredicto casa com a forma semeada dialog_limite_solicitacao"
 FORMA=$(curl -s -m 10 "$DLG/v1/dialog/forms/dialog_limite_solicitacao?status=published" \
-        -H "X-Tenant-ID: $TENANT" 2>/dev/null)
+        -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" 2>/dev/null)
 if [ -z "$FORMA" ] || [ "${FORMA:0:1}" != "{" ]; then
   inc "dialog-api não devolveu a forma — sem ancoragem em dado de produção"
 else

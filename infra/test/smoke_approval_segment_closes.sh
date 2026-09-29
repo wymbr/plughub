@@ -28,6 +28,8 @@ set -uo pipefail
 
 COMPOSE="docker compose -f docker-compose.demo.yml"
 TENANT="tenant_demo"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 CG="http://localhost:8010"
 AUTH="${AUTH:-http://localhost:3202}"    # 3200 do host é o ai-gateway, não a auth-api
 DIALOG="http://localhost:3760"
@@ -64,7 +66,7 @@ INST="human-${SUB}"
 echo "   ✓ token obtido · aprovador = $INST"
 
 echo "══ 1) o DialogForm '$FORM' está publicado? ══"
-if $CURL -f "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" >/dev/null 2>&1; then
+if $CURL -f "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" >/dev/null 2>&1; then
   echo "   ✓ publicado"
 else
   echo "   → seedando via infra/test/seed_dialog_promocao_deploy_form.sh"

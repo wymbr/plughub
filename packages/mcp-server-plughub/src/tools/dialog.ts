@@ -15,6 +15,7 @@ import type { McpServer }        from "@modelcontextprotocol/sdk/server/mcp.js"
 import { buildRender, duplicateNodeIds, optionsAtPath, leafPaths, leafMeanings,
          entryQuestionId, categoryPathFor } from "@plughub/schemas"
 import type { DialogForm, QuestionNode }  from "@plughub/schemas"
+import { dialogHeaders } from "../lib/dialog-headers"   // AUT-62
 
 // ─── ORQ-13: as opções da pergunta de esclarecimento ──────────────────────────
 
@@ -202,7 +203,7 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
       try {
         const resp = await fetch(
           `${dialogApiUrl}/v1/dialog/forms/${encodeURIComponent(input.form_id)}?${params}`,
-          { headers: { "X-Tenant-ID": tenantId } },
+          { headers: dialogHeaders(tenantId) },
         )
         if (!resp.ok) {
           const body = await resp.text().catch(() => "")
@@ -269,7 +270,7 @@ export function registerDialogTools(server: McpServer, deps: DialogDeps): void {
       try {
         const resp = await fetch(
           `${dialogApiUrl}/v1/dialog/forms/${encodeURIComponent(input.form_id)}?${params}`,
-          { headers: { "X-Tenant-ID": tenantId } },
+          { headers: dialogHeaders(tenantId) },
         )
         if (!resp.ok) {
           const body = await resp.text().catch(() => "")

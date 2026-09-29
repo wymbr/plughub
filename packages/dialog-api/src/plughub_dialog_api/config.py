@@ -21,15 +21,13 @@ class Settings(BaseSettings):
     # PostgreSQL (uses the shared plughub DB, schema=dialog)
     database_url: str = "postgresql://plughub:plughub@postgres:5432/plughub"
 
-    # Portao de ESCRITA (dual: admin-token de sistema OU Bearer + ABAC
-    # `config.dialog_forms`). Vazio DESABILITA o portao — postura preservada, mas
-    # agora LOGADA em WARNING pelo `plughub_authz.enforce_write`.
-    #
-    # Leituras (list/get, e o `form_get` do mcp-server + o survey web do
-    # channel-gateway) seguem ABERTAS de proposito: sao chamadores de runtime sem
-    # credencial, e o conteudo e masked-by-construction (nenhum valor de PII no
-    # store). O campo ABAC governa quem EDITA o formulario, nao quem o renderiza.
+    # Porta de SISTEMA (seeds): lê e escreve. Vazio FECHA esta porta — até a AUT-62
+    # (2026-09-29) desligava o portão inteiro. Ver `router._caller`.
     admin_token: str = ""
+
+    # AUT-62 — porta de RUNTIME, só de leitura (mcp-server `form_get`/survey/segment e
+    # channel-gateway survey web/pin/collect). Vazio NÃO libera: só fecha a porta.
+    service_token: str = ""
 
     # Mesmo segredo HS256 da auth-api — valida o Bearer do caminho ABAC.
     jwt_secret:  str = ""

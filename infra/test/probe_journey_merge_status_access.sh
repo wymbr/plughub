@@ -46,6 +46,8 @@ source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
 
 COMPOSE="docker compose -f docker-compose.demo.yml"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 CG="${CG:-http://localhost:8010}"
 AR="${AR:-http://localhost:3300}"
 CURL="curl -s --max-time 20"
@@ -165,7 +167,7 @@ echo "══ 4) o processo existe e está EM ANÁLISE (pendência policy=offer) 
 # e a pendência nunca nasce — o probe acusaria o merge por um defeito de seed.
 for F in dialog_limite_solicitacao dialog_limite_aprovacao; do
   $CURL -f "http://localhost:3760/v1/dialog/forms/$F?status=published" \
-        -H "X-Tenant-ID: $TENANT" >/dev/null 2>&1 \
+        -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" >/dev/null 2>&1 \
     || die "o form '$F' não está publicado. Semeie antes:
         bash infra/test/seed_dialog_limite_forms.sh"
 done

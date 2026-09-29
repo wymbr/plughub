@@ -30,6 +30,7 @@ import { randomUUID } from "crypto"
 import type { RedisClient } from "../infra/redis"
 import { buildAgentBusinessEvent } from "./agent-events"
 import { AGENT_EVENT_CATEGORY_MAX_SEGMENTS, sanitizeCategoryPath } from "@plughub/schemas"
+import { dialogHeaders } from "../lib/dialog-headers"   // AUT-62
 
 export interface SegmentDeps {
   redis: RedisClient
@@ -95,7 +96,7 @@ async function fetchPublishedForm(
   try {
     const resp = await fetch(
       `${dialogApiUrl}/v1/dialog/forms/${encodeURIComponent(formId)}?${query}`,
-      { headers: { "X-Tenant-ID": tenantId } },
+      { headers: dialogHeaders(tenantId) },
     )
     if (!resp.ok) {
       // A versão entra no log: um 404 com pin significa "a versão que o atendente

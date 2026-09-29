@@ -34,6 +34,8 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 COMPOSE="docker compose -p plughub-demo -f docker-compose.demo.yml"
 REG="${REG:-http://localhost:3300}"
 DIALOG="${DIALOG:-http://localhost:3760}"
@@ -154,7 +156,7 @@ print(json.dumps({"skill": cur.get("skill_id"), "faltando": [k for k in obrig if
   fi
 
   FORM=$(jexpr "$V" "d['form']")
-  PUB=$(curl -s "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT")
+  PUB=$(curl -s "$DIALOG/v1/dialog/forms/$FORM?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC")
   AUS=$(printf '%s' "$PUB" | python3 -c 'import json,sys,re
 d = json.load(sys.stdin); nos = {n.get("id") for n in d.get("nodes", [])}
 txt = open("packages/skill-flow-engine/skills/skill_intake_runner_v1.yaml", encoding="utf-8").read() + \

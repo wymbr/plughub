@@ -671,6 +671,7 @@ services:
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800
       DIALOG_API_URL: http://dialog-api:3760   # dialog primitive — form_get (survey + OTP)
+      DIALOG_SERVICE_TOKEN: changeme_dialog_service_token_demo   # AUT-62 — leitura de runtime (== PLUGHUB_DIALOG_SERVICE_TOKEN)
       MAILING_API_URL: http://mailing-api:3660   # outbound Fase 1 — mailing_add/campaign_drain/campaign_delivery_result
       MAILING_SERVICE_TOKEN: changeme_mailing_service_token_demo   # AUT-60 — == PLUGHUB_MAILING_SERVICE_TOKEN
       CONFIG_API_URL: http://config-api:3600   # masking context_rules via HTTP (config-http-propagation arc)
@@ -1706,6 +1707,7 @@ services:
       # porque não há entrega real. Nunca ligar fora do demo.
       PLUGHUB_OTP_DEV_RETURN_CODE:        "true"
       PLUGHUB_DIALOG_API_URL:             http://dialog-api:3760   # survey web vehicle — snapshot do DialogForm
+      PLUGHUB_DIALOG_SERVICE_TOKEN:       changeme_dialog_service_token_demo   # AUT-62 — leitura de runtime
       PLUGHUB_EVALUATION_API_URL:         http://evaluation-api:3400   # survey response store (S8/S9) — persist-first
       PLUGHUB_EVALUATION_SERVICE_TOKEN:   changeme_eval_service_token_demo   # _require_service da evaluation-api
       PLUGHUB_CONFIG_API_URL:             http://config-api:3600
@@ -1945,6 +1947,7 @@ services:
       # chamadores de runtime sem credencial.
       PLUGHUB_DIALOG_ADMIN_TOKEN:  demo_dialog_admin_token
       PLUGHUB_DIALOG_JWT_SECRET:   changeme_auth_jwt_secret_demo_32c   # mesmo segredo da auth-api
+      PLUGHUB_DIALOG_SERVICE_TOKEN: changeme_dialog_service_token_demo   # AUT-62 — porta de runtime, SÓ leitura
     depends_on:
       postgres:
         condition: service_healthy

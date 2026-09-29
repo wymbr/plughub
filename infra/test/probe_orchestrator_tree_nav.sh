@@ -44,6 +44,8 @@ set -u
 
 DIALOG="${PLUGHUB_DIALOG_URL:-http://localhost:3760}"
 TENANT="${PLUGHUB_TENANT_ID:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 FORM="${PLUGHUB_NAV_FORM:-dialog_navegacao_atendimento_v1}"
 RAIZ="$(cd "$(dirname "$0")/.." && pwd)/.."
 ENGINE="$RAIZ/packages/skill-flow-engine"
@@ -68,7 +70,7 @@ fi
 
 # ── A: a forma existe, está publicada e tem árvore ──────────────────────────
 printf '\033[1mA — a forma de navegacao esta publicada e TEM arvore\033[0m\n'
-BODY=$(curl -s "${DIALOG}/v1/dialog/forms/${FORM}?status=published" -H "x-tenant-id: ${TENANT}")
+BODY=$(curl -s "${DIALOG}/v1/dialog/forms/${FORM}?status=published" -H "x-tenant-id: ${TENANT}" -H "X-Service-Token: $DIALOG_SVC")
 ARV=$(printf '%s' "$BODY" | python3 -c '
 import sys, json
 try: d = json.load(sys.stdin)

@@ -27,7 +27,9 @@ const { buildRender, entryQuestionId, returnRefErrors } = await import(
 )
 
 const DIALOG = process.env.DIALOG_API_URL || "http://localhost:3760"
-const H = { "x-tenant-id": "tenant_demo" }
+// AUT-62 — a dialog-api fechou a leitura; lê como o runtime.
+const H = { "x-tenant-id": "tenant_demo",
+            "x-service-token": process.env.PLUGHUB_DIALOG_SERVICE_TOKEN || "changeme_dialog_service_token_demo" }
 
 const modo = process.argv[2]
 const arq  = process.argv[3]

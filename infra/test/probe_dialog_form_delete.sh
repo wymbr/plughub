@@ -48,6 +48,8 @@ set -uo pipefail
 DLG="${DIALOG_API:-http://localhost:3760}"
 CGW="${CHANNEL_GATEWAY:-http://localhost:8010}"
 TENANT="${TENANT:-tenant_demo}"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 DLG_TOKEN="${DIALOG_ADMIN_TOKEN:-demo_dialog_admin_token}"
 
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
@@ -64,7 +66,7 @@ status() { curl -s -o /dev/null -m 10 -w "%{http_code}" "$@" 2>/dev/null || echo
 body()   { curl -s -m 10 "$@" 2>/dev/null; }
 
 AUTHH=(-H "X-Admin-Token: $DLG_TOKEN")
-TENH=(-H "X-Tenant-ID: $TENANT")
+TENH=(-H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC")
 JSONH=(-H 'content-type: application/json')
 
 KEEP="dialog_probe_delete_v1"     # publicado → arquivável, nunca purgável (reusado)

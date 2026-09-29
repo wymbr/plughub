@@ -32,7 +32,8 @@ def get(u, h=None):
 
 
 def forma():
-    return get("%s/v1/dialog/forms/%s" % (DIALOG, FORM), {"x-tenant-id": "tenant_demo"})
+    return get("%s/v1/dialog/forms/%s" % (DIALOG, FORM), {"x-tenant-id": "tenant_demo",
+               "x-service-token": "changeme_dialog_service_token_demo"})  # AUT-62
 
 
 def folhas(no, trilha=()):

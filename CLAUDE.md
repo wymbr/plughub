@@ -1548,6 +1548,12 @@ o publicado num bloco `render`. Provisionamento `infra/dialog/*.json`, **seed-if
 - **O editor JSON é escape hatch e o VEREDICTO é do SERVIDOR** (`POST /api/dialog/preview`, mesma
   `buildRender`/`validateDialogForm` do `form_get`). Verificador fora do ar ⇒ *"não verificado"*,
   nunca verde. **Aplicar não grava.**
+- **O store exige credencial também na LEITURA** (AUT-62, 2026-09-29, decisão do dono): a leitura
+  aberta era declarada (*formulário não tem PII*), mas a borda publicava `/v1/dialog` e qualquer um
+  lia os formulários de todos os tenants. Runtime (mcp-server, gateway) lê por `X-Service-Token`,
+  nunca escreve; usuário lê o PRÓPRIO tenant sem campo específico (o Console renderiza para
+  operador); escrita = `config.dialog_forms`. Leitor novo monta o header em `dialogHeaders` /
+  `dialog_headers`, a casa de cada serviço.
 - **Invariante de build:** mexer no `MenuStepSchema` obriga a rebuildar `agent-registry`,
   `skill-flow-service` e `mcp-server` juntos, senão o registry rejeita o ref com 422.
 

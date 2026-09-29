@@ -48,6 +48,8 @@ set -uo pipefail
 
 COMPOSE="docker compose -f docker-compose.demo.yml"
 TENANT="tenant_demo"
+# AUT-62 — a dialog-api fechou a LEITURA; o probe lê como o runtime (porta de serviço).
+DIALOG_SVC="${PLUGHUB_DIALOG_SERVICE_TOKEN:-changeme_dialog_service_token_demo}"
 CG="http://localhost:8010"
 AUTH="${AUTH:-http://localhost:3202}"     # 3200 do host é o ai-gateway, não a auth-api
 DIALOG="http://localhost:3760"
@@ -97,7 +99,7 @@ echo "══ 1) os DialogForms estão publicados? ══"
 # em INCONCLUSIVO a cada primeira execução.
 NEED_SEED=""
 for F in dialog_limite_solicitacao dialog_limite_aprovacao; do
-  $CURL -f "$DIALOG/v1/dialog/forms/$F?status=published" -H "X-Tenant-ID: $TENANT" >/dev/null 2>&1 \
+  $CURL -f "$DIALOG/v1/dialog/forms/$F?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" >/dev/null 2>&1 \
     || NEED_SEED=1
 done
 if [ -n "$NEED_SEED" ]; then
@@ -105,7 +107,7 @@ if [ -n "$NEED_SEED" ]; then
   DIALOG_API="$DIALOG" TENANT="$TENANT" bash infra/test/seed_dialog_limite_forms.sh \
     || die "não consegui semear os forms — dialog-api em $DIALOG está no ar?"
   for F in dialog_limite_solicitacao dialog_limite_aprovacao; do
-    $CURL -f "$DIALOG/v1/dialog/forms/$F?status=published" -H "X-Tenant-ID: $TENANT" >/dev/null 2>&1 \
+    $CURL -f "$DIALOG/v1/dialog/forms/$F?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" >/dev/null 2>&1 \
       || die "form '$F' segue não publicado depois do seed"
   done
 fi
@@ -118,7 +120,7 @@ echo "══ 1a) o form de aprovação tem FIELDS (e não question nodes soltos)
 # `edits` a partir dos FIELDS e o payload de decisão não carrega `answers`.
 # Resultado ao vivo: "Novo limite: R$ " — vazio, com o smoke em 16/0.
 # Esta asserção é a ponte entre o contrato do form e o que o workflow lê.
-APROV=$($CURL "$DIALOG/v1/dialog/forms/dialog_limite_aprovacao?status=published" -H "X-Tenant-ID: $TENANT" 2>/dev/null)
+APROV=$($CURL "$DIALOG/v1/dialog/forms/dialog_limite_aprovacao?status=published" -H "X-Tenant-ID: $TENANT" -H "X-Service-Token: $DIALOG_SVC" 2>/dev/null)
 for F in limite_aprovado parecer; do
   echo "$APROV" | jq -e --arg f "$F" '[.. | objects | select(.fields?) | .fields[] | select(.id == $f)] | length > 0' >/dev/null 2>&1 \
     || die "o form publicado NÃO expõe o field '$F' em fields[]. O aprovador digitaria e o
