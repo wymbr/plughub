@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (8) — AUD-06: a eliminação do titular — anonimiza em todas as lojas do dossiê e mantém a métrica
+
+**O que faltava:** o titular podia pedir o dossiê de acesso (AUD-03), mas não a eliminação (LGPD
+art. 18, VI).
+
+**Decisões do dono.** Em 2026-09-29: anonimizar e manter a linha de métrica, executado por quem tem
+`audit.data_requests` em escrita, sem segunda aprovação, com prévia e trilha, e percorrendo as
+mesmas lojas do dossiê. Em 2026-09-30, na implementação: **o veto de contato sobrevive.** Ele mora
+no cadastro de identidade junto das âncoras, e apagar tudo faria um mailing futuro com o mesmo
+telefone voltar a contatar quem pediu para não ser contatado. Fica uma lápide: só
+`{"do_not_contact": true}` e os hashes salgados das âncoras. Sem veto, nada fica.
+
+**A rota:** `POST /v1/audit/data-requests/erasure` na analytics-api, com o mesmo corpo do dossiê
+mais `confirm`.
+- `confirm=false` é a PRÉVIA: contagens por loja, nunca o conteúdo, e diz se o veto será mantido;
+- `confirm=true` executa.
+
+As duas gravam em `audit_access_log` (`erasure_preview` / `erasure`, com `denied`, `ok`, `partial` ou
+`not_found`). O grau `read_write` de `audit.data_requests` entrou no catálogo com esta ficha, e ler o
+dossiê continua pedindo só `read_only`.
+
+**O que sai, loja a loja** (marcador `erased:<id do pedido>`; tabela completa em
+`docs/arcos/audit-lgpd.md` § Phase 4):
+- **ClickHouse**: `sessions.customer_id` e `ani`, o texto de TODAS as mensagens (o atendente repete
+  endereço e documento), o `author_id` do cliente, `contact_insights.value` e
+  `session_timeline.payload`. As mutações rodam com `mutations_sync=2` e são contadas antes, porque
+  mutação não devolve contagem;
+- **cadastro de identidade** (channel-gateway, `…/identity/subject-erase`): atributos, refs
+  externas, fusões, âncoras no Postgres e no índice Redis, prospect e pendências, com a lápide do
+  veto quando havia;
+- **anexos e gravações**: `deleted_at` agora (o serving responde 410) e o nome original vira
+  marcador. O arquivo sai pelo ciclo `attachment-expiry` depois da carência, para não haver dois
+  apagadores de arquivo com regras diferentes;
+- **outbound** (mailing-api, `/v1/data-subject/erase`): contatos e metadado das entradas, que viram
+  `invalid` e não podem ser drenadas de novo; o `customer_id` do log de contato. As entregas ficam;
+- **pesquisas** (evaluation-api, `…/surveys/erase`): texto livre, verbatims, referências de áudio e
+  transcrição. A nota fica.
+
+**Regras que a implementação fixou:**
+- **nenhuma loja além das do dossiê.** O que ele não cobre (`not_covered`) a eliminação também não
+  alcança, e a resposta diz isso. Estender as duas juntas é a nova `AUD-09`;
+- **sem o teto do dossiê.** A eliminação busca todas as sessões; o dossiê para em 500;
+- **loja que falha sai nomeada** em `failed_stores`: resposta 207 e `partial` na trilha. O cadastro de
+  identidade é o último a sair, porque é ele que liga o telefone à pessoa, e sem isso uma repetição
+  do pedido ficaria cega.
+
+**O que a prova ao vivo achou:** o titular recém-provisionado é um **prospect**, que só existe no
+Redis. O caminho pelo cadastro durável o dava como `not_found`, e o telefone e o e-mail (hash)
+continuariam resolvendo para ele até o TTL de 30 dias. O dossiê de acesso tinha o mesmo ponto cego.
+Agora a eliminação varre o índice do tenant atrás das âncoras dele, e o export devolve o registro do
+prospect.
+
+**Medido ao vivo** com dois titulares sintéticos em todas as lojas: A (prospect, sem veto) e B
+(importado pela porta oficial, com veto):
+- `read_only` tentando eliminar: 403;
+- a prévia contou 1 sessão, 2 mensagens, 1 insight, 1 anexo, 1 entrada e 1 log de outbound, 1
+  pesquisa;
+- depois da execução:
+  - o telefone de A não resolve mais;
+  - o de B resolve para a lápide, que tem só o veto;
+  - sessões, mensagens e insights ficaram com o marcador e `[erased]`, e o `ani` nulo;
+  - as entradas de outbound estão vazias e `invalid`;
+  - a pesquisa sem texto mantém o NPS 9;
+  - os anexos estão marcados como apagados;
+  - a trilha tem a recusa, a prévia e as duas execuções;
+- a checagem separada de um prospect viu o dossiê e a prévia com `status: prospect`.
+
+Os dados sintéticos foram removidos. As linhas de trilha dos testes ficam (`actor_sub =
+dpo-aud06-probe`), porque a trilha é imutável.
+
+**Instrumentos:**
+- suítes: analytics 875 (9 novos: portão em escrita, prévia que não toca, marcador, 207, mutações
+  escopadas e com aspas escapadas, loja que falha nomeada, identidade por último), channel-gateway
+  1461 (3 do prospect), mailing 37, evaluation 257;
+- contraprova no módulo instalado, cada uma com o seu vermelho:
+  - portão de volta a leitura;
+  - prévia que executa;
+  - filtro de autor removido;
+  - mutação sem tenant;
+  - loja que falha escondida;
+  - prospect apagando a âncora de outra pessoa.
+
 ## 2026-09-30 (7) — AUD-07: retenção por classe de dado, e o texto desmascarado deixa de ficar para sempre
 
 **O defeito da ficha:** as lojas de dado pessoal não tinham prazo. O caso mais grave era o

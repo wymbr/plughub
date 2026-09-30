@@ -620,9 +620,11 @@ modules:
       # decidiu para os campos adiados. Hoje só o ACESSO existe, então `read_only`
       # basta; `read_write` entra com a eliminação, e não antes — grau sem portão vivo
       # é promessa sem mecanismo. Sem `role_defaults`: ninguém nasce DPO.
+      # AUD-06 (2026-09-30): `read_write` entrou com a ELIMINAÇÃO do titular — read_only
+      # monta o dossiê de acesso; read_write também apaga (anonimiza), com prévia e trilha.
       data_requests:
-        label: Pedidos do titular (acesso aos dados de uma pessoa)
-        domain: [none, read_only]
+        label: Pedidos do titular (acesso; em escrita, eliminação)
+        domain: [none, read_only, read_write]
         scopable: false
         default: none
 

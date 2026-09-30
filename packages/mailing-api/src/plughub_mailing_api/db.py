@@ -127,6 +127,51 @@ _DDL_DELIVERIES_IDX = (
     "ON outbound.campaign_deliveries (campaign_id, created_at DESC)"
 )
 
+async def db_subject_erase(
+    pool: asyncpg.Pool, tenant_id: str, customer_ids: list[str], contact_values: list[str],
+    marker: str,
+) -> dict:
+    """AUD-06 — eliminação do titular no outbound: ANONIMIZA e mantém a linha de métrica.
+
+    Casa pela MESMA regra do `db_subject_export` (customer_id OU valor de contato). Nas
+    entradas de mailing, contatos e metadado (os dados em claro) saem, o `customer_id`
+    vira o marcador e o status vira `invalid` — sem contato, a entrada não pode ser
+    drenada de novo. No log de contato o `customer_id` vira o marcador. As ENTREGAS ficam
+    como estão: são o fato da campanha (resultado, tentativas), sem dado da pessoa.
+    """
+    ids = [c for c in customer_ids if c]
+    vals = [v for v in contact_values if v]
+    if not ids and not vals:
+        return {"entries_anonymized": 0, "contact_log_anonymized": 0}
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            entries = await conn.execute(
+                """
+                UPDATE outbound.mailing_entries e
+                   SET contacts = '{}'::jsonb, metadata = '{}'::jsonb,
+                       customer_id = $4, status = 'invalid', updated_at = now()
+                 WHERE e.tenant_id = $1
+                   AND (e.customer_id = ANY($2::text[])
+                        OR EXISTS (SELECT 1 FROM jsonb_each_text(e.contacts) kv
+                                   WHERE kv.value = ANY($3::text[])))
+                """,
+                tenant_id, ids, vals, marker,
+            )
+            log = await conn.execute(
+                "UPDATE outbound.contact_log SET customer_id = $3 "
+                "WHERE tenant_id = $1 AND customer_id = ANY($2::text[])",
+                tenant_id, ids, marker,
+            ) if ids else "UPDATE 0"
+
+    def _n(st: str) -> int:
+        try:
+            return int(str(st).rsplit(" ", 1)[-1])
+        except (TypeError, ValueError):
+            return 0
+
+    return {"entries_anonymized": _n(entries), "contact_log_anonymized": _n(log)}
+
+
 # ── Fase 2 — contact governance (fact × rule) ─────────────────────────────────
 
 _DDL_CONTACT_LOG = """

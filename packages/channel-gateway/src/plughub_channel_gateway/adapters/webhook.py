@@ -2903,8 +2903,14 @@ class WebhookAdapter(ChannelAdapter):
         return {"count": len(results), "results": results}
 
     async def subject_record(self, tenant_id: str, customer_id: str) -> dict | None:
-        """AUD-03 — registro de identidade do titular (ver `IdentityIndex.subject_record`)."""
-        return await self._identity.subject_record(tenant_id, customer_id)
+        """AUD-03 — registro de identidade do titular (ver `IdentityIndex.subject_record`).
+        Cai no PROSPECT (só Redis) quando não há cadastro durável — AUD-06."""
+        return (await self._identity.subject_record(tenant_id, customer_id)
+                or await self._identity.prospect_record(tenant_id, customer_id))
+
+    async def erase_subject(self, tenant_id: str, customer_id: str) -> dict:
+        """AUD-06 — eliminação do titular no cadastro (ver `IdentityIndex.erase_subject`)."""
+        return await self._identity.erase_subject(tenant_id, customer_id)
 
     async def get_customer(self, tenant_id: str, customer_id: str) -> dict | None:
         """Read puro de um cliente por id (cadastro §11). Usado pelo outbound (Fase 3b)

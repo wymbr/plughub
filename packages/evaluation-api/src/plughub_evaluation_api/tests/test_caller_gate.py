@@ -193,3 +193,23 @@ async def test_aud03_data_subject_surveys_is_service_only(app):
     assert r.status_code == 200, r.text
     assert r.json() == {"surveys": [{"instance_id": "i1"}]}
     assert db.await_args.kwargs["customer_keys"] == ["cus_1"]
+
+
+@pytest.mark.asyncio
+async def test_aud06_data_subject_surveys_erase_is_service_only(app):
+    """AUD-06: apagar o texto livre de UMA pessoa é da analytics-api (DPO em escrita)."""
+    body = {"tenant_id": "t1", "customer_keys": ["cus_1"], "session_ids": ["s1"], "marker": "erased:abc"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/v1/evaluation/data-subject/surveys/erase", json=body,
+                         headers=_tok(report="read_write", formularios="read_write"))
+        assert r.status_code == 401, r.text
+        with patch("plughub_evaluation_api.db.survey_subject_erase",
+                   new=AsyncMock(return_value={"instances_anonymized": 1, "responses_anonymized": 1})) as db:
+            bad = await c.post("/v1/evaluation/data-subject/surveys/erase",
+                               json={**body, "marker": "x"}, headers={"X-Service-Token": _SVC})
+            r = await c.post("/v1/evaluation/data-subject/surveys/erase", json=body,
+                             headers={"X-Service-Token": _SVC})
+    assert bad.status_code == 422
+    assert r.status_code == 200, r.text
+    assert db.await_args.kwargs["marker"] == "erased:abc"
+    assert db.await_args.kwargs["session_ids"] == ["s1"]

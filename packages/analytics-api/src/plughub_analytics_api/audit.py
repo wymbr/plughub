@@ -10,6 +10,10 @@ Routes (all prefixed /v1/audit):
   POST /v1/audit/data-requests/access
       Dossiê de acesso do titular (AUD-03). ABAC gate: module_config.audit.data_requests.
 
+  POST /v1/audit/data-requests/erasure
+      Eliminação do titular (AUD-06): `confirm=false` é a prévia, `confirm=true` executa.
+      ABAC gate: module_config.audit.data_requests em read_write.
+
   GET /v1/audit/mcp-calls
       Returns MCP tool call audit records for a tenant.
       Auth: Bearer JWT (auth-api HS256) — ABAC gate: module_config.audit.mcp_calls
@@ -152,7 +156,8 @@ class AuditDenied(Exception):
         self.tenant_id = tenant_id
 
 
-def _check_audit_access(request: Request, field: str) -> tuple[str, str, str]:
+def _check_audit_access(request: Request, field: str,
+                        min_access: str = "read_only") -> tuple[str, str, str]:
     """
     Portão de `/v1/audit/*`. Devolve `(actor_sub, actor_kind, tenant_id)` ou levanta
     `AuditDenied`.
@@ -168,7 +173,8 @@ def _check_audit_access(request: Request, field: str) -> tuple[str, str, str]:
          503 e não 401 porque a falha é do SERVIÇO: mandar o chamador arrumar o
          token dele seria apontar para o lugar errado.
       3. credencial ausente ou não verificável → **RECUSA (401)**.
-      4. `module_config.audit.<field>` ≥ read_only → LIBERA.
+      4. `module_config.audit.<field>` ≥ `min_access` → LIBERA. (`read_write` só na
+         eliminação do titular, AUD-06; toda outra rota lê.)
       5. caso contrário → **RECUSA (403)**, nomeando quem foi barrado.
     """
     from .config import get_settings
@@ -185,9 +191,9 @@ def _check_audit_access(request: Request, field: str) -> tuple[str, str, str]:
     actor_sub, actor_kind, claims = _audit_actor(request)
     if actor_kind == "anonymous":
         raise AuditDenied("credencial ausente ou não verificável", status=401)
-    if not abac_can(claims, "audit", field, "read_only"):
+    if not abac_can(claims, "audit", field, min_access):
         raise AuditDenied(
-            f"sem module_config.audit.{field}",
+            f"sem module_config.audit.{field} ({min_access})",
             status=403, actor_sub=actor_sub, actor_kind=actor_kind,
             tenant_id=str(claims.get("tenant_id") or ""),
         )
@@ -563,3 +569,114 @@ async def audit_data_subject_access(request: Request):
         row_count=dossier["sessions"]["count"],
     )
     return JSONResponse(content=dossier)
+
+
+# ── POST /v1/audit/data-requests/erasure — AUD-06 ─────────────────────────────
+
+class DataSubjectErasureRequest(DataSubjectAccessRequest):
+    """Mesmo titular do dossiê, mais a confirmação. Sem `confirm: true` a rota só mostra a
+    PRÉVIA — contagens por loja — e não toca em nada."""
+    confirm: bool = False
+
+
+@router.post(
+    "/data-requests/erasure",
+    openapi_extra={"requestBody": {"required": False, "content": {"application/json": {
+        "schema": DataSubjectErasureRequest.model_json_schema()}}}},
+)
+async def audit_data_subject_erasure(request: Request):
+    """
+    ELIMINAÇÃO do titular (LGPD art. 18, VI) — anonimiza e mantém a linha de métrica.
+    Ver `data_subject.execute_erasure`.
+
+    Gate: `module_config.audit.data_requests` em **read_write** (o grau entrou com esta
+    ficha; ler o dossiê continua pedindo só read_only). Sem segunda aprovação, por decisão
+    do dono; a salvaguarda é a PRÉVIA (`confirm=false`) e a trilha. Toda chamada, aceita ou
+    recusada, grava em `audit_access_log` — a trilha fica de fora da eliminação, é
+    obrigação própria. Mesma regra do dossiê para o `target_id`: nunca telefone ou e-mail.
+    """
+    import uuid
+
+    from .config import get_settings
+    from .data_subject import build_access_dossier, erasure_preview, execute_erasure
+
+    try:
+        raw = await request.json()
+    except ValueError:
+        raw = None
+    try:
+        body = DataSubjectErasureRequest.model_validate(raw if isinstance(raw, dict) else {})
+        body_ok = raw is None or isinstance(raw, dict)
+    except ValidationError:
+        body, body_ok = DataSubjectErasureRequest(), False
+    anchors = [{"kind": k, "value": v.strip()}
+               for k, v in (("phone", body.phone), ("email", body.email), ("cpf", body.cpf))
+               if v and v.strip()]
+    target = body.customer_id or ("anchors:" + ",".join(a["kind"] for a in anchors))
+    endpoint = "audit.data_requests.erasure" if body.confirm else "audit.data_requests.erasure_preview"
+    try:
+        actor_sub, actor_kind, claims_tenant = _check_audit_access(
+            request, "data_requests", "read_write")
+    except AuditDenied as denied:
+        await _record_access(
+            request, tenant_id=denied.tenant_id or body.tenant_id,
+            actor_sub=denied.actor_sub, actor_kind=denied.actor_kind,
+            endpoint=endpoint, target_kind="data_subject",
+            target_id=target, result="denied", row_count=0,
+        )
+        return JSONResponse(status_code=denied.status, content={"detail": str(denied)})
+
+    if not body_ok:
+        return JSONResponse(status_code=422, content={"detail": "corpo invalido"})
+    effective_tenant = claims_tenant or body.tenant_id
+    if claims_tenant and body.tenant_id and body.tenant_id != claims_tenant:
+        await _record_access(
+            request, tenant_id=claims_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
+            endpoint=endpoint, target_kind="data_subject",
+            target_id=target, result="denied", row_count=0,
+        )
+        return JSONResponse(status_code=403, content={"detail": "tenant_mismatch"})
+    if not effective_tenant:
+        return JSONResponse(status_code=422, content={"detail": "tenant_id obrigatorio"})
+    if not body.customer_id and not anchors:
+        return JSONResponse(status_code=422,
+                            content={"detail": "informe customer_id, phone, email ou cpf"})
+
+    settings = get_settings()
+    dossier = await build_access_dossier(
+        settings, _store(request), effective_tenant,
+        customer_id=body.customer_id.strip(), anchors=anchors,
+    )
+    ids = dossier.get("customer_ids") or []
+    trail_target = ids[0] if ids else target
+
+    if not body.confirm:
+        preview = erasure_preview(dossier)
+        await _record_access(
+            request, tenant_id=effective_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
+            endpoint=endpoint, target_kind="data_subject", target_id=trail_target,
+            result="ok", row_count=preview["sessions"]["count"],
+        )
+        return JSONResponse(content={"mode": "preview", **preview})
+
+    if not ids and dossier["sessions"]["count"] == 0:
+        await _record_access(
+            request, tenant_id=effective_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
+            endpoint=endpoint, target_kind="data_subject", target_id=trail_target,
+            result="not_found", row_count=0,
+        )
+        return JSONResponse(status_code=404, content={"detail": "titular nao encontrado em loja nenhuma"})
+
+    marker = "erased:" + uuid.uuid4().hex[:16]
+    outcome = await execute_erasure(settings, _store(request), effective_tenant, dossier,
+                                    anchors, marker)
+    await _record_access(
+        request, tenant_id=effective_tenant, actor_sub=actor_sub, actor_kind=actor_kind,
+        endpoint=endpoint, target_kind="data_subject", target_id=trail_target,
+        result="ok" if outcome["complete"] else "partial",
+        row_count=int(outcome["clickhouse"].get("sessions_found") or 0),
+    )
+    logger.info("data_subject ERASE tenant=%s actor=%s marker=%s completa=%s",
+                effective_tenant, actor_sub, marker, outcome["complete"])
+    return JSONResponse(status_code=200 if outcome["complete"] else 207,
+                        content={"mode": "executed", **outcome})

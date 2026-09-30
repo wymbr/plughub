@@ -834,6 +834,55 @@ async def survey_subject_export(
     return _rows(rows)
 
 
+async def survey_subject_erase(
+    pool: asyncpg.Pool, *, tenant_id: str, customer_keys: list[str], session_ids: list[str],
+    marker: str,
+) -> dict[str, int]:
+    """AUD-06 — eliminação do titular nas pesquisas: ANONIMIZA e mantém a nota.
+
+    Casa pela MESMA regra do `survey_subject_export`. Saem o texto livre, os verbatims e as
+    referências de áudio e transcrição (o que torna a resposta dado pessoal); a
+    `customer_key` da instância vira o marcador. Ficam os `signals` (a nota), o canal e as
+    datas: relatório de NPS/CSAT passado não muda.
+    """
+    keys = [k for k in customer_keys if k]
+    sids = [s for s in session_ids if s]
+    if not keys and not sids:
+        return {"instances_anonymized": 0, "responses_anonymized": 0}
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            inst = await conn.fetch(
+                """SELECT instance_id FROM survey.survey_instance
+                    WHERE tenant_id = $1
+                      AND (customer_key = ANY($2::text[]) OR origin_session_id = ANY($3::text[]))""",
+                tenant_id, keys, sids,
+            )
+            ids = [r["instance_id"] for r in inst]
+            if not ids:
+                return {"instances_anonymized": 0, "responses_anonymized": 0}
+            st_i = await conn.execute(
+                "UPDATE survey.survey_instance SET customer_key = $3 "
+                "WHERE tenant_id = $1 AND instance_id = ANY($2::text[]) AND customer_key IS NOT NULL",
+                tenant_id, ids, marker,
+            )
+            st_r = await conn.execute(
+                """UPDATE survey.survey_response
+                      SET open_text = NULL, verbatims = '[]'::jsonb,
+                          audio_ref = NULL, transcript_ref = NULL
+                    WHERE tenant_id = $1 AND instance_id = ANY($2::text[])""",
+                tenant_id, ids,
+            )
+
+    def _n(st: str) -> int:
+        try:
+            return int(str(st).rsplit(" ", 1)[-1])
+        except (TypeError, ValueError):
+            return 0
+
+    return {"instances_anonymized": _n(st_i), "responses_anonymized": _n(st_r),
+            "instances_matched": len(ids)}
+
+
 async def list_survey_responses(
     pool: asyncpg.Pool,
     *,

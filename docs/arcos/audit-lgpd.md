@@ -19,7 +19,7 @@ Defined in `infra/modules.yaml` under the `audit` module key. Five fields:
 | `sessions` | read_only | View session messages (masked) + immutable access log |
 | `mcp_calls` | read_only | View MCP tool calls with masked input fields |
 | `user_access` | read_only | Authentication logs and refresh token rotation *(stub)* |
-| `data_requests` | read_only | Dossiê de acesso do titular (AUD-03); `read_write` entra com a eliminação (AUD-06) |
+| `data_requests` | read_only / read_write | `read_only`: dossiê de acesso do titular (AUD-03) · `read_write`: também a eliminação (AUD-06) |
 | `config_snapshot` | read_only | Active masking rules and retention policies *(stub)* |
 
 The `PermissionChecker` (platform-ui) and `_check_audit_field` (analytics-api) both use the same `_ACCESS_ORDER` map:
@@ -152,11 +152,39 @@ lojas que o dossiê ainda não percorre (stream durável do Postgres, estado de 
 Redis, Kafka). A trilha grava o `customer_id` — ou só os TIPOS de identificador —, nunca o telefone
 ou o e-mail. Tela: aba *Req. de Dados* em `/audit`, com download do JSON.
 
-**Eliminação — `AUD-06`.** Anonimizar e manter a linha de métrica (decisão do dono); executa quem
-tiver `data_requests` em `read_write`, sem segunda aprovação. Percorre as mesmas lojas.
+**Eliminação — feita em 2026-09-30 (AUD-06).** `POST /v1/audit/data-requests/erasure` (gate
+`audit.data_requests` em **`read_write`**; ler o dossiê segue pedindo só `read_only`). `confirm=false`
+devolve a PRÉVIA (contagens por loja, nunca o conteúdo); `confirm=true` executa. Sem segunda
+aprovação (decisão do dono): a salvaguarda é a prévia e a trilha. Anonimiza e mantém a linha de
+métrica; o que era identificador vira o marcador `erased:<id do pedido>`:
 
-**Retenção — `AUD-07`.** Lojas com dado pessoal e sem TTL, a começar pelo `session_stream_events`,
-que guarda `original_content` desmascarado.
+| Loja | Sai / vira marcador | Fica |
+|---|---|---|
+| ClickHouse `sessions` | `customer_id` → marcador, `ani` → nulo | canal, pool, datas, desfecho, durações |
+| ClickHouse `messages` | texto de TODAS as mensagens → `[erased]`; `author_id` do cliente → marcador | papel, canal, horário |
+| ClickHouse `contact_insights` · `session_timeline` | valor · payload | tipo, categoria, horário |
+| cadastro de identidade | atributos, refs externas, fusões, âncoras (Postgres e índice Redis), prospect, pendências | **o veto de contato**, se havia: lápide com só `{"do_not_contact": true}` e as âncoras (hash salgado) |
+| anexos e gravações | nome original; `deleted_at` agora (serving 410) | o blob sai pelo ciclo `attachment-expiry` depois da carência |
+| outbound | contatos, metadado; `customer_id` → marcador; entrada vira `invalid` | as entregas (resultado, tentativas) |
+| pesquisas | texto livre, verbatims, refs de áudio e transcrição; `customer_key` → marcador | a nota (`signals`) |
+
+As lojas donas ganharam rota de eliminação **só de serviço**, gêmea da de export:
+`…/identity/subject-erase` · `POST /v1/data-subject/erase` · `POST /v1/evaluation/data-subject/surveys/erase`.
+
+Regras que a implementação fixou:
+- **mesmas lojas do dossiê, nenhuma além**: o que o dossiê não olha (`not_covered`) a eliminação
+  também não alcança, e a resposta diz isso. A extensão das duas é a `AUD-09`;
+- **sem o teto do dossiê**: a eliminação busca TODAS as sessões da pessoa (o dossiê para em 500);
+- **loja que falha sai nomeada** em `failed_stores`, a resposta é **207** e a trilha grava `partial`.
+  Repetir o pedido é seguro: o cadastro de identidade é o ÚLTIMO a sair, porque é ele que liga o
+  telefone à pessoa;
+- **mutação do ClickHouse com `mutations_sync=2`**, contada antes (mutação não devolve contagem);
+- **prospect** (cliente que só existe no Redis) é eliminado pelo índice — achado na prova ao vivo,
+  junto com o dossiê que o dava como `not_found`;
+- a trilha (`audit_access_log`) fica fora da eliminação: é obrigação própria.
+
+**Retenção — `AUD-07` (feita) e `AUD-08`.** Política por classe no namespace `retention`; a
+primeira classe expurgada é o `original_content`.
 
 ### Phase 5 — config_snapshot
 

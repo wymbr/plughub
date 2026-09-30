@@ -320,6 +320,36 @@ async def list_for_subject(db, *, tenant_id: str, session_ids: list[str]) -> lis
     ]
 
 
+async def erase_for_subject(db, *, tenant_id: str, session_ids: list[str]) -> dict:
+    """AUD-06 — eliminação dos anexos e gravações das sessões do titular.
+
+    Marca `deleted_at` AGORA (o serving passa a responder 410 na hora) e troca o nome
+    original, que é texto do cliente, por marcador. O blob sai pelo ciclo que já existe
+    (`attachment-expiry`, estágio 2), depois da carência — o mesmo caminho da expiração,
+    para não haver dois apagadores de arquivo com regras diferentes. A resposta diz isso:
+    `blobs_pending` é quanto ainda está em disco esperando a carência.
+    """
+    if not session_ids:
+        return {"marked_deleted": 0, "blobs_pending": 0}
+    async with db.acquire() as conn:
+        marked = await conn.execute(
+            """
+            UPDATE session_attachments
+            SET    deleted_at    = COALESCE(deleted_at, NOW()),
+                   expires_at    = LEAST(expires_at, NOW()),
+                   original_name = '[erased]'
+            WHERE  tenant_id = $1 AND session_id = ANY($2::text[])
+            """,
+            tenant_id, session_ids,
+        )
+        pending = await conn.fetchval(
+            "SELECT count(*) FROM session_attachments "
+            "WHERE tenant_id = $1 AND session_id = ANY($2::text[]) AND file_path IS NOT NULL",
+            tenant_id, session_ids,
+        )
+    return {"marked_deleted": _rowcount(marked), "blobs_pending": int(pending or 0)}
+
+
 async def _list_session(db, serving_url: str, *, tenant_id: str, session_id: str,
                         artifact_class: str) -> list["AttachmentMeta"]:
     async with db.acquire() as conn:

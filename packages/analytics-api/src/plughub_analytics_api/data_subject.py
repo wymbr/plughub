@@ -272,3 +272,203 @@ async def build_access_dossier(settings: Any, store: Any, tenant_id: str, *,
     dossier["outbound"] = mail
     dossier["surveys"] = {"status": surv["status"], "items": surv["surveys"]}
     return dossier
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUD-06 — ELIMINAÇÃO do titular (LGPD art. 18, VI)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Decisão do dono (2026-09-29): ANONIMIZAR e manter a linha de métrica. Conteúdo e
+# identificadores saem ou viram um MARCADOR (`erased:<id do pedido>`); durações, desfechos
+# e notas ficam, sem ligação com a pessoa — relatório passado não muda.
+#
+# Percorre as MESMAS lojas do dossiê de acesso, e nenhuma além: o que o dossiê não olha
+# (`NOT_COVERED`) a eliminação também não alcança, e a resposta diz isso. Duas listas
+# diferentes fariam o DPO acreditar que apagou o que nunca foi encontrado.
+#
+# Dois modos na mesma rota: `confirm=false` é a PRÉVIA (o que seria apagado, por loja);
+# `confirm=true` executa. Sem segunda aprovação, por decisão do dono.
+
+ERASED_TEXT = "[erased]"
+
+
+def _q(v: str) -> str:
+    """Literal de string do ClickHouse. As mutações (`ALTER … UPDATE`) são montadas com
+    literais porque o texto da mutação fica gravado e é reexecutado por parte; os valores
+    aqui são ids e o marcador, nunca texto livre do titular."""
+    return "'" + str(v).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _in(values: list[str]) -> str:
+    return "(" + ",".join(_q(v) for v in values) + ")"
+
+
+def fetch_all_session_ids(client: Any, db: str, tenant_id: str, keys: list[str]) -> list[str]:
+    """Todas as sessões da pessoa — SEM o teto do dossiê: apagar 500 de 700 é afirmar ao
+    titular uma eliminação que não aconteceu."""
+    rows = client.query(
+        f"SELECT DISTINCT session_id FROM {db}.sessions FINAL "
+        f"WHERE tenant_id = {{t:String}} AND customer_id IN {{ids:Array(String)}}",
+        parameters={"t": tenant_id, "ids": keys},
+    ).result_rows
+    return [r[0] for r in rows]
+
+
+_CH_TABLES = (("sessions", "sessions"), ("messages", "messages"),
+              ("insights", "contact_insights"), ("timeline", "session_timeline"))
+
+
+def erase_clickhouse(client: Any, db: str, tenant_id: str, session_ids: list[str],
+                     marker: str) -> dict:
+    """Anonimiza, nas sessões da pessoa: `sessions` (customer_id → marcador, ani → nulo),
+    `messages` (texto de TODAS as mensagens — o atendente repete endereço e documento —,
+    e o `author_id` do cliente), `contact_insights` (valor) e `session_timeline` (payload).
+    Conta ANTES de mutar, porque mutação não devolve contagem; `mutations_sync=2` faz a
+    resposta só voltar depois de aplicada em todas as réplicas."""
+    if not session_ids:
+        return {k: 0 for k, _ in _CH_TABLES}
+    t, s, m = _q(tenant_id), _in(session_ids), _q(marker)
+    where = f"tenant_id = {t} AND session_id IN {s}"
+    counts = {}
+    for key, tbl in _CH_TABLES:
+        counts[key] = int(client.query(f"SELECT count() FROM {db}.{tbl} WHERE {where}").result_rows[0][0])
+    sync = {"mutations_sync": 2}
+    client.command(f"ALTER TABLE {db}.sessions UPDATE customer_id = {m}, ani = NULL WHERE {where}",
+                   settings=sync)
+    client.command(f"ALTER TABLE {db}.messages UPDATE content = {_q(ERASED_TEXT)} WHERE {where}",
+                   settings=sync)
+    client.command(f"ALTER TABLE {db}.messages UPDATE author_id = {m} "
+                   f"WHERE {where} AND author_role = 'customer'", settings=sync)
+    client.command(f"ALTER TABLE {db}.contact_insights UPDATE value = {_q(ERASED_TEXT)} WHERE {where}",
+                   settings=sync)
+    client.command(f"ALTER TABLE {db}.session_timeline UPDATE payload = '{{}}' WHERE {where}",
+                   settings=sync)
+    return counts
+
+
+async def gateway_erase(settings: Any, tenant_id: str, customer_id: str,
+                        session_ids: list[str]) -> dict:
+    if not settings.channel_gateway_url or not settings.channel_gateway_service_token:
+        why = _unavailable("channel-gateway", "PLUGHUB_CHANNEL_GATEWAY_URL/SERVICE_TOKEN not set")
+        return {"identity_status": why, "attachments_status": why}
+    try:
+        code, data = await _post(
+            f"{settings.channel_gateway_url}/v1/channels/webhook/identity/subject-erase",
+            settings.channel_gateway_service_token,
+            {"tenant_id": tenant_id, "customer_id": customer_id, "session_ids": session_ids},
+            timeout=60.0,
+        )
+    except Exception as exc:
+        code, data = 0, exc
+    if code != 200 or not isinstance(data, dict):
+        why = _unavailable("channel-gateway", f"HTTP {code}: {data}")
+        return {"identity_status": why, "attachments_status": why}
+    return data
+
+
+async def mailing_erase(settings: Any, tenant_id: str, customer_ids: list[str],
+                        contact_values: list[str], marker: str) -> dict:
+    if not settings.mailing_api_url or not settings.mailing_service_token:
+        return {"status": _unavailable("mailing-api", "PLUGHUB_MAILING_API_URL/SERVICE_TOKEN not set")}
+    try:
+        code, data = await _post(
+            f"{settings.mailing_api_url}/v1/data-subject/erase",
+            settings.mailing_service_token,
+            {"customer_ids": customer_ids, "contact_values": contact_values, "marker": marker},
+            headers={"X-Tenant-ID": tenant_id}, timeout=60.0,
+        )
+    except Exception as exc:
+        return {"status": _unavailable("mailing-api", exc)}
+    if code != 200 or not isinstance(data, dict):
+        return {"status": _unavailable("mailing-api", f"HTTP {code}: {data}")}
+    return {"status": "ok", **data}
+
+
+async def survey_erase(settings: Any, tenant_id: str, customer_ids: list[str],
+                       session_ids: list[str], marker: str) -> dict:
+    if not settings.evaluation_api_url or not settings.evaluation_service_token:
+        return {"status": _unavailable("evaluation-api", "PLUGHUB_EVALUATION_API_URL/SERVICE_TOKEN not set")}
+    try:
+        code, data = await _post(
+            f"{settings.evaluation_api_url}/v1/evaluation/data-subject/surveys/erase",
+            settings.evaluation_service_token,
+            {"tenant_id": tenant_id, "customer_keys": customer_ids, "session_ids": session_ids,
+             "marker": marker},
+            timeout=60.0,
+        )
+    except Exception as exc:
+        return {"status": _unavailable("evaluation-api", exc)}
+    if code != 200 or not isinstance(data, dict):
+        return {"status": _unavailable("evaluation-api", f"HTTP {code}: {data}")}
+    return {"status": "ok", **data}
+
+
+def erasure_preview(dossier: dict) -> dict:
+    """O que a eliminação alcançaria, por loja — contagens, nunca o conteúdo: a prévia
+    serve para decidir, e repetir o dossiê aqui seria uma segunda porta de acesso."""
+    rec = (dossier.get("identity") or {}).get("record") or {}
+    attrs = rec.get("attributes") or {}
+    out_b = dossier.get("outbound") or {}
+    return {
+        "customer_ids": dossier.get("customer_ids") or [],
+        "identity": {"status": (dossier.get("identity") or {}).get("status"),
+                     "found": bool(rec),
+                     "veto_kept": bool(attrs.get("do_not_contact") is True)},
+        "sessions": {"status": dossier["sessions"]["status"], "count": dossier["sessions"]["count"],
+                     "truncated": dossier["sessions"]["truncated"]},
+        "messages": {"status": dossier["messages"]["status"], "count": len(dossier["messages"]["items"])},
+        "insights": {"status": dossier["insights"]["status"], "count": len(dossier["insights"]["items"])},
+        "attachments": {"status": dossier["attachments"]["status"],
+                        "count": len(dossier["attachments"]["items"])},
+        "outbound": {"status": out_b.get("status"),
+                     "entries": len(out_b.get("entries") or []),
+                     "contact_log": len(out_b.get("contact_log") or [])},
+        "surveys": {"status": dossier["surveys"]["status"], "count": len(dossier["surveys"]["items"])},
+        "not_covered": NOT_COVERED,
+    }
+
+
+async def execute_erasure(settings: Any, store: Any, tenant_id: str, dossier: dict,
+                          anchors: list[dict], marker: str) -> dict:
+    """Executa a eliminação sobre as pessoas e sessões que o dossiê achou.
+
+    Ordem: primeiro os ids e TODAS as sessões (sem teto); depois cada loja. O cadastro de
+    identidade vai por ÚLTIMO porque é ele que liga telefone a cliente — apagá-lo antes
+    cegaria uma nova tentativa, se uma loja falhar e o DPO repetir o pedido."""
+    ids = dossier.get("customer_ids") or []
+    contact_values = [a["value"] for a in anchors if a.get("kind") in ("phone", "email")]
+    keys = list(dict.fromkeys([*ids, *contact_values]))
+    result: dict[str, Any] = {"marker": marker, "customer_ids": ids, "not_covered": NOT_COVERED}
+
+    sids: list[str] = []
+    ch_status = "ok"
+    ch_counts: dict = {}
+    if keys:
+        try:
+            client = store.new_client()
+            sids = await asyncio.to_thread(fetch_all_session_ids, client, store._database, tenant_id, keys)
+            ch_counts = await asyncio.to_thread(erase_clickhouse, client, store._database,
+                                                tenant_id, sids, marker)
+        except Exception as exc:
+            logger.error("data_subject ERASE: ClickHouse falhou — %s: %s", type(exc).__name__, exc)
+            ch_status = _unavailable("clickhouse", exc)
+    result["clickhouse"] = {"status": ch_status, "sessions_found": len(sids), **ch_counts}
+
+    mail, surv = await asyncio.gather(
+        mailing_erase(settings, tenant_id, ids, contact_values, marker),
+        survey_erase(settings, tenant_id, ids, sids, marker),
+    )
+    result["outbound"] = mail
+    result["surveys"] = surv
+    gw = await gateway_erase(settings, tenant_id, ids[0] if ids else "", sids)
+    result["identity"] = {"status": gw.get("identity_status"), **(gw.get("identity") or {})}
+    result["attachments"] = {"status": gw.get("attachments_status"), **(gw.get("attachments") or {})}
+    failed = [k for k in ("clickhouse", "outbound", "surveys", "identity", "attachments")
+              if str((result[k] or {}).get("status", "")).startswith("unavailable")]
+    result["complete"] = not failed
+    result["failed_stores"] = failed
+    if failed:
+        logger.error("data_subject ERASE INCOMPLETA tenant=%s marker=%s lojas=%s",
+                     tenant_id, marker, failed)
+    return result

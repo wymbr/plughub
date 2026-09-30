@@ -74,5 +74,33 @@
       "surveys": "Pesquisas"
     },
     "notCovered": "Lojas que este dossiê ainda NÃO percorre:"
+  },
+  "erasure": {
+    "title": "Eliminar os dados desta pessoa (LGPD art. 18, VI)",
+    "explain": "Anonimiza conteúdo e identificadores em todas as lojas que o dossiê de acesso percorre; durações, desfechos e notas ficam, sem ligação com a pessoa. As lojas listadas como não cobertas não são alcançadas. Veja a prévia antes — nada muda até você confirmar.",
+    "preview": "Prévia da eliminação",
+    "execute": "Eliminar agora",
+    "confirmLabel": "Confirmo a eliminação dos dados desta pessoa. Não há como desfazer.",
+    "vetoKept": "Esta pessoa tem veto de contato: ele é mantido (só o veto e os hashes salgados das âncoras), para que ela não volte a ser contatada.",
+    "done": "Eliminação concluída. Marcador: {{marker}}",
+    "partial": "Eliminação INCOMPLETA — estas lojas falharam: {{stores}}. Repita o pedido quando elas voltarem.",
+    "attachmentsNote": "Anexos e gravações deixam de ser servidos agora; os arquivos saem pelo ciclo horário de expiração, depois da carência.",
+    "error": "O pedido de eliminação falhou",
+    "stores": {
+      "identity": "Cadastro de identidade",
+      "sessions": "Sessões",
+      "messages": "Mensagens",
+      "insights": "Insights",
+      "attachments": "Anexos e gravações",
+      "outbound": "Outbound (entradas / log de contato)",
+      "surveys": "Pesquisas"
+    },
+    "results": {
+      "clickhouse": "Sessões, mensagens, insights, linha do tempo",
+      "identity": "Cadastro de identidade",
+      "attachments": "Anexos e gravações",
+      "outbound": "Outbound",
+      "surveys": "Pesquisas"
+    }
   }
 }

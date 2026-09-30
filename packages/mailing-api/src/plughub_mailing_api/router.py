@@ -52,6 +52,7 @@ from .db import (
     db_list_mailings,
     db_list_policies,
     db_set_delivery_result,
+    db_subject_erase,
     db_subject_export,
     db_unsubscribe,
     db_update_campaign,
@@ -615,6 +616,26 @@ async def data_subject_export(
     monta é a analytics-api, que confere o DPO e grava a trilha; nenhuma tela chama."""
     tenant = _principal(request, SO_SERVICO, "exportar dados do titular", x_tenant_id)
     return await db_subject_export(_pool(request), tenant, body.customer_ids, body.contact_values)
+
+
+class SubjectEraseBody(BaseModel):
+    customer_ids:   list[str] = []
+    contact_values: list[str] = []
+    marker:         str
+
+
+@router.post("/v1/data-subject/erase")
+async def data_subject_erase(
+    body: SubjectEraseBody, request: Request,
+    x_tenant_id: str | None = Header(default=None),
+) -> dict:
+    """AUD-06 — eliminação do titular (LGPD art. 18, VI). SÓ SERVIÇO, como o export: a
+    analytics-api confere o DPO (`audit.data_requests` em escrita) e grava a trilha."""
+    tenant = _principal(request, SO_SERVICO, "eliminar dados do titular", x_tenant_id)
+    if not body.marker.startswith("erased:"):
+        raise HTTPException(422, "marker deve comecar com 'erased:'")
+    return await db_subject_erase(_pool(request), tenant, body.customer_ids,
+                                  body.contact_values, body.marker)
 
 
 @router.post("/v1/unsubscribe")

@@ -165,3 +165,22 @@ async def test_data_subject_export_is_service_only():
                        json={"customer_ids": ["c"], "contact_values": ["+55"]})
     assert r.status_code == 200, r.text
     assert db.await_args.args[1:] == ("t9", ["c"], ["+55"])
+
+
+@pytest.mark.asyncio
+async def test_aud06_data_subject_erase_is_service_only_and_needs_a_marker():
+    """AUD-06: eliminar é mais que ler — só a analytics-api, que confere o DPO em escrita.
+    E o marcador tem forma: sem ela, um id qualquer viraria o `customer_id` das linhas."""
+    body = {"customer_ids": ["c"], "contact_values": ["+55"], "marker": "erased:abc"}
+    r = await _req("POST", "/v1/data-subject/erase",
+                   _tok(configurar="read_write", operacao="read_write"), json=body)
+    assert r.status_code == 403
+    with patch("plughub_mailing_api.router.db_subject_erase",
+               new=AsyncMock(return_value={"entries_anonymized": 1, "contact_log_anonymized": 2})) as db:
+        bad = await _req("POST", "/v1/data-subject/erase", {"X-Service-Token": _SVC, "X-Tenant-ID": "t9"},
+                         json={**body, "marker": "cus_outro"})
+        r = await _req("POST", "/v1/data-subject/erase", {"X-Service-Token": _SVC, "X-Tenant-ID": "t9"},
+                       json=body)
+    assert bad.status_code == 422
+    assert r.status_code == 200, r.text
+    assert db.await_args.args[1:] == ("t9", ["c"], ["+55"], "erased:abc")

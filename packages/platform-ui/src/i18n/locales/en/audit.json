@@ -74,5 +74,33 @@
       "surveys": "Surveys"
     },
     "notCovered": "Stores this dossier does NOT cover yet:"
+  },
+  "erasure": {
+    "title": "Erase this person's data (LGPD art. 18, VI)",
+    "explain": "Anonymizes content and identifiers in every store the access report covers; durations, outcomes and scores stay, with no link to the person. Stores listed as not covered are not reached. Preview first — nothing changes until you confirm.",
+    "preview": "Preview erasure",
+    "execute": "Erase now",
+    "confirmLabel": "I confirm the erasure of this person's data. This cannot be undone.",
+    "vetoKept": "This person has a do-not-contact veto: it is kept (only the veto and the salted anchor hashes), so they are not contacted again.",
+    "done": "Erasure complete. Marker: {{marker}}",
+    "partial": "Erasure INCOMPLETE — these stores failed: {{stores}}. Repeat the request once they are back.",
+    "attachmentsNote": "Attachments and recordings stop being served now; the files are removed by the hourly expiry cycle after its grace period.",
+    "error": "Erasure request failed",
+    "stores": {
+      "identity": "Identity record",
+      "sessions": "Sessions",
+      "messages": "Messages",
+      "insights": "Insights",
+      "attachments": "Attachments and recordings",
+      "outbound": "Outbound (entries / contact log)",
+      "surveys": "Surveys"
+    },
+    "results": {
+      "clickhouse": "Sessions, messages, insights, timeline",
+      "identity": "Identity record",
+      "attachments": "Attachments and recordings",
+      "outbound": "Outbound",
+      "surveys": "Surveys"
+    }
   }
 }

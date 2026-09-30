@@ -42,6 +42,14 @@ def _new_customer_id() -> str:
     return "cus_" + uuid.uuid4().hex[:24]
 
 
+def _rowcount(status: str | None) -> int:
+    """asyncpg devolve o status do comando (`"DELETE 3"`), não a contagem."""
+    try:
+        return int(str(status).rsplit(" ", 1)[-1])
+    except (TypeError, ValueError):
+        return 0
+
+
 def _encode_index(customer_id: str, verification_class: str) -> str:
     """Valor do índice Redis {t}:identity:{kind}:{hash} → JSON {cid, vc}."""
     return json.dumps({"cid": customer_id, "vc": verification_class})
@@ -848,6 +856,147 @@ class IdentityIndex:
                 for r in refs
             ],
         }
+
+    async def erase_subject(self, tenant_id: str, customer_id: str) -> dict[str, Any]:
+        """AUD-06 — eliminação do titular (LGPD art. 18, VI) no cadastro de identidade.
+
+        Percorre a MESMA família do `subject_record` (canônico + fundidos nele) e apaga:
+        referências externas, fusões, atributos, âncoras (Postgres e índice Redis) e as
+        chaves efêmeras (prospect, pendências).
+
+        ⚠️ **O opt-out sobrevive, por decisão do dono (2026-09-30).** O veto global
+        (`attributes.do_not_contact`) mora NESTE registro; apagá-lo inteiro faria uma
+        importação de mailing futura com o mesmo telefone voltar a contatar quem pediu
+        para não ser contatado. Havendo veto, fica uma LÁPIDE: o canônico com
+        `attributes = {"do_not_contact": true}` e as âncoras (hash salgado) apontando
+        para ele — nada mais. Sem veto, nada fica.
+        """
+        out: dict[str, Any] = {"customer_ids": [], "kept_veto": False,
+                               "customers_deleted": 0, "anchors_deleted": 0,
+                               "external_refs_deleted": 0, "merges_deleted": 0,
+                               "redis_keys_deleted": 0}
+        if self._db is None or not customer_id:
+            return out
+        rec = await self.subject_record(tenant_id, customer_id)
+        if not rec:
+            return await self._erase_prospect(tenant_id, customer_id, out)
+        canonical = rec["customer_id"]
+        ids = list(dict.fromkeys([canonical, *rec.get("merged_from", [])]))
+        out["customer_ids"] = ids
+        async with self._db.acquire() as conn:
+            async with conn.transaction():
+                attrs_rows = await conn.fetch(
+                    "SELECT attributes FROM identity.customers "
+                    "WHERE tenant_id = $1 AND customer_id = ANY($2::text[])",
+                    tenant_id, ids,
+                )
+                veto = False
+                for r in attrs_rows:
+                    a = r["attributes"]
+                    if isinstance(a, str):
+                        try:
+                            a = json.loads(a)
+                        except Exception:
+                            a = {}
+                    if isinstance(a, dict) and a.get("do_not_contact") is True:
+                        veto = True
+                keys = await conn.fetch(
+                    "SELECT kind, value_hash, customer_id FROM identity.customer_secondary_keys "
+                    "WHERE tenant_id = $1 AND customer_id = ANY($2::text[])",
+                    tenant_id, ids,
+                )
+                out["external_refs_deleted"] = _rowcount(await conn.execute(
+                    "DELETE FROM identity.customer_external_refs "
+                    "WHERE tenant_id = $1 AND customer_id = ANY($2::text[])", tenant_id, ids))
+                out["merges_deleted"] = _rowcount(await conn.execute(
+                    "DELETE FROM identity.customer_merges WHERE tenant_id = $1 "
+                    "AND (from_customer = ANY($2::text[]) OR into_customer = ANY($2::text[]))",
+                    tenant_id, ids))
+                if veto:
+                    # Lápide: as âncoras dos fundidos passam a apontar para o canônico, que
+                    # guarda só o veto. Os demais registros saem.
+                    await conn.execute(
+                        "UPDATE identity.customer_secondary_keys SET customer_id = $3 "
+                        "WHERE tenant_id = $1 AND customer_id = ANY($2::text[])",
+                        tenant_id, ids, canonical)
+                    await conn.execute(
+                        "UPDATE identity.customers SET attributes = '{\"do_not_contact\": true}'::jsonb, "
+                        "merged_into = NULL, updated_at = NOW() "
+                        "WHERE tenant_id = $1 AND customer_id = $2", tenant_id, canonical)
+                    others = [i for i in ids if i != canonical]
+                    out["customers_deleted"] = _rowcount(await conn.execute(
+                        "DELETE FROM identity.customers WHERE tenant_id = $1 "
+                        "AND customer_id = ANY($2::text[])", tenant_id, others)) if others else 0
+                else:
+                    out["anchors_deleted"] = _rowcount(await conn.execute(
+                        "DELETE FROM identity.customer_secondary_keys "
+                        "WHERE tenant_id = $1 AND customer_id = ANY($2::text[])", tenant_id, ids))
+                    out["customers_deleted"] = _rowcount(await conn.execute(
+                        "DELETE FROM identity.customers WHERE tenant_id = $1 "
+                        "AND customer_id = ANY($2::text[])", tenant_id, ids))
+        out["kept_veto"] = veto
+        # Redis: o índice de âncoras segue o Postgres; prospect e pendências saem sempre.
+        rkeys = [self._prospect_key(tenant_id, i) for i in ids] + \
+                [self._pending_key(tenant_id, i) for i in ids]
+        if not veto:
+            rkeys += [self._identity_key(tenant_id, k["kind"], k["value_hash"]) for k in keys]
+        if rkeys:
+            out["redis_keys_deleted"] = int(await self._redis.delete(*rkeys) or 0)
+        if veto:
+            # Só as âncoras que apontavam para um FUNDIDO mudam de alvo; as do canônico já
+            # apontam para ele, e reescrevê-las rebaixaria a classe de verificação.
+            for k in (k for k in keys if k["customer_id"] != canonical):
+                await self._redis.set(self._identity_key(tenant_id, k["kind"], k["value_hash"]),
+                                      _encode_index(canonical, "claimed"), keepttl=True)
+        logger.info("identity ERASE tenant=%s customers=%d veto_mantido=%s ancoras_apagadas=%d",
+                    tenant_id, len(ids), veto, out["anchors_deleted"])
+        return out
+
+    async def prospect_record(self, tenant_id: str, customer_id: str) -> dict[str, Any] | None:
+        """AUD-06 — o registro de um PROSPECT (só Redis), no mesmo formato do
+        `subject_record`. Sem isto o dossiê e a prévia da eliminação diziam
+        `identity: not_found` para quem acabou de ser provisionado, enquanto telefone e
+        e-mail dele resolviam normalmente pelo índice."""
+        raw = await self._redis.get(self._prospect_key(tenant_id, customer_id))
+        if not raw:
+            return None
+        try:
+            d = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        except Exception:
+            d = {}
+        return {"customer_id": customer_id, "requested_id": customer_id, "status": "prospect",
+                "attributes": {}, "created_at": d.get("created_at"), "updated_at": None,
+                "merged_from": [],
+                "anchors": [{"kind": k, "verification_class": "claimed", "provenance": None,
+                             "verified_at": None, "created_at": d.get("created_at")}
+                            for k in d.get("kinds", [])],
+                "external_refs": []}
+
+    async def _erase_prospect(self, tenant_id: str, customer_id: str,
+                              out: dict[str, Any]) -> dict[str, Any]:
+        """Prospect = cliente que ainda NÃO está no cadastro durável: existe só no Redis
+        (`{t}:customer:prospect:{id}` + as âncoras no índice, TTL de 30 d). Medido na prova
+        ao vivo da AUD-06: todo titular recém-provisionado cai aqui, e o caminho do
+        Postgres o dava como `not_found` — a eliminação teria deixado telefone e e-mail
+        (hash) resolvendo para ele até o TTL. Prospect não tem atributo, logo não tem veto.
+
+        As âncoras de um prospect não estão em tabela nenhuma; o índice é varrido pelo
+        prefixo do tenant. É caro, e a eliminação é rara — não vale índice reverso."""
+        prospect = self._prospect_key(tenant_id, customer_id)
+        if not await self._redis.exists(prospect):
+            return out
+        out["customer_ids"] = [customer_id]
+        out["prospect"] = True
+        dele = [prospect, self._pending_key(tenant_id, customer_id)]
+        async for key in self._redis.scan_iter(match=f"{tenant_id}:identity:*", count=1000):
+            hit = _decode_index(await self._redis.get(key))
+            if hit and hit[0] == customer_id:
+                dele.append(key)
+        out["redis_keys_deleted"] = int(await self._redis.delete(*dele) or 0)
+        out["anchors_deleted"] = len(dele) - 2
+        logger.info("identity ERASE prospect tenant=%s ancoras_do_indice=%d",
+                    tenant_id, out["anchors_deleted"])
+        return out
 
     async def get_customer(
         self, tenant_id: str, customer_id: str,

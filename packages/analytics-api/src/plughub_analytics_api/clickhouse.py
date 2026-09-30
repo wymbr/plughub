@@ -1076,7 +1076,7 @@ CREATE TABLE IF NOT EXISTS {db}.audit_access_log
     endpoint       String,
     target_kind    String,                  -- session | mcp_calls
     target_id      String DEFAULT '',
-    result         String DEFAULT 'ok',     -- ok | denied
+    result         String DEFAULT 'ok',     -- ok | denied | partial | not_found (as duas ultimas: eliminacao, AUD-06)
     row_count      UInt32 DEFAULT 0,
     accessed_at    DateTime64(3, 'UTC'),
     date           Date DEFAULT toDate(accessed_at)

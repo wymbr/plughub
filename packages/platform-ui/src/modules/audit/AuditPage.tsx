@@ -8,7 +8,7 @@
  *   sessions      — session message audit trail (active)
  *   mcp_calls     — MCP call audit with masked_input_fields (active)
  *   user_access   — user access logs (stub — Fase 3)
- *   data_requests — dossiê de acesso do titular (AUD-03; a eliminação é ficha própria)
+ *   data_requests — dossiê de acesso do titular (AUD-03) e, com read_write, a eliminação (AUD-06)
  *   config_snapshot — masking config snapshot (stub — Fase 5)
  */
 import React, { useState, useEffect, useCallback } from 'react'
@@ -284,8 +284,140 @@ function sectionCount(d: Dossier, key: SectionKey): number {
   return Array.isArray(sec.items) ? (sec.items as unknown[]).length : 0
 }
 
+// ── Eliminação do titular (AUD-06) ────────────────────────────────────────────
+// Só aparece para quem tem `audit.data_requests` em read_write — o servidor decide de
+// novo, a tela só não oferece o que ele recusaria. Dois passos na MESMA rota: a PRÉVIA
+// (contagens por loja, `confirm=false`) e a execução (`confirm=true`).
+
+type ErasureStoreKey = 'identity' | 'sessions' | 'messages' | 'insights' | 'attachments' | 'outbound' | 'surveys'
+const ERASURE_PREVIEW_KEYS: ErasureStoreKey[] =
+  ['identity', 'sessions', 'messages', 'insights', 'attachments', 'outbound', 'surveys']
+type ErasureResultKey = 'clickhouse' | 'identity' | 'attachments' | 'outbound' | 'surveys'
+const ERASURE_RESULT_KEYS: ErasureResultKey[] = ['clickhouse', 'identity', 'attachments', 'outbound', 'surveys']
+
+function previewCount(sec: Record<string, unknown> | undefined): string {
+  if (!sec) return '—'
+  if (typeof sec.count === 'number') return String(sec.count)
+  if ('entries' in sec) return `${sec.entries ?? 0} / ${sec.contact_log ?? 0}`
+  if ('found' in sec) return sec.found ? '1' : '0'
+  return '—'
+}
+
+function resultDetail(sec: Record<string, unknown> | undefined): string {
+  if (!sec) return ''
+  return Object.entries(sec)
+    .filter(([k, v]) => k !== 'status' && (typeof v === 'number' || typeof v === 'boolean'))
+    .map(([k, v]) => `${k}=${v}`)
+    .join(' · ')
+}
+
+function ErasurePanel({ form }: { form: Record<string, string> }) {
+  const { t } = useTranslation('audit')
+  const [preview,   setPreview]   = useState<Record<string, unknown> | null>(null)
+  const [result,    setResult]    = useState<Record<string, unknown> | null>(null)
+  const [confirmed, setConfirmed] = useState(false)
+  const [busy,      setBusy]      = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
+
+  async function call(confirm: boolean) {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await apiFetch('/v1/audit/data-requests/erasure', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ...form, confirm }),
+      })
+      const body = await res.json().catch(() => ({})) as Record<string, unknown>
+      // 207 = executada em PARTE: é resultado, não erro — a tabela diz qual loja falhou.
+      if (!res.ok && res.status !== 207) {
+        throw new Error((body.detail as string | undefined) ?? `HTTP ${res.status}`)
+      }
+      if (confirm) { setResult(body); setPreview(null); setConfirmed(false) } else { setPreview(body); setResult(null) }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : t('erasure.error'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3 border border-red/30 rounded-lg p-4 bg-white">
+      <div className="text-sm font-semibold text-dark">{t('erasure.title')}</div>
+      <div className="text-xs text-muted">{t('erasure.explain')}</div>
+      <div>
+        <button onClick={() => call(false)} disabled={busy}
+          className="px-4 py-2 border border-red/40 text-red-text rounded text-sm font-medium hover:bg-red-light disabled:opacity-50 flex items-center gap-2">
+          {busy && !preview && <Spinner size="sm" />}
+          {t('erasure.preview')}
+        </button>
+      </div>
+      {error && <div className="text-sm text-red-text bg-red-light border border-red/30 rounded px-3 py-2">{error}</div>}
+
+      {preview && (
+        <div className="flex flex-col gap-2">
+          <table className="w-full text-xs border border-border rounded">
+            <tbody>
+              {ERASURE_PREVIEW_KEYS.map(k => {
+                const sec = preview[k] as Record<string, unknown> | undefined
+                return (
+                  <tr key={k} className="border-b border-border">
+                    <td className="px-3 py-1.5 text-dark">{t(`erasure.stores.${k}`)}</td>
+                    <td className="px-3 py-1.5 font-mono text-muted">{String(sec?.status ?? '—')}</td>
+                    <td className="px-3 py-1.5 font-mono text-dark">{previewCount(sec)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {Boolean((preview.identity as Record<string, unknown> | undefined)?.veto_kept) && (
+            <div className="text-xs text-warning-text">{t('erasure.vetoKept')}</div>
+          )}
+          <label className="flex items-center gap-2 text-xs text-dark">
+            <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+            {t('erasure.confirmLabel')}
+          </label>
+          <div>
+            <button onClick={() => call(true)} disabled={busy || !confirmed}
+              className="px-4 py-2 bg-red text-white rounded text-sm font-medium hover:bg-red-text disabled:opacity-50 flex items-center gap-2">
+              {busy && <Spinner size="sm" />}
+              {t('erasure.execute')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div className="flex flex-col gap-2">
+          <div className={`text-sm font-medium ${result.complete ? 'text-green-text' : 'text-red-text'}`}>
+            {result.complete ? t('erasure.done', { marker: String(result.marker) })
+                             : t('erasure.partial', { stores: ((result.failed_stores as string[]) ?? []).join(', ') })}
+          </div>
+          <table className="w-full text-xs border border-border rounded">
+            <tbody>
+              {ERASURE_RESULT_KEYS.map(k => {
+                const sec = result[k] as Record<string, unknown> | undefined
+                return (
+                  <tr key={k} className="border-b border-border">
+                    <td className="px-3 py-1.5 text-dark">{t(`erasure.results.${k}`)}</td>
+                    <td className="px-3 py-1.5 font-mono text-muted">{String(sec?.status ?? '—')}</td>
+                    <td className="px-3 py-1.5 font-mono text-dark">{resultDetail(sec)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <div className="text-xs text-muted">{t('erasure.attachmentsNote')}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DataRequestsTab() {
   const { t } = useTranslation('audit')
+  const { perms } = useAuth()
+  const canErase = perms.can('audit', 'data_requests', 'read_write')
   const [form,    setForm]    = useState({ customer_id: '', phone: '', email: '', cpf: '' })
   const [dossier, setDossier] = useState<Dossier | null>(null)
   const [loading, setLoading] = useState(false)
@@ -407,6 +539,8 @@ function DataRequestsTab() {
           </div>
         </div>
       )}
+
+      {canErase && filled && <ErasurePanel form={form} />}
     </div>
   )
 }

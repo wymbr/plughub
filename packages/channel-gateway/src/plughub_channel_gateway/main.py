@@ -1992,6 +1992,49 @@ async def webhook_identity_subject_export(body: SubjectExportRequest, request: R
     return out
 
 
+@app.post("/v1/channels/webhook/identity/subject-erase", status_code=200)
+async def webhook_identity_subject_erase(body: SubjectExportRequest, request: Request) -> dict:
+    """
+    AUD-06 — ELIMINAÇÃO do que este serviço guarda de UM titular (LGPD art. 18, VI).
+    Mesmo corpo e mesmo portão da `subject-export` (só serviço: a analytics-api, que
+    decide quem pode eliminar e grava a trilha). Apaga o cadastro de identidade — menos o
+    veto de contato, se houver (ver `IdentityIndex.erase_subject`) — e marca como
+    apagados os anexos e gravações das sessões informadas.
+
+    Cada parte diz se ficou INDISPONÍVEL: eliminação que falha calada afirma ao titular
+    que o dado saiu.
+    """
+    tenant = _identity_caller(request, body.tenant_id)
+    out: dict = {"identity": None, "identity_status": "not_requested",
+                 "attachments": None, "attachments_status": "not_requested"}
+    if body.customer_id:
+        if _webhook_adapter is None:
+            out["identity_status"] = "unavailable: identity resolver not initialised"
+        else:
+            try:
+                out["identity"] = await _webhook_adapter.erase_subject(tenant, body.customer_id)
+                out["identity_status"] = "ok" if out["identity"].get("customer_ids") else "not_found"
+            except Exception as exc:   # noqa: BLE001 — vira status nomeado, nunca silêncio
+                logger.exception("subject-erase: identidade falhou (tenant=%s)", tenant)
+                out["identity_status"] = f"unavailable: {type(exc).__name__}: {str(exc)[:200]}"
+    sids = [s for s in body.session_ids if s][:5000]
+    if sids:
+        store_db = getattr(_attachment_store, "_db", None)
+        if store_db is None:
+            out["attachments_status"] = "unavailable: attachment store not initialised"
+        else:
+            from .attachment_store import erase_for_subject
+            try:
+                out["attachments"] = await erase_for_subject(store_db, tenant_id=tenant, session_ids=sids)
+                out["attachments_status"] = "ok"
+            except Exception as exc:   # noqa: BLE001
+                logger.exception("subject-erase: anexos falharam (tenant=%s)", tenant)
+                out["attachments_status"] = f"unavailable: {type(exc).__name__}: {str(exc)[:200]}"
+    logger.info("subject-erase tenant=%s identity=%s attachments=%s",
+                tenant, out["identity_status"], out["attachments_status"])
+    return out
+
+
 # ── Survey web vehicle (dialog primitive §9.2/§19) ────────────────────────────
 # Link tokenizado → página pública /survey/{token} que renderiza o MESMO
 # DialogForm e grava pela MESMA trilha (session.signals). Prefixos /v1/survey e

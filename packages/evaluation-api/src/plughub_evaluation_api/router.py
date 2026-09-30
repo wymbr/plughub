@@ -1585,6 +1585,24 @@ async def survey_data_subject_export(body: SurveySubjectExportRequest, request: 
     return {"surveys": rows}
 
 
+class SurveySubjectEraseRequest(SurveySubjectExportRequest):
+    marker: str
+
+
+@router.post("/v1/evaluation/data-subject/surveys/erase",
+             dependencies=[Depends(_require_service)])
+async def survey_data_subject_erase(body: SurveySubjectEraseRequest, request: Request) -> dict:
+    """AUD-06 — eliminação do titular nas pesquisas (LGPD art. 18, VI). SÓ SERVIÇO, como o
+    export: a analytics-api confere o DPO (`audit.data_requests` em escrita) e grava a trilha."""
+    if not body.marker.startswith("erased:"):
+        raise HTTPException(422, "marker deve comecar com 'erased:'")
+    return await _db.survey_subject_erase(
+        _pool(request), tenant_id=body.tenant_id,
+        customer_keys=body.customer_keys[:200], session_ids=body.session_ids[:5000],
+        marker=body.marker,
+    )
+
+
 @router.get("/v1/evaluation/survey/responses",
             dependencies=[Depends(_require_any_evaluation)])
 async def list_survey_responses(
