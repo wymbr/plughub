@@ -14,7 +14,6 @@ Topics consumed:
   usage.events               → usage_events (passthrough)
   sentiment.updated          → sentiment_events (+ segment_id enrichment via SegmentEnricher)
   queue.position_updated     → queue_events (position update)
-  workflow.events            → workflow_events (lifecycle)
   collect.events             → collect_events (lifecycle)
   conversations.participants → participation_intervals (participant joined / left)
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
@@ -967,48 +966,9 @@ def parse_queue_position(payload: dict[str, Any]) -> dict | None:
     }
 
 
-# ─── workflow.events ──────────────────────────────────────────────────────────
-
-# Maps workflow event_type → status label stored in workflow_events.status
-_WORKFLOW_STATUS_MAP = {
-    "workflow.started":   "active",
-    "workflow.suspended": "suspended",
-    "workflow.resumed":   "active",
-    "workflow.completed": "completed",
-    "workflow.timed_out": "timed_out",
-    "workflow.failed":    "failed",
-    "workflow.cancelled": "cancelled",
-}
-
-
-def parse_workflow_event(payload: dict[str, Any]) -> dict | None:
-    """Maps workflow.* events → workflow_events table."""
-    event_type  = payload.get("event_type")
-    tenant_id   = payload.get("tenant_id")
-    instance_id = payload.get("instance_id")
-    flow_id     = payload.get("flow_id", "")
-    if not event_type or not tenant_id or not instance_id:
-        return None
-
-    return {
-        "table":            "workflow_events",
-        "event_id":         _gen_id(),
-        "tenant_id":        tenant_id,
-        "instance_id":      instance_id,
-        "flow_id":          flow_id,
-        "pool_id":          payload.get("pool_id"),
-        "campaign_id":      payload.get("campaign_id"),
-        "event_type":       event_type,
-        "status":           _WORKFLOW_STATUS_MAP.get(event_type),
-        "current_step":     payload.get("current_step"),
-        "suspend_reason":   payload.get("suspend_reason"),
-        "decision":         payload.get("decision"),
-        "outcome":          payload.get("outcome"),
-        "duration_ms":      payload.get("duration_ms"),
-        "wait_duration_ms": payload.get("wait_duration_ms"),
-        "error":            payload.get("error"),
-        "timestamp":        payload.get("timestamp") or _now(),
-    }
+# ─── workflow.events — REMOVIDO em 2026-09-30 (WFL-01) ────────────────────────
+# O único produtor era a workflow-api, aposentada. `workflow_events` (ClickHouse)
+# foi medida VAZIA no demo; o ramo que a lê em `/reports/events` ficou sem fonte.
 
 
 # ─── collect.events ───────────────────────────────────────────────────────────

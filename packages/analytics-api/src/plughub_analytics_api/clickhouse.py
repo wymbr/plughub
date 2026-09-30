@@ -1882,19 +1882,6 @@ class AnalyticsStore:
             self._insert, "sentiment_events", [_sentiment_row(row)], self._SENTIMENT_COLS
         )
 
-    # workflow_events
-
-    _WORKFLOW_EVENT_COLS = [
-        "event_id", "tenant_id", "instance_id", "flow_id", "campaign_id",
-        "event_type", "status", "current_step", "suspend_reason", "decision",
-        "outcome", "duration_ms", "wait_duration_ms", "error", "timestamp", "date",
-    ]
-
-    async def insert_workflow_event(self, row: dict) -> None:
-        await asyncio.to_thread(
-            self._insert, "workflow_events", [_workflow_event_row(row)], self._WORKFLOW_EVENT_COLS
-        )
-
     # collect_events
 
     _COLLECT_EVENT_COLS = [
@@ -2592,28 +2579,6 @@ def _sentiment_row(d: dict) -> list:
         float(d.get("score", 0.0)),
         d.get("category", "neutral"),
         d.get("segment_id") or None,   # Nullable — None when enrichment failed
-        _parse_dt(ts) or datetime.utcnow(),
-        _today_utc(ts),
-    ]
-
-
-def _workflow_event_row(d: dict) -> list:
-    ts = d.get("timestamp")
-    return [
-        d.get("event_id", ""),
-        d.get("tenant_id", ""),
-        d.get("instance_id", ""),
-        d.get("flow_id", ""),
-        d.get("campaign_id"),
-        d.get("event_type", ""),
-        d.get("status"),
-        d.get("current_step"),
-        d.get("suspend_reason"),
-        d.get("decision"),
-        d.get("outcome"),
-        d.get("duration_ms"),
-        d.get("wait_duration_ms"),
-        d.get("error"),
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

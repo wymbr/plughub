@@ -16,7 +16,7 @@ Topics → tables mapping:
   usage.events               → usage_events
   sentiment.updated          → sentiment_events  (segment_id enriched via SegmentEnricher)
   queue.position_updated     → queue_events
-  workflow.events            → workflow_events
+  (workflow.events saiu em 2026-09-30, WFL-01: sem produtor; a tabela fica, vazia)
   collect.events             → collect_events
   conversations.participants → participation_intervals (participant_joined / left)
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
@@ -61,7 +61,6 @@ from .models import (
     parse_usage_event,
     parse_sentiment_event,
     parse_queue_position,
-    parse_workflow_event,
     parse_collect_event,
     parse_participant_event,
     parse_evaluation_event,
@@ -308,7 +307,6 @@ _TOPICS = [
     "usage.events",
     "sentiment.updated",
     "queue.position_updated",
-    "workflow.events",
     "collect.events",
     "conversations.participants",
     "evaluation.events",
@@ -335,7 +333,6 @@ _PARSERS = {
     "usage.events":             parse_usage_event,
     "sentiment.updated":        parse_sentiment_event,
     "queue.position_updated":   parse_queue_position,
-    "workflow.events":          parse_workflow_event,
     "collect.events":           parse_collect_event,
     "conversations.participants": parse_participant_event,
     "evaluation.events":          parse_evaluation_event,
@@ -998,8 +995,6 @@ async def _write_row(
             await store.insert_usage_event(row)
         elif table == "sentiment_events":
             await store.insert_sentiment_event(row)
-        elif table == "workflow_events":
-            await store.insert_workflow_event(row)
         elif table == "collect_events":
             await store.insert_collect_event(row)
         elif table == "participation_intervals":

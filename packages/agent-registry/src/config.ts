@@ -24,7 +24,6 @@ export const config = {
   // — um deploy com sessões em curso passava a parecer seguro. Tem de casar com
   // `ANALYTICS_SERVICE_TOKEN` do outro lado.
   analytics_service_token: process.env["ANALYTICS_SERVICE_TOKEN"] ?? "",
-  workflow_api_url:  process.env["WORKFLOW_API_URL"]   ?? "http://localhost:3800",
   // Config API — item 7a: teto do buffer da fila gratuita (queue_max_total)
   config_api_url:    process.env["CONFIG_API_URL"]     ?? "http://localhost:3600",
   // Routing Engine — F4b: rollup de capacidade ESCOPADO ao domínio de pools do

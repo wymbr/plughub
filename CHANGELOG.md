@@ -1,5 +1,41 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (5) — WFL-01: a workflow-api e o skill-flow-worker saem do ar, com o tópico `workflow.events`
+
+**O defeito da ficha:** os dois serviços estavam de pé servindo uma cadeia morta. Depois da AUT-64 a
+workflow-api só respondia `/v1/health` e `POST /admin/backfill-events`, e o scanner de timeout
+varria `workflow.instances` e `collect_instances`, **0 linhas** cada. O skill-flow-worker consumia
+`workflow.events` e chamava rotas de instância que não existiam mais. Cada um custava container e
+conexões ao PostgreSQL, Redis e Kafka.
+
+**Decisão do dono (2026-09-30): aposentar os dois.** Os dois bloqueios que o `TODO.md` registrava
+contra matar o tópico já tinham caído: o cenário e2e 18 saiu na AUT-64 e o consumer reativo da
+evaluation-api saiu na REV-02.
+
+**O que saiu:**
+- dos compose `demo`, `full`, `visual` e `arc4`: os serviços, os `depends_on` que os citavam
+  (e2e-runner, platform-ui), as env `WORKFLOW_API_URL`/`PLUGHUB_EVALUATION_WORKFLOW_API_URL` e
+  `workflow.events` no `kafka-init`. O `docker-compose.test.yml` do e2e também perdeu o tópico;
+- da analytics-api: a assinatura de `workflow.events`, `parse_workflow_event`, o insert e o
+  formatador de linha. A tabela `workflow_events` fica, e foi medida **vazia**;
+- restos que apontavam para a porta 3800: `workflow_api_url` do agent-registry (sem leitor), o log
+  de boot do mcp-server e a doc do runner e2e;
+- dos gates: a workflow-api nas listas de suítes Python (`probe_python_suites`,
+  `report_suite_skips`), na varredura anônima e nas duas linhas da `route_credential_baseline.tsv`.
+
+**O que ficou, de propósito:**
+- os pacotes, como fósseis em quarentena, com README que diz por quê. `probe_collect_masked_requirement`
+  ainda lê o código da workflow-api como evidência estática;
+- as tabelas do schema `workflow`, porque vazio não custa;
+- os leitores de `analytics.workflow_events` (`/reports/workflows`, `/reports/workflow-summary`,
+  `/sessions/{id}/workflow-trace` e o ramo de `/reports/events`), que leem uma tabela vazia. Nenhum
+  dado some; é código de leitura sem fonte, e sai quando alguém mexer nesses relatórios;
+- os contêineres parados foram removidos (`compose rm -sf`) antes de o serviço sair do arquivo.
+
+**Achado de passagem, registrado como `WFL-02`:** `collect.events` tinha o mesmo e único produtor, e
+já sem chamador. O channel-gateway e a analytics-api continuam assinando um tópico sem fonte. A
+decisão (remover a cadeia ou dar-lhe produtor) é própria e não entrou aqui.
+
 ## 2026-09-30 (4) — REV-02: o motor de revisão por workflow sai, com a tool que ninguém conseguia chamar
 
 **O defeito da ficha:** a tool `evaluation_review_submit` fazia `POST /v1/evaluation/instances/{id}/review`

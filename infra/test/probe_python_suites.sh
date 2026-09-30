@@ -40,7 +40,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PREFIX="${PREFIX:-plughub-demo}"
 
 SERVICOS="evaluation-api auth-api analytics-api config-api channel-gateway \
-orchestrator-bridge routing-engine ai-gateway workflow-api scheduler-api \
+orchestrator-bridge routing-engine ai-gateway scheduler-api \
 dialog-api calendar-api pricing-api quality-ingest rules-engine mailing-api"
 # RUL-01 (2026-09-29): rules-engine entrou — a suite dele tinha 3 arquivos e nenhum gate a
 # rodava. AUT-60 (mesmo dia): mailing-api entrou — a imagem passou a instalar `.[dev]` e a

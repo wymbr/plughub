@@ -51,7 +51,6 @@
  *   AI_GATEWAY_URL            (default: http://localhost:3200)
  *   CHANNEL_GATEWAY_WS_URL    (default: ws://localhost:8010)
  *   CHANNEL_GATEWAY_HTTP_URL  (default: http://localhost:8010)
- *   WORKFLOW_API_URL          (default: http://localhost:3800)
  *   CALENDAR_API_URL          (default: http://localhost:3700)
  *   ANALYTICS_API_URL         (default: http://localhost:3500)
  *   EVALUATION_API_URL        (default: http://localhost:3400)

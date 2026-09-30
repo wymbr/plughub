@@ -204,7 +204,6 @@
 # │    knowledge-api:   http://localhost:3401/health                          │
 # │    pricing-api:     http://localhost:3900/health                          │
 # │    calendar-api:    http://localhost:3700/health                          │
-# │    workflow-api:    http://localhost:3800/health                          │
 # └─────────────────────────────────────────────────────────────────────────────┘
 #
 # Flags do runner (via E2E_EXTRA_ARGS):
@@ -521,7 +520,6 @@ services:
           usage.events
           usage.cycle_reset
           sentiment.updated
-          workflow.events
           calendar.events
           collect.events
           journey.merges
@@ -670,7 +668,6 @@ services:
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
       CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
-      WORKFLOW_API_URL: http://workflow-api:3800
       DIALOG_API_URL: http://dialog-api:3760   # dialog primitive — form_get (survey + OTP)
       DIALOG_SERVICE_TOKEN: changeme_dialog_service_token_demo   # AUT-62 — leitura de runtime (== PLUGHUB_DIALOG_SERVICE_TOKEN)
       MAILING_API_URL: http://mailing-api:3660   # outbound Fase 1 — mailing_add/campaign_drain/campaign_delivery_result
@@ -1971,70 +1968,6 @@ services:
     networks:
       - plughub-demo
 
-  workflow-api:
-    build:
-      context: .
-      dockerfile: packages/workflow-api/Dockerfile
-    ports:
-      - "3800:3800"
-    environment:
-      PLUGHUB_WORKFLOW_DATABASE_URL:     postgresql://plughub:plughub@postgres:5432/plughub_demo
-      PLUGHUB_WORKFLOW_REDIS_URL:        redis://redis:6379
-      PLUGHUB_WORKFLOW_KAFKA_BROKERS:    kafka:29092
-      PLUGHUB_WORKFLOW_KAFKA_TOPIC:      workflow.events
-      PLUGHUB_WORKFLOW_COLLECT_TOPIC:    collect.events
-      PLUGHUB_WORKFLOW_JOURNEY_TOPIC:    journey.events
-      # calendar-api, agent-registry e channel-gateway SAÍRAM em 2026-09-29 (AUT-64):
-      # eram alvo das rotas de proxy (`trigger`/`resume`) e de prazo, removidas por
-      # não terem chamador. O serviço hoje só serve health e o backfill administrativo.
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    restart: on-failure
-    networks:
-      - plughub-demo
-
-  skill-flow-worker:
-    build:
-      context: .
-      dockerfile: packages/skill-flow-worker/Dockerfile
-    environment:
-      KAFKA_BROKERS:    kafka:29092
-      REDIS_URL:        redis://redis:6379
-      WORKFLOW_API_URL: http://workflow-api:3800
-      MCP_SERVER_URL:   http://mcp-server-plughub:3100
-      AI_GATEWAY_URL:   http://ai-gateway:3200
-    depends_on:
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-      workflow-api:
-        condition: service_healthy
-      mcp-server-plughub:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "kill -0 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    restart: on-failure
-    networks:
-      - plughub-demo
-
   # Orchestrator Bridge — consumes conversations.routed from Kafka and publishes
   # conversation.assigned to Redis pub/sub pool:events:{poolId}.
   # Required for human agents: without this service, routed contacts never appear
@@ -2151,7 +2084,6 @@ services:
       PLUGHUB_EVALUATION_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
       PLUGHUB_EVALUATION_CALENDAR_API_URL:    http://calendar-api:3700
       PLUGHUB_EVALUATION_CALENDAR_SERVICE_TOKEN: changeme_calendar_service_token_demo   # AUT-63 — == PLUGHUB_CALENDAR_SERVICE_TOKEN
-      PLUGHUB_EVALUATION_WORKFLOW_API_URL:    http://workflow-api:3800
       # Fase 4a — resume direto no channel-gateway (a workflow-api só reencaminhava).
       PLUGHUB_EVALUATION_CHANNEL_GATEWAY_URL: http://channel-gateway:8010
       PLUGHUB_EVALUATION_SESSION_REPLAYER_URL: http://mcp-server-plughub:3100
@@ -2388,7 +2320,6 @@ services:
       EVALUATION_API_URL:       http://evaluation-api:3400
       CHANNEL_GATEWAY_WS_URL:   ws://channel-gateway:8010
       CHANNEL_GATEWAY_HTTP_URL: http://channel-gateway:8010
-      WORKFLOW_API_URL:         http://workflow-api:3800
       CALENDAR_API_URL:         http://calendar-api:3700
       ANALYTICS_API_URL:        http://analytics-api:3500
       # ⚠️ Faltavam (medido 2026-08-25). O runner cai em `http://localhost:3600`
@@ -2441,8 +2372,6 @@ services:
       rules-engine:
         condition: service_healthy
       channel-gateway:
-        condition: service_healthy
-      workflow-api:
         condition: service_healthy
       analytics-api:
         condition: service_healthy

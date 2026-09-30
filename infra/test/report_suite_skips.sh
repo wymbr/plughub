@@ -54,7 +54,7 @@ DC="docker compose -f docker-compose.demo.yml"
 # fósseis". Se um deles voltar a ser deployado, volta para esta lista junto.
 PKGS=(
   routing-engine orchestrator-bridge analytics-api channel-gateway evaluation-api
-  ai-gateway session-replayer workflow-api calendar-api scheduler-api config-api
+  ai-gateway session-replayer calendar-api scheduler-api config-api
   pricing-api auth-api dialog-api mailing-api quality-ingest quality-export
   rules-engine usage-aggregator
 )

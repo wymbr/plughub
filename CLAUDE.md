@@ -418,7 +418,6 @@ plughub/
     mcp-server-auth/             ← domain MCP: authentication and PIN validation (demo stub) — port 3150
     skill-flow-engine/           ← Skill Flow interpreter
     skill-flow-service/          ← executor HTTP do Skill Flow (`/execute`), chamado pelo bridge — port 3460
-    skill-flow-worker/           ← Kafka consumer, runs SkillFlow for workflow instances
     orchestrator-bridge/         ← reconciliação (instance_bootstrap), RegistrySyncer, pool hooks
     ai-gateway/                  ← LLM calls, sentiment, context extraction (Python)
 
@@ -431,7 +430,6 @@ plughub/
 
     calendar-api/                ← Calendar engine + CRUD REST (Arc 4) — port 3700
     scheduler-api/               ← Agenda: fire a pool via webhook at a time — port 3650
-    workflow-api/                ← Workflow instance lifecycle (Arc 4) — port 3800
     dialog-api/                  ← store canônico de DialogForm (draft/publish) — port 3760
     mailing-api/                 ← outbound: mailing, campaign, delivery — port 3660
     pricing-api/                 ← Capacity-based billing, invoice — port 3900
@@ -452,10 +450,12 @@ plughub/
 
     conversation-writer/         ← ⚠️ PACOTE FÓSSIL em quarentena declarada (2026-08-03)
     clickhouse-consumer/         ← ⚠️ PACOTE FÓSSIL em quarentena declarada (2026-08-03)
+    workflow-api/                ← ⚠️ PACOTE FÓSSIL em quarentena declarada (2026-09-30, WFL-01)
+    skill-flow-worker/           ← ⚠️ PACOTE FÓSSIL em quarentena declarada (2026-09-30, WFL-01)
 ```
 
-> **Os dois fósseis são mantidos DE PROPÓSITO e não devem ser religados.** Nenhum está deployado e o
-> destino de escrita de um deles não existe; ficam no repositório, com o rótulo no próprio README,
+> **Os quatro fósseis são mantidos DE PROPÓSITO e não devem ser religados.** Nenhum está deployado; o
+> destino de escrita de um deles não existe, e os dois da WFL-01 esperam um tópico que ninguém produz; ficam no repositório, com o rótulo no próprio README,
 > pelo mesmo critério da tabela `pools` fóssil — **o erro fica visível e reversível**. Apagá-los
 > troca um erro documentado por um buraco mudo; religá-los sem ler o README é o modo de falha que a
 > quarentena existe para impedir.
@@ -477,8 +477,6 @@ plughub/
 | rules-engine | Python | Python 3.11+ | Redis + ClickHouse |
 | calendar-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3700 |
 | scheduler-api | Python | Python 3.11+ | FastAPI + asyncpg + Redis — port 3650 |
-| workflow-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3800 |
-| skill-flow-worker | TypeScript | Node 20+ | Kafka consumer + SkillFlowEngine bridge |
 | skill-flow-service | TypeScript | Node 20+ | Express + ioredis — executor do `/execute` (SFS-01: morava em `e2e-tests/services/` rotulado *harness*) |
 | channel-gateway | Python | Python 3.11+ | FastAPI + aiokafka + channel adapters |
 | pricing-api | Python | Python 3.11+ | FastAPI + asyncpg + openpyxl — port 3900 |
@@ -628,8 +626,8 @@ dos defeitos medidos, as quatro superfícies), [`docs/arcos/ai-gateway.md`](docs
 | `reason` | Invokes AI Gateway with output_schema | AI Gateway |
 | `notify` | Sends message to customer (unidirectional) | Core → Channel Gateway |
 | `menu` | Captures customer input, suspends until reply | Core → Channel Gateway |
-| `suspend` | Suspends workflow until external signal | workflow-api |
-| `collect` | Contacts target via channel, awaits response | workflow-api → Channel Gateway |
+| `suspend` | Suspends workflow until external signal | session (Arc 19: TTL Redis + resume token) |
+| `collect` | Contacts target via channel, awaits response | Channel Gateway (`/v1/channels/webhook/collect`) |
 | `resolve` | Inline context accumulation (5-phase pipeline) | ContextStore + AI Gateway |
 | `begin_transaction` / `end_transaction` | Masked input atomic block | in-memory only |
 | `receive` | Suspends awaiting next stream message from any participant (no prompt sent to channel) | Redis BLPOP on `receive:result:{sid}:{iid}` |
@@ -694,16 +692,16 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `mcp.audit` | McpInterceptor / proxy sidecar | Analytics, LGPD |
 | `sentiment.updated` | AI Gateway | analytics-api |
 | `evaluation.events` | evaluation-api (requested), session-replayer (requested), mcp-server-plughub (completed) | session-replayer + routing-engine (requested→avaliador); evaluation-api (completed→ingest, persiste result+instance); analytics-api → ClickHouse |
-| `workflow.events` | workflow-api | skill-flow-worker |
+| ~~`workflow.events`~~ | **REMOVIDO 2026-09-30 (WFL-01)** — produtor (workflow-api) e consumidores (skill-flow-worker, evaluation-api) aposentados; `analytics.workflow_events` fica, vazia | — |
 | `menu.wake` | mcp-server-plughub (`menu_submit`, resposta de hook) · routing-engine (agente de fila) | orchestrator-bridge — acorda o `menu` estacionado (DUR-01 F3); publicado DEPOIS do `LPUSH`, chave `session_id` |
-| `collect.events` | workflow-api | analytics-api |
+| `collect.events` | **nenhum** — o único produtor era a workflow-api (fóssil), e já sem chamador; ver `WFL-02` | channel-gateway, analytics-api |
 | `session.signals` | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse |
 | `journey.merges` | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` (Journey J3) |
 | `speech.metrics` | Channel Gateway (bot leg WebRTC) · `speech-check` (verificação ativa, VOZ-23) | analytics-api → ClickHouse `speech_stream_summaries` / `speech_collect_outcomes` / `speech_checks` — só números, nunca texto (VOZ-22) |
 | `usage.events` | Core, AI Gateway, Channel Gateway | usage-aggregator |
 | `audit.access` | Channel Gateway (ouvir/exportar gravação, VOZ-36) | analytics-api → ClickHouse `audit_access_log` — a trilha LGPD tem UMA escritora |
 | `media.calls` | Channel Gateway (chamada presa a contato de chat, WCH-08) | analytics-api → ClickHouse `call_intervals` — `call_id` = id da entrada no stream, chave `session_id` |
-| `events.dead_letter` | skill-flow-worker, analytics-api, orchestrator-bridge | ops/monitoring |
+| `events.dead_letter` | analytics-api, orchestrator-bridge | ops/monitoring |
 
 ## Kafka Event Schemas — Zod Coverage
 
@@ -718,7 +716,6 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `queue.position_updated` | `QueuePositionUpdatedEventSchema` | `platform-events.ts` |
 | `conversations.routed/queued` | `ConversationRoutedEventSchema` | `platform-events.ts` |
 | `agent.lifecycle` | `AgentLifecycleEventSchema` | `platform-events.ts` |
-| `workflow.events` | `WorkflowEventSchema` | `workflow.ts` |
 | `collect.events` | `CollectEventSchema` | `workflow.ts` |
 | `usage.events` | `UsageEventSchema` | `usage.ts` |
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
@@ -1240,7 +1237,7 @@ caso"* ou *"remover a alternativa"*, a segunda é a que não depende de memória
 
 ## Arc 4 — Workflow Automation
 
-**workflow-api** (port 3800): ⚠️ **sem superfície de produto desde a AUT-64 (2026-09-29).** As rotas de instância e de proxy (`/trigger`, `/resume`, `/instances*`, `/collect/*`, `/campaigns/{id}/collects`) SAÍRAM por não terem chamador — `workflow.instances` tem 0 linhas e nada a escreve desde o Arc 19 —, e a borda deixou de publicar `/v1/workflow` e `/v1/journeys`. Sobram `/v1/health`, `POST /admin/backfill-events` (`X-Admin-Token`) e o scanner de timeout sobre tabelas vazias. Disparar ou retomar processo é pelo POOL, no channel-gateway. Aposentar o serviço e o skill-flow-worker: `WFL-01`.
+**workflow-api** e **skill-flow-worker**: ⚠️ **aposentados em 2026-09-30 (WFL-01)** — fósseis em quarentena declarada (README no pacote). Desde a AUT-64 a workflow-api só servia health e backfill, com o scanner de timeout varrendo tabelas vazias (`workflow.instances` = 0), e o worker consumia `workflow.events`, que ninguém mais produzia. Saíram de todo compose com o tópico; as tabelas do schema `workflow` ficam. Disparar ou retomar processo é pelo POOL, no channel-gateway.
 
 **Suspend step**: `reason: approval|input|webhook|timer`, `timeout_hours`, `business_hours` (uses calendar-api). Two-stage idempotency sentinel. **collect step**: contacts target via channel, suspends until response or timeout. `collect_token` for correlation; `campaign_id` as free-form grouper across instances.
 
@@ -1516,7 +1513,7 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 **WebhookAdapter** em `channel-gateway/adapters/webhook.py`: `POST /v1/channels/webhook/{skill_id}` (trigger), `POST /v1/channels/webhook/resume/{token}` (resume), `GET /v1/channels/webhook/{session_id}/status`. **Pool webhook**: `channel_types: [webhook]` + `skill_id` como endpoint.
 
-**O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic, entidade Journey ✅ (Fase F concluída 2026-05-28), Monitor/Processes e Analytics/Processes páginas separadas.
+**O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic (✅ WFL-01, 2026-09-30), entidade Journey ✅ (Fase F concluída 2026-05-28), Monitor/Processes e Analytics/Processes páginas separadas.
 
 **Monitor unificado** (4 abas — período: now/last_hour/last_24h/today): Sessions (channel_type filter, badge suspended, métricas Resolved/Escalated/Failure/Timeout/Cancelled/TMA), Pools (snapshot + tendência; webhook pools mostram capacidade configurada), Agents (humanos/AI; skill-flow instances via Pools), Events (Arc 12 business events, filtro regex de category). **Analytics unificado** (4 abas): Sessions (ANI/DNIS por channel_type; hierarquia sessions→segments→detalhe), Pools (time-series capacity), Agents (consolidado + drill-down segments), Events (time-series Arc 12 + drill-down segments). **duração tem DOIS nomes e eles NÃO são intercambiáveis** (D9): `elapsed_time_ms` (tempo — wall-clock do caso, **inclui** as esperas; webhook = `closed_at − primeiro segmento`) × `agent_time_ms` (agente × tempo — `Σ segments.duration_ms` com `agent_type != 'system' AND role IN ('primary','specialist') AND duration_ms IS NOT NULL`). ⚠️ Este arquivo afirmou por meses *"TMA webhook = `SUM(segment.duration_ms)`"* como se fosse implementação: era **falso** (o código fazia e faz wall-clock, e registrava a soma como refino adiado) e **conceitualmente errado** — a soma não é uma duração: segmentos se SOBREPÕEM (`@mention` é sempre paralelo ao primary e é rotina; especialista de conferência nasce dentro da janela do pai; hooks posatt são paralelos entre si), logo `Σ ≥ wall-clock` com sobreposição e `Σ ≤` com lacunas. **Nunca somar segmentos para obter tempo de sessão, e nunca comparar as duas.** Tempo suspenso tem lugar próprio: `analytics.session_transitions` (D4).
 

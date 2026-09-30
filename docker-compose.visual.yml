@@ -15,7 +15,6 @@
 #   http://localhost:3500   — Analytics API (dashboard/reports/sessions)
 #   http://localhost:3600   — Config API (configurações por tenant)
 #   http://localhost:3700   — Calendar API (calendários e feriados)
-#   http://localhost:3800   — Workflow API (instâncias de workflow)
 #   http://localhost:3300   — Agent Registry (pools, agent types, skills)
 #   http://localhost:3000   — Metabase (BI self-service)
 #   http://localhost:8080   — Kafka UI (tópicos e mensagens)
@@ -177,7 +176,6 @@ services:
           evaluation.events
           usage.events
           sentiment.updated
-          workflow.events
           calendar.events
         "
         for topic in $$TOPICS; do
@@ -365,39 +363,6 @@ services:
     networks:
       - plughub-visual
 
-  workflow-api:
-    build:
-      context: .
-      dockerfile: packages/workflow-api/Dockerfile
-    container_name: visual-workflow-api
-    ports:
-      - "3800:3800"
-    environment:
-      PLUGHUB_WORKFLOW_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
-      PLUGHUB_WORKFLOW_REDIS_URL:    redis://redis:6379
-      PLUGHUB_KAFKA_BROKERS:         kafka:29092
-      PLUGHUB_CALENDAR_API_URL:      http://calendar-api:3700
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-      calendar-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    restart: on-failure
-    networks:
-      - plughub-visual
-
   # Platform UI — React app served by nginx on port 5174
   platform-ui:
     build:
@@ -414,8 +379,6 @@ services:
       config-api:
         condition: service_healthy
       calendar-api:
-        condition: service_healthy
-      workflow-api:
         condition: service_healthy
     networks:
       - plughub-visual

@@ -20,7 +20,6 @@
 #   http://localhost:3500   — Analytics API
 #   http://localhost:3600   — Config API
 #   http://localhost:3700   — Calendar API
-#   http://localhost:3800   — Workflow API
 #   http://localhost:3000   — Metabase
 #   http://localhost:8080   — Kafka UI
 #   http://localhost:8081   — Redis Commander
@@ -176,7 +175,6 @@ services:
           evaluation.events
           usage.events
           sentiment.updated
-          workflow.events
           calendar.events
           collect.events
         "
@@ -533,64 +531,6 @@ services:
     networks:
       - plughub-full
 
-  workflow-api:
-    build:
-      context: .
-      dockerfile: packages/workflow-api/Dockerfile
-    container_name: full-workflow-api
-    ports:
-      - "3800:3800"
-    environment:
-      PLUGHUB_WORKFLOW_DATABASE_URL:  postgresql://plughub:plughub@postgres:5432/plughub
-      PLUGHUB_WORKFLOW_REDIS_URL:     redis://redis:6379
-      PLUGHUB_WORKFLOW_KAFKA_BROKERS: kafka:29092
-      PLUGHUB_WORKFLOW_CALENDAR_API_URL:    http://calendar-api:3700
-      PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL: http://agent-registry:3300
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-      calendar-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    restart: on-failure
-    networks:
-      - plughub-full
-
-  skill-flow-worker:
-    build:
-      context: .
-      dockerfile: packages/skill-flow-worker/Dockerfile
-    container_name: full-skill-flow-worker
-    environment:
-      KAFKA_BROKERS:    kafka:29092
-      REDIS_URL:        redis://redis:6379
-      WORKFLOW_API_URL: http://workflow-api:3800
-      MCP_SERVER_URL:   http://mcp-server-plughub:3100
-      AI_GATEWAY_URL:   http://ai-gateway:3200
-    depends_on:
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-      workflow-api:
-        condition: service_healthy
-      mcp-server-plughub:
-        condition: service_healthy
-    restart: on-failure
-    networks:
-      - plughub-full
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Channel & Analytics
 # ─────────────────────────────────────────────────────────────────────────────
@@ -789,8 +729,6 @@ services:
       config-api:
         condition: service_healthy
       calendar-api:
-        condition: service_healthy
-      workflow-api:
         condition: service_healthy
     networks:
       - plughub-full

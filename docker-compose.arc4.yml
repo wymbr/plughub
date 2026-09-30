@@ -1,5 +1,5 @@
 # docker-compose.arc4.yml
-# Arc 4 services: calendar-api (3700) + workflow-api (3800)
+# Arc 4 services: calendar-api (3700). A workflow-api saiu em 2026-09-30 (WFL-01).
 #
 # Depends on docker-compose.infra.yml already running (redis, postgres, kafka).
 # Shares the same plughub-infra network so containers resolve each other by hostname.
@@ -35,33 +35,6 @@ services:
     restart: unless-stopped
 
   # ── Workflow API ──────────────────────────────────────────────────────────────
-  workflow-api:
-    build:
-      context: .
-      dockerfile: packages/workflow-api/Dockerfile
-    container_name: workflow-api
-    ports:
-      - "3800:3800"
-    environment:
-      PLUGHUB_WORKFLOW_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub
-      PLUGHUB_WORKFLOW_KAFKA_BROKERS: kafka:29092
-      PLUGHUB_WORKFLOW_KAFKA_TOPIC: workflow.events
-      PLUGHUB_WORKFLOW_CALENDAR_API_URL:    http://calendar-api:3700
-      PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL: http://agent-registry:3300
-      PLUGHUB_WORKFLOW_HOST: 0.0.0.0
-      PLUGHUB_WORKFLOW_PORT: "3800"
-    networks:
-      - plughub-infra
-    depends_on:
-      calendar-api:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3800/v1/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
 # ── Referências externas (já criados pelo docker-compose.infra.yml) ───────────
 # Esses "services" não sobem nada — servem apenas para o depends_on funcionar.
   postgres-ext:
