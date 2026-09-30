@@ -63,8 +63,8 @@ from .auth import accessible_pools, pool_in_scope
 from .speech_config import PROFILE_ID_RE, VOICE_PARAMS, conferir_forma
 from .identity_auth import identity_principal, tenant_for
 from .context_reader import ContextReader
-from .pool_existence import pool_existence
-from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint, resolve_pool
+from .pool_existence import pool_existence, resolve_contact_address
+from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint
 from .outbound_consumer import OutboundConsumer
 from .call_relay import CallRelay
 from .registry_invalidation_consumer import RegistryInvalidationConsumer
@@ -674,25 +674,26 @@ async def websocket_endpoint(ws: WebSocket, pool_id: str) -> None:
     """
     settings = get_settings()
 
-    # ── Layer 2: channel endpoint lookup ─────────────────────────────────────
-    # Try to resolve the path param as a channel identifier → pool_id via the
-    # agent-registry.  Falls back gracefully when:
-    #   • no active ChannelEndpoint record exists (new or unknown identifier)
-    #   • the registry is unreachable (network error, cold-start race)
-    # In both cases we treat the path param itself as the pool_id, preserving
-    # full backward compatibility for existing deployments.
-    resolved_pool: str
-    if pool_id and settings.agent_registry_url:
-        looked_up = await resolve_pool(
-            channel            = "webchat",
-            identifier         = pool_id,
-            tenant_id          = settings.tenant_id,
-            agent_registry_url = settings.agent_registry_url,
-            cache_ttl_s        = settings.endpoint_cache_ttl_s,
-        )
-        resolved_pool = looked_up or pool_id
-    else:
-        resolved_pool = pool_id or settings.entry_point_pool_id
+    # ── WHK-02: o endereço é um ChannelEndpoint OU um pool que EXISTE ─────────
+    # Antes, identificador sem registro virava pool sem conferência — e registry fora do
+    # ar também: um `x` inventado nesta porta PÚBLICA nascia contato numa fila fantasma.
+    # A recusa fecha o WS com código próprio: 4404 (endereço não existe) e 1013 (não deu
+    # para conferir, tente de novo) — o cliente distingue, e o motivo vai ao log.
+    addr = await resolve_contact_address(
+        channel            = "webchat",
+        identifier         = pool_id,
+        tenant_id          = settings.tenant_id,
+        agent_registry_url = settings.agent_registry_url,
+        service_token      = settings.agent_registry_service_token,
+        cache_ttl_s        = settings.endpoint_cache_ttl_s,
+    )
+    if not addr.ok:
+        code = 4404 if addr.verdict == "not_found" else 1013
+        logger.warning("webchat WS RECUSADO: endereço %r — %s (%s)", pool_id, addr.verdict, addr.reason)
+        await ws.accept()
+        await ws.close(code=code, reason="address_not_found" if code == 4404 else "address_unverified")
+        return
+    resolved_pool = addr.pool_id
 
     adapter = WebchatAdapter(
         ws               = ws,

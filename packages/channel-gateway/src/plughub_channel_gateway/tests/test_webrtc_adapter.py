@@ -941,6 +941,29 @@ class TestWebRTCAdapterMediaCeiling:
 
 
 class TestWebRTCAdapterAuthHandshake:
+    @pytest.fixture(autouse=True)
+    def _endereco_valido(self, monkeypatch):
+        """WHK-02: o handshake só segue com endereço conferido. Estes casos testam o
+        HANDSHAKE, então recebem um endereço válido; a recusa tem os testes abaixo."""
+        from plughub_channel_gateway import pool_existence as pe
+
+        async def _addr(**kw):
+            return pe.ContactAddress("pool", pool_id=kw["identifier"])
+        monkeypatch.setattr(pe, "resolve_contact_address", _addr)
+
+    @pytest.mark.parametrize("verdict,code", [("not_found", "address_not_found"),
+                                              ("unavailable", "address_unverified")])
+    async def test_whk02_endereco_recusado_nao_abre_sessao(self, monkeypatch, verdict, code):
+        from plughub_channel_gateway import pool_existence as pe
+        from plughub_channel_gateway.adapters.webrtc import _AuthError
+
+        async def _addr(**kw):
+            return pe.ContactAddress(verdict, reason="x")
+        monkeypatch.setattr(pe, "resolve_contact_address", _addr)
+        with pytest.raises(_AuthError) as exc:
+            await self.adapter._resolve_pool("inventado", "c")
+        assert exc.value.code == code
+
     def setup_method(self):
         import jwt as pyjwt
         self.provider   = MockWebRTCProvider()

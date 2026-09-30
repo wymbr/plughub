@@ -840,6 +840,9 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
   fantasma). Publicar o prefixo torna disparável por qualquer um TODO pool webhook do tenant, inclusive
   os que promovem deploy e contatam clientes, e nenhum `auth_required` muda isso. O mesmo prefixo abriga
   RPC interno com nome infeliz (`…/delegate`, `…/collect`, `…/resume/{token}`, `…/identity/*`).
+  Os WebSockets públicos de contato (`/ws/chat/{x}`, `/ws/webrtc/{x}`) seguem a regra da WHK-01
+  desde a WHK-02: `ChannelEndpoint` ou pool que EXISTE; o resto fecha com 4404 (não existe) ou
+  1013 (não deu para conferir).
   ⚠️ **A separação externo×interno é de CÓDIGO, não de topologia** — `/channel/webhook/{slug}`
   (`main.py:1302`) e `/v1/channels/webhook/{skill_id}` (`:1387`) são rotas do MESMO app na MESMA porta
   (`docker-compose.demo.yml:1185`); o que as separa é `allowed_origins={"external"}` (`:1347`). **Não

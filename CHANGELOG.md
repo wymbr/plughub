@@ -1,5 +1,45 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (2) — WHK-02: os WebSockets públicos de contato só aceitam endereço que existe
+
+**O defeito:** `/ws/chat/{x}` (webchat, publicado na borda) e `/ws/webrtc/{x}` resolviam `x` como
+`ChannelEndpoint` e, sem registro, usavam o próprio `x` como pool, inclusive com o registry **fora
+do ar** (no WebRTC, a falha virava só um WARNING). É a família da WHK-01 na porta pública: um `x`
+inventado nascia contato numa fila que ninguém atende. *(A ficha dizia `/ws/webchat/{x}`; a rota é
+`/ws/chat/{x}`.)*
+
+**A decisão mudou ao medir.** O dono tinha decidido *"só `ChannelEndpoint`"*, com a premissa de que
+não havia widget de cliente publicado e, portanto, migrar embeds seria barato. A medição achou o pool
+cru dentro do **produto**: a página pública de pesquisa por link (J4c) abre o WS com o `pool_id` da
+pesquisa depois de criar a sessão. Também o usam 9 gates (`_ws_chat.py`, `_ws_engage.py`) e os cenários
+e2e 12 e 29. Levado de volta ao dono, ficou **conferir o pool, como na WHK-01**.
+
+**O que mudou:**
+- helper único **`resolve_contact_address`** (`pool_existence.py`), usado pelas duas portas:
+  `endpoint` (cadastrado) · `pool` (pool que EXISTE no registry) · `not_found` · `unavailable`. Com
+  endpoint cadastrado ou registro fora do ar, a existência do pool **nem é perguntada**;
+- webchat: recusa fecha o WS com **4404** (`address_not_found`) ou **1013** (`address_unverified`,
+  tente de novo), e o motivo vai ao log. Sem registry configurado, recusa em vez de adivinhar;
+- WebRTC: a mesma recusa, como erro nomeado do handshake, sem abrir sessão.
+
+**Medido ao vivo:** `inventado_whk02` fecha com 4404 e o log diz *"pool não existe no tenant"*; `demo`
+(endpoint) e `demo_ia` (pool cru que existe) abrem com `conn.hello`.
+
+**Instrumentos:**
+- testes do helper (5 casos, e nos dois de atalho o pool nem é consultado), da rota (4404 e 1013 sem
+  criar adapter), do controle positivo (endereço válido chega ao adapter com o pool) e do handshake
+  WebRTC (as duas recusas);
+- contraprova: com pool inexistente aceito como pool, 2 casos ficam vermelhos;
+- os 6 testes de handshake que dependiam do fallback passaram a receber endereço válido por fixture
+  (eles testam o handshake, não o endereço);
+- gateway 1 458.
+
+**Os gates que abrem este WS:** `probe_invoke_absent_ref`, `probe_journey_merge_status_access`,
+`probe_spawn_reason_collect` e `probe_wch01_chat_call` verdes. O `probe_replay_customer_text` ficou
+**vermelho em A1, e não por esta mudança**: o WS abriu, a sessão persistiu (A0) e o caminho humano
+está íntegro (H1). É regressão da RPL-01 (a resposta de formulário da IA não chega ao avaliador),
+registrada como **RPL-03**.
+
 ## 2026-09-30 (1) — ROT-01: F5 e link direto em /config/* abrem a página, sem lista no nginx
 
 **O defeito:** o nginx do platform-ui entregava o SPA só para uma **allowlist** de páginas sob

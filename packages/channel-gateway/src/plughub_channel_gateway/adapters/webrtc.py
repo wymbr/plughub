@@ -3204,27 +3204,32 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         Devolve também o `speech_profile_id` que o endpoint aponta em `settings` (VOZ-25) — só
         existe quando o endereço é um endpoint cadastrado; pool direto não tem perfil.
         """
+        # WHK-02 (2026-09-30): endereço desconhecido só vira pool se o pool EXISTE, e registro
+        # fora do ar RECUSA. Antes, os dois casos seguiam com o próprio `pool_id` — e a falha
+        # do registry era só um WARNING —, criando contato numa fila que ninguém atende.
+        from ..pool_existence import resolve_contact_address
         s = self._settings
-        if pool_id and s.agent_registry_url:
-            try:
-                from ..endpoint_resolver import resolve_endpoint as _resolve
-                ep = await _resolve(
-                    channel            = "webrtc",
-                    identifier         = pool_id,
-                    tenant_id          = s.tenant_id,
-                    agent_registry_url = s.agent_registry_url,
-                    cache_ttl_s        = s.endpoint_cache_ttl_s,
-                )
-                if ep.pool_id:
-                    perfil = ep.settings.get("speech_profile_id")
-                    if perfil is not None and not isinstance(perfil, str):
-                        logger.error("webrtc: endpoint %s tem speech_profile_id nao-texto (%r) — ignorado",
-                                     pool_id, perfil)
-                        perfil = None
-                    return ep.pool_id, (perfil or None)
-            except Exception as exc:
-                logger.warning("webrtc pool resolve failed: %s", exc)
-        return pool_id or s.webrtc_default_pool_id, None
+        addr = await resolve_contact_address(
+            channel            = "webrtc",
+            identifier         = pool_id or s.webrtc_default_pool_id,
+            tenant_id          = s.tenant_id,
+            agent_registry_url = s.agent_registry_url,
+            service_token      = getattr(s, "agent_registry_service_token", ""),
+            cache_ttl_s        = s.endpoint_cache_ttl_s,
+        )
+        if not addr.ok:
+            logger.warning("webrtc: endereço %r RECUSADO — %s (%s)", pool_id, addr.verdict, addr.reason)
+            if addr.verdict == "not_found":
+                raise _AuthError("address_not_found", "Unknown channel address")
+            raise _AuthError("address_unverified", "Could not verify the channel address — try again")
+        if addr.verdict == "endpoint":
+            perfil = addr.endpoint.settings.get("speech_profile_id")
+            if perfil is not None and not isinstance(perfil, str):
+                logger.error("webrtc: endpoint %s tem speech_profile_id nao-texto (%r) — ignorado",
+                             pool_id, perfil)
+                perfil = None
+            return addr.pool_id, (perfil or None)
+        return addr.pool_id, None
 
     async def _resolve_jwt_secret(self, tenant_id: str) -> str:
         """

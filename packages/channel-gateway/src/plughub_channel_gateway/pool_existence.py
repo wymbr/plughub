@@ -56,3 +56,72 @@ async def pool_existence(
     if r.status_code == 404:
         return "not_found", f"pool '{pool_id}' não existe no tenant '{tenant_id}'"
     return "unavailable", f"registry respondeu HTTP {r.status_code}"
+
+
+# ── WHK-02 (2026-09-30): o endereço das portas PÚBLICAS de contato ─────────────
+#
+# `/ws/chat/{x}` e `/ws/webrtc/{x}` resolviam `x` como `ChannelEndpoint` e, sem registro,
+# usavam o próprio `x` como pool ("backward compatibility") — inclusive quando o registry
+# estava FORA do ar. É a família da WHK-01 na porta publicada na borda: um `x` inventado
+# virava contato numa fila que ninguém atende. Decisão do dono: `x` desconhecido só vira
+# pool se o pool EXISTE (a página de pesquisa por link, 9 gates e 2 cenários e2e abrem o
+# WS pelo pool cru, então "só ChannelEndpoint" quebraria produto).
+
+AddressVerdict = Literal["endpoint", "pool", "not_found", "unavailable"]
+
+
+class ContactAddress:
+    """O que a porta pública sabe sobre o endereço `x`, sem palpite."""
+    __slots__ = ("verdict", "pool_id", "reason", "endpoint")
+
+    def __init__(self, verdict: AddressVerdict, pool_id: str = "", reason: str = "",
+                 endpoint: object | None = None) -> None:
+        self.verdict = verdict
+        self.pool_id = pool_id
+        self.reason = reason
+        self.endpoint = endpoint
+
+    @property
+    def ok(self) -> bool:
+        return self.verdict in ("endpoint", "pool")
+
+
+async def resolve_contact_address(
+    *,
+    channel:            str,
+    identifier:         str,
+    tenant_id:          str,
+    agent_registry_url: str,
+    service_token:      str = "",
+    cache_ttl_s:        int = 30,
+) -> ContactAddress:
+    """`endpoint` (cadastrado) · `pool` (pool que EXISTE) · `not_found` · `unavailable`.
+
+    `unavailable` = não deu para perguntar — quem chama RECUSA, nunca segue com `x`.
+    """
+    from .endpoint_resolver import resolve_endpoint
+
+    if not identifier:
+        return ContactAddress("not_found", reason="endereço vazio")
+    if not agent_registry_url:
+        return ContactAddress("unavailable", reason="agent_registry_url não configurada")
+    ep = await resolve_endpoint(
+        channel            = channel,
+        identifier         = identifier,
+        tenant_id          = tenant_id,
+        agent_registry_url = agent_registry_url,
+        cache_ttl_s        = cache_ttl_s,
+    )
+    if ep.pool_id:
+        return ContactAddress("endpoint", pool_id=ep.pool_id, endpoint=ep)
+    if ep.outcome == "unavailable":
+        return ContactAddress("unavailable", reason=f"registro de canais inalcançável ({channel}/{identifier})")
+    veredito, motivo = await pool_existence(
+        tenant_id          = tenant_id,
+        pool_id            = identifier,
+        agent_registry_url = agent_registry_url,
+        service_token      = service_token,
+    )
+    if veredito == "exists":
+        return ContactAddress("pool", pool_id=identifier)
+    return ContactAddress(veredito, reason=motivo)

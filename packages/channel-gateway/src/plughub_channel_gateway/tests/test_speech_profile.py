@@ -206,6 +206,12 @@ class TestEndpointAponta:
         async def _ep(**kw):
             return endpoint_resolver.ResolvedEndpoint(None, None, False, None, "not_found")
         monkeypatch.setattr(endpoint_resolver, "resolve_endpoint", _ep)
+        # WHK-02: pool direto só vale se EXISTE no registry.
+        from plughub_channel_gateway import pool_existence as pe
+
+        async def _existe(**kw):
+            return "exists", ""
+        monkeypatch.setattr(pe, "pool_existence", _existe)
         assert await adapter._resolve_pool("pool-x", "c") == ("pool-x", None)
 
 
