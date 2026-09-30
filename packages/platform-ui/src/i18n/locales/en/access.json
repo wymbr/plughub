@@ -58,6 +58,7 @@
       "dashboards": "Dashboards (templates and per-role catalog)",
       "calendars": "Calendars and holidays",
       "dialog_forms": "Dialog forms (DialogForms)",
+      "rules": "Escalation rules (Rules Engine)",
       "resources": "Routing resources (pools, skills, LLM accounts)",
       "channels": "Channel configuration and credentials",
       "users": "User management (create, edit details, activate/deactivate)",

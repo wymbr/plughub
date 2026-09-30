@@ -672,6 +672,8 @@ services:
       DIALOG_SERVICE_TOKEN: changeme_dialog_service_token_demo   # AUT-62 — leitura de runtime (== PLUGHUB_DIALOG_SERVICE_TOKEN)
       MAILING_API_URL: http://mailing-api:3660   # outbound Fase 1 — mailing_add/campaign_drain/campaign_delivery_result
       MAILING_SERVICE_TOKEN: changeme_mailing_service_token_demo   # AUT-60 — == PLUGHUB_MAILING_SERVICE_TOKEN
+      RULES_ENGINE_URL: http://rules-engine:3201   # AUT-65 — a tool rule_dry_run nunca teve esta env
+      RULES_ENGINE_SERVICE_TOKEN: changeme_rules_service_token_demo   # AUT-65 — == PLUGHUB_RULES_SERVICE_TOKEN
       CONFIG_API_URL: http://config-api:3600   # masking context_rules via HTTP (config-http-propagation arc)
       CHANNEL_GATEWAY_URL: http://channel-gateway:8010   # I5 — gatilho de supervisor retoma a workflow pelo ingress do gateway
       CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo   # IDN-06 — == PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN do gateway
@@ -805,10 +807,14 @@ services:
       context: .
       dockerfile: packages/rules-engine/Dockerfile
     ports:
-      - "3201:3201"
+      # AUT-65: era "3201:3201" (= 0.0.0.0) — a API anônima alcançável da LAN. Loopback,
+      # como o mcp-server desde a CAP-13; a rede interna do compose continua chegando.
+      - "127.0.0.1:3201:3201"
     environment:
       PLUGHUB_REDIS_URL: redis://redis:6379
       PLUGHUB_API_PORT: "3201"
+      PLUGHUB_AUTH_JWT_SECRET: changeme_auth_jwt_secret_demo_32c   # AUT-65 — == o do auth-api
+      PLUGHUB_RULES_SERVICE_TOKEN: changeme_rules_service_token_demo   # AUT-65 — mcp-server, e2e-runner
     depends_on:
       redis:
         condition: service_healthy
@@ -817,7 +823,8 @@ services:
       kafka-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3201/rules?tenant_id=health_probe', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      # AUT-65: `/rules` passou a exigir credencial — o healthcheck vai ao `/health`.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3201/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -2323,6 +2330,7 @@ services:
       AGENT_REGISTRY_URL:       http://agent-registry:3300
       SKILL_FLOW_URL:           http://skill-flow-service:3460
       RULES_ENGINE_URL:         http://rules-engine:3201
+      RULES_ENGINE_SERVICE_TOKEN: changeme_rules_service_token_demo   # AUT-65
       AI_GATEWAY_URL:           http://ai-gateway:3200
       AUTH_API_URL:             http://auth-api:3200
       EVALUATION_API_URL:       http://evaluation-api:3400

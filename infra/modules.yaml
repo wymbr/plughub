@@ -374,6 +374,16 @@ modules:
         default: none
         role_defaults:
           admin: read_write
+      rules:
+        # AUT-65 (2026-09-30): portão da API do rules-engine. read_only lê regras e relatório;
+        # read_write cria, muda status (ATIVA), roda dry-run e evaluate. Desde a RUL-02 uma regra
+        # ativa com target_pool tira o contato da IA — por isso só admin nasce com o campo.
+        label: Regras de escalação (Rules Engine)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+        role_defaults:
+          admin: read_write
       resources:
         # MOD-06 (2026-09-08): o rotulo citava quatro coisas e o campo nao gateava tres
         # delas — `/v1/instances` esta FORA do gate por decisao, `/v1/agent-types` nao

@@ -59,7 +59,13 @@ ai-gateway ──pub/sub session:updates:{sid}──▶ rules-engine
   ele decide; a marca sobra sem efeito (TTL 24 h) — ou o bridge já recusa com `no_ai_conductor`.
 - **Regra não tem filtro por pool.** Vale para o tenant inteiro.
 - **Regra de sentimento vê só o sentimento AUTO-DECLARADO pelo `reason`** (`RUL-04`); regras não
-  têm tela (`RUL-03`); a API do rules-engine não tem credencial (`AUT-65`).
+  têm tela (`RUL-03`); não há dry-run histórico (`RUL-05`, recusa 501).
+
+## Quem pode mexer nas regras (AUT-65)
+
+Toda rota menos `/health` exige credencial (`rules-engine/auth.py`): `config.rules` `read_only` lê,
+`read_write` cria, ativa, faz dry-run e evaluate (preset só `admin`); tenant do token; serviço por
+`X-Service-Token` (`PLUGHUB_RULES_SERVICE_TOKEN` — mcp-server e e2e-runner). Porta 3201 em loopback.
 
 ## O defeito que a entrega achou
 

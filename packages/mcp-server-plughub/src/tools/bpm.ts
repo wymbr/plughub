@@ -507,26 +507,37 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     withGuard("rule_dry_run", async (input: Record<string, unknown>) => {
       const parsed = RuleDryRunInputSchema.parse(input)
 
-      // Delegate to Rules Engine REST API — it has the ClickHouse connection
-      const rulesEngineUrl = process.env["RULES_ENGINE_URL"] ?? "http://localhost:3500"
+      // AUT-65 (2026-09-30) — esta tool NUNCA alcançou o rules-engine: chamava
+      // `/v1/rules/dry-run` (rota inexistente), sem env no compose caía no default 3500 (a
+      // analytics-api) e devolvia o erro DENTRO do conteúdo, sem `isError` — o chamador lia
+      // "simulação" onde havia falha. Agora: rota real, credencial de serviço, e falha é
+      // `isError` nomeando o motivo. O rules-engine hoje RECUSA o dry-run histórico com 501
+      // (não há parâmetros por turno persistidos — RUL-05), e esse motivo chega inteiro.
+      const rulesEngineUrl = process.env["RULES_ENGINE_URL"] ?? ""
+      const serviceToken   = process.env["RULES_ENGINE_SERVICE_TOKEN"] ?? ""
+      const falha = (motivo: string) => ({
+        isError: true as const,
+        content: [{ type: "text" as const, text: JSON.stringify({ error: "rule_dry_run_unavailable", motivo }) }],
+      })
+      if (!rulesEngineUrl || !serviceToken) {
+        return falha("RULES_ENGINE_URL/RULES_ENGINE_SERVICE_TOKEN nao configurados no mcp-server")
+      }
       let simulation: Record<string, unknown>
       try {
-        const res = await fetch(`${rulesEngineUrl}/v1/rules/dry-run`, {
+        const res = await fetch(`${rulesEngineUrl}/rules/dry-run`, {
           method:  "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Service-Token": serviceToken },
           body:    JSON.stringify({
             tenant_id:           parsed.tenant_id,
             rule:                parsed.rule,
             history_window_days: parsed.history_window_days,
           }),
         })
-        if (!res.ok) throw new Error(`rules-engine responded ${res.status}`)
-        simulation = await res.json() as Record<string, unknown>
+        const corpo = await res.text()
+        if (!res.ok) return falha(`rules-engine respondeu ${res.status}: ${corpo.slice(0, 400)}`)
+        simulation = JSON.parse(corpo) as Record<string, unknown>
       } catch (err) {
-        simulation = {
-          error:   "rules_engine_unavailable",
-          message: err instanceof Error ? err.message : "unknown error",
-        }
+        return falha(`rules-engine inalcancavel: ${err instanceof Error ? err.message : String(err)}`)
       }
 
       return {

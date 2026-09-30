@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # API
     api_port: int = 3201
 
+    # AUT-65 — portão da API. Vazios FECHAM: sem segredo de JWT a rota responde 503; sem
+    # token de serviço a porta de serviço não existe (nunca "aberta por padrão").
+    auth_jwt_secret:     str = ""   # == PLUGHUB_AUTH_JWT_SECRET do auth-api
+    rules_service_token: str = ""   # PLUGHUB_RULES_SERVICE_TOKEN — mcp-server (rule_dry_run), e2e-runner
+
     # Dry-run
     dry_run_sample_size: int = 5  # sample conversations in the result
 

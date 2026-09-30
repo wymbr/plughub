@@ -1,5 +1,67 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (14) — AUT-65: a API do rules-engine exige credencial, e ativar regra deixou de ser anônimo
+
+**O que a ficha registrava:** 7 de 8 rotas do rules-engine sem guard, *"na rede interna"*. Desde a
+RUL-02 o peso mudou: ativar uma regra com `target_pool` tira contatos da IA de verdade, e o `PATCH`
+que ativa respondia a qualquer um.
+
+**Medido antes, e pior que a ficha:**
+- **A porta era da LAN.** `"3201:3201"` publica em `0.0.0.0`, então a API anônima era alcançável de
+  qualquer aparelho na rede. Passou a `127.0.0.1:3201`, como o mcp-server desde a CAP-13.
+- **O healthcheck ia a `GET /rules`.** Fechar a rota sem mudá-lo deixaria o serviço `unhealthy`. Agora
+  vai a `/health`.
+- **A ficha dizia que *"a tela do módulo já declara o menu"*, e não há tela nenhuma de regras** (RUL-03).
+- **A tool `rule_dry_run` nunca alcançou o serviço.** Chamava `/v1/rules/dry-run` (rota que não existe);
+  o mcp-server não tinha `RULES_ENGINE_URL`, então caía no default 3500 (a analytics-api); e devolvia o
+  erro dentro do conteúdo, sem `isError`. O teste dela aceitava *"ambos são válidos"* — não podia
+  reprovar.
+- **O dry-run da regra devolvia ZEROS** (`sessions_evaluated=0`, `escalation_rate=0.0`): um *"não
+  escalaria nada"* com cara de medição, num placeholder.
+
+**Decisões do dono (2026-09-30):**
+1. Capacidade = campo novo **`config.rules`**: `read_only` lê regras e relatório; `read_write` cria,
+   muda status, roda dry-run e evaluate. Preset só para `admin` — e por ser preset de nascimento,
+   **nenhum usuário existente tem o campo**; quem opera regras recebe a concessão em `/config/access`.
+2. `rule_dry_run` é **consertada**: rota real, credencial de serviço, falha como `isError` nomeando o
+   motivo.
+3. O dry-run histórico **recusa alto** com 501, nomeando o que falta, e vira ficha: não há parâmetros
+   por turno persistidos de onde simular (`RUL-05`).
+
+**O portão** (`rules-engine/auth.py`, no desenho da dialog-api):
+- a credencial é conferida na dependência do router, ANTES do corpo, então o anônimo recebe 401 e nunca
+  422;
+- capacidade e tenant são decididos por rota; o tenant é o do token, e divergente dá 403
+  `tenant_mismatch`;
+- `X-Service-Token` (`PLUGHUB_RULES_SERVICE_TOKEN`) é a porta do mcp-server e do e2e-runner; token vazio
+  fecha a porta;
+- sem segredo de JWT a resposta é 503, nunca "aceito sem conferir".
+
+**Ao vivo:**
+
+| chamador | resposta |
+|---|---|
+| anônimo (GET, POST com corpo inválido, PATCH que ativa) | 401 |
+| `/health` | 200 |
+| sem o campo | 403 |
+| `read_only`: lê | 200 |
+| `read_only`: ativa | 403 |
+| `read_write` | 200 |
+| token de outro tenant | 403 |
+| serviço | 200 |
+| dry-run | 501, com o motivo |
+
+O container ficou `healthy` e a porta em `127.0.0.1`.
+
+**Testes e verificação:**
+- **Testes:** rules-engine 54 (novo `test_api_auth.py`); mcp-server `bpm.test.ts`, com os três ramos
+  da tool (sem env ⇒ `isError`; 501 ⇒ `isError` com a rota e o header conferidos; 200 ⇒ simulação).
+- **Contraprovas**, cada uma com vermelho: sem a dependência do router (três rotas voltam a dar 422 ao
+  anônimo); ativar com `read_only`; sem conferir tenant; token vazio abrindo; segredo ausente
+  aceitando; dry-run devolvendo corpo; tool no caminho antigo; tool sem o header.
+- **Gates:** varredura anônima de rotas, chamadores internos, verificador único, suítes Python,
+  censo das tools MCP e invariantes de config verdes.
+
 ## 2026-09-30 (13) — RUL-02: a escalação por regra tem caminho — a IA para na fronteira do passo e escala a si mesma
 
 **O que a ficha registrava:** desde a RUL-01 o modo ativo recusava e a API recusava ativar regra

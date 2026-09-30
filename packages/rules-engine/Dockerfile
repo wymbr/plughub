@@ -9,6 +9,9 @@ WORKDIR /app
 # dele precisa achar a dependencia satisfeita, senao a procura no PyPI.
 COPY packages/py-tasks ./packages/py-tasks
 RUN pip install --no-cache-dir -e ./packages/py-tasks
+# AUT-65: verificador canonico de JWT+ABAC (packages/py-authz), antes do servico pelo mesmo motivo.
+COPY packages/py-authz ./packages/py-authz
+RUN pip install --no-cache-dir -e ./packages/py-authz
 COPY packages/rules-engine ./packages/rules-engine
 
 WORKDIR /app/packages/rules-engine

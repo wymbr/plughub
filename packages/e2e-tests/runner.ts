@@ -355,7 +355,7 @@ async function main(): Promise<void> {
     waits.push(
       waitForService(`${config.mcpServerUrl}/health`, "mcp-server-plughub", 30000),
       waitForService(`${config.skillFlowUrl}/health`, "skill-flow-service", 30000),
-      waitForService(`${config.rulesEngineUrl}/rules?tenant_id=${config.tenantId}`, "rules-engine", 30000),
+      waitForService(`${config.rulesEngineUrl}/health`, "rules-engine", 30000),   // AUT-65: /rules exige credencial
     );
   }
 

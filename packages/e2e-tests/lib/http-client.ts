@@ -188,10 +188,18 @@ export interface AgentTypeRecord {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class RulesEngineClient {
-  constructor(private readonly baseUrl: string) {}
+  // AUT-65: a API do rules-engine exige credencial; o e2e entra pela porta de SERVIÇO.
+  constructor(
+    private readonly baseUrl: string,
+    private readonly serviceToken: string = process.env["RULES_ENGINE_SERVICE_TOKEN"] ?? "",
+  ) {}
+
+  private get auth(): Record<string, string> {
+    return this.serviceToken ? { "X-Service-Token": this.serviceToken } : {};
+  }
 
   async createRule(body: object): Promise<{ rule_id: string; status: string }> {
-    return (await post(`${this.baseUrl}/rules`, body)) as {
+    return (await post(`${this.baseUrl}/rules`, body, this.auth)) as {
       rule_id: string;
       status: string;
     };
@@ -204,21 +212,20 @@ export class RulesEngineClient {
   ): Promise<unknown> {
     return patch(
       `${this.baseUrl}/rules/${ruleId}/status?tenant_id=${encodeURIComponent(tenantId)}`,
-      { status }
+      { status },
+      this.auth,
     );
   }
 
   async getRule(ruleId: string, tenantId: string): Promise<unknown> {
-    return get(
-      `${this.baseUrl}/rules/${ruleId}?tenant_id=${encodeURIComponent(tenantId)}`
-    );
+    return get(`${this.baseUrl}/rules/${ruleId}?tenant_id=${encodeURIComponent(tenantId)}`, this.auth);
   }
 
   async listRules(tenantId: string, status?: string): Promise<unknown[]> {
     const qs = status
       ? `tenant_id=${encodeURIComponent(tenantId)}&status=${encodeURIComponent(status)}`
       : `tenant_id=${encodeURIComponent(tenantId)}`;
-    return (await get(`${this.baseUrl}/rules?${qs}`)) as unknown[];
+    return (await get(`${this.baseUrl}/rules?${qs}`, this.auth)) as unknown[];
   }
 
   async evaluate(body: {
@@ -226,7 +233,7 @@ export class RulesEngineClient {
     tenant_id: string;
     turn_id?: string;
   }): Promise<{ should_escalate: boolean; rule_id?: string; pool_target?: string }> {
-    return (await post(`${this.baseUrl}/evaluate`, body)) as {
+    return (await post(`${this.baseUrl}/evaluate`, body, this.auth)) as {
       should_escalate: boolean;
       rule_id?: string;
       pool_target?: string;
