@@ -57,7 +57,8 @@
     "delete": "Apagar",
     "cancel": "Cancelar",
     "save": "Salvar",
-    "saving": "Salvando…"
+    "saving": "Salvando…",
+    "simulate": "Simular"
   },
   "confirm": {
     "delete": "Apagar a regra \"{{name}}\"? Os disparos passados ficam no registro."
@@ -87,5 +88,22 @@
     "load": "Não foi possível carregar as regras: {{detail}}",
     "status": "Não foi possível mudar {{id}}: {{detail}}",
     "delete": "Não foi possível apagar {{id}}: {{detail}}"
+  },
+  "sim": {
+    "title": "Simular — {{name}}",
+    "info": "Reavalia esta regra contra o contexto que as regras viram em cada turno de IA, com o mesmo avaliador. O histórico guarda 90 dias e só existe desde que o registro foi ligado.",
+    "window": "Últimos",
+    "days": "{{n}} dias",
+    "run": "Simular",
+    "running": "Simulando…",
+    "summary": "Teria escalado {{n}} de {{total}} sessões",
+    "turns": "{{n}} turnos avaliados",
+    "partial": "O histórico só começa em {{since}} — a janela é parcial.",
+    "truncated": "Turnos demais na janela: a simulação foi cortada e a última sessão pode estar incompleta.",
+    "noHistory": "Ainda não há histórico de turnos deste tenant — nada a simular. Ele se forma conforme as conversas com IA acontecem.",
+    "noPool": "A regra não tem pool: casaria, mas nunca agiria.",
+    "samples": "Sessões que escalariam",
+    "atTurn": "turno {{n}}",
+    "error": "A simulação falhou: {{detail}}"
   }
 }

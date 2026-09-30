@@ -1,5 +1,82 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (18) — RUL-05: o dry-run de regra simula de verdade, contra o contexto que as regras viram em cada turno
+
+**O que a ficha registrava:** desde a AUT-65 o dry-run recusava com 501, porque não havia de onde
+simular: os parâmetros por turno só existiam em `session:{sid}:ai`, no Redis, e expiravam. O
+`DryRunEngine` já sabia avaliar uma lista de contextos por sessão; faltavam o produtor e o leitor.
+
+**Medido antes:**
+- O rules-engine já monta, a cada atualização, exatamente o contexto que a regra vê, **antes** de
+  olhar se o tenant tem regra.
+- A tool `rule_dry_run` mandava a regra num formato (`expression` livre) que o serviço nunca entendeu.
+- O engine amostrava as primeiras sessões **quaisquer**, e não as que disparariam.
+
+**Decisões do dono (2026-09-30):**
+1. **Quem publica é o rules-engine**, porque é o contexto que a regra vê: uma montagem só, inclusive
+   o sentimento medido (RUL-04).
+2. **Todos os tenants, sempre**, com ou sem regra. Assim, quem escreve a primeira regra já encontra
+   passado.
+3. **90 dias** de retenção, que é o teto da janela do dry-run.
+
+**O ciclo:**
+- **Produtor.** O rules-engine publica `rules.turn_contexts`, chave `session_id`, em toda atualização:
+  o turno do ai-gateway e a chegada da medição (`trigger: sentiment_measured`).
+  - Roda em task própria: broker lento não atrasa a avaliação.
+  - Falha é WARNING, nomeando o turno que o histórico perde.
+  - Schema: `RulesTurnContextEventSchema` (Zod, `.strict()`).
+- **Gravação.** A analytics-api, única escritora do ClickHouse, grava `rule_turn_contexts`
+  (ReplacingMergeTree, TTL 90 dias).
+  - Numérico ausente **recusa** a linha: um 0 inventado faria a simulação disparar ou calar sobre um
+    turno que não foi assim.
+  - Sentimento ausente fica NULL.
+  - Só números e nomes de flag atravessam, nada de texto.
+- **Leitor.** `history_reader.py` no rules-engine lê o ClickHouse com `FINAL`, agrupa por sessão em
+  ordem de observação e devolve:
+  - `coverage_from`, desde quando há histórico do tenant;
+  - `truncated`, quando passa de 200 mil turnos.
+- **Rotas.**
+  - `POST /rules/{id}/dry-run` simula a regra salva numa janela de até 90 dias.
+  - `POST /rules/dry-run` simula a regra não salva nos últimos N dias, com a mesma validação da edição
+    (a janela de média é recusada, RUL-04).
+  - Sem sessão, a taxa é `null`, nunca 0.0.
+  - ClickHouse fora dá 503 nomeando o motivo; janela inválida dá 422.
+  - A amostra traz só sessões que **disparariam**, com o turno.
+- **Tool `rule_dry_run`.** O formato da regra passou a ser o da edição do rules-engine.
+- **Tela de regras.** *Simular* com 7, 30 ou 90 dias. A tela diz quando a janela é parcial (o
+  histórico começa depois do início dela), quando foi cortada, quando não há histórico e quando a
+  regra não tem pool.
+
+**Ao vivo**, com ai-gateway, rules-engine, Kafka, analytics-api e ClickHouse reais (só o LLM em stub),
+num tenant de prova:
+- antes de haver turno, o dry-run devolveu 0 sessões com taxa `null` e `coverage_from: null`;
+- três sessões geraram cinco linhas: o turno com sentimento NULL e, depois, a medição (−0,8 · +0,5 ·
+  sem medida);
+- a regra `sentimento < −0,5` deu **"teria escalado 1 de 3"**, na sessão de −0,8, no turno 2;
+- o controle `> 0,9` deu 0;
+- pela borda da UI, com token de usuário, a rota respondeu 200;
+- regra, linhas do ClickHouse e chaves de prova foram removidas.
+
+**Testes e verificação:**
+- **Testes:**
+  - rules-engine 77 (`test_turn_history.py` e as rotas em `test_api_auth.py`);
+  - analytics-api 897 (`test_rule_turn_contexts.py`);
+  - mcp-server `bpm.test.ts` 12.
+- **Contraprovas**, cada uma com vermelho:
+  - publicar só quando há regra;
+  - cobertura inventada sem histórico;
+  - taxa sobre nada;
+  - ClickHouse fora virando histórico vazio;
+  - amostra de sessões quaisquer;
+  - NULL virando 0 no parser;
+  - turno completado com 0.
+- **Gates verdes:** varredura anônima de rotas, suítes Python pela imagem, mesma origem da UI,
+  credencial das chamadas da UI, classes de cor, i18n duplicado e ledger.
+
+⚠️ **O histórico nasce hoje.** Janela que começa antes de 2026-09-30 é parcial, e a tela diz isso.
+O dado expira em 90 dias. A linha não carrega dado pessoal (só números e nomes de flag), por isso fica
+fora do dossiê e da eliminação do titular. Ela sai sozinha pelo TTL.
+
 ## 2026-09-30 (17) — RUL-04: a regra de sentimento vê o sentimento MEDIDO, e reage quando a medição chega
 
 **O que a ficha registrava:** a regra lia o `sentiment_score` do pub/sub `session:updates:*`, que é o

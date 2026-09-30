@@ -57,7 +57,8 @@
     "delete": "Delete",
     "cancel": "Cancel",
     "save": "Save",
-    "saving": "Saving…"
+    "saving": "Saving…",
+    "simulate": "Simulate"
   },
   "confirm": {
     "delete": "Delete rule \"{{name}}\"? Past triggers stay in the log."
@@ -87,5 +88,22 @@
     "load": "Could not load the rules: {{detail}}",
     "status": "Could not change {{id}}: {{detail}}",
     "delete": "Could not delete {{id}}: {{detail}}"
+  },
+  "sim": {
+    "title": "Simulate — {{name}}",
+    "info": "Re-evaluates this rule against the context rules saw on each AI turn, with the same evaluator. History is kept for 90 days and only exists since the recorder was switched on.",
+    "window": "Last",
+    "days": "{{n}} days",
+    "run": "Simulate",
+    "running": "Simulating…",
+    "summary": "Would have escalated {{n}} of {{total}} sessions",
+    "turns": "{{n}} turns evaluated",
+    "partial": "History only starts on {{since}} — the window is partial.",
+    "truncated": "Too many turns in the window: the simulation was cut and the last session may be incomplete.",
+    "noHistory": "There is no turn history for this tenant yet — nothing to simulate. It builds up as AI conversations happen.",
+    "noPool": "The rule has no pool: it would match but never act.",
+    "samples": "Sessions that would escalate",
+    "atTurn": "turn {{n}}",
+    "error": "Simulation failed: {{detail}}"
   }
 }

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     redis_url:         str = "redis://localhost:6379"
     clickhouse_url:    str = "http://localhost:8123"
     clickhouse_db:     str = "plughub"
+    # RUL-05 — o dry-run histórico LÊ `rule_turn_contexts` (quem escreve é a analytics-api).
+    clickhouse_user:     str = "default"
+    clickhouse_password: str = ""
 
     # Redis channel for session updates
     redis_session_channel: str = "session:updates"

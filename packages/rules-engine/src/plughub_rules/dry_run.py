@@ -60,7 +60,9 @@ class DryRunEngine:
             if would_trigger:
                 trigger_count += 1
 
-            if len(sample_triggers) < settings_sample:
+            # RUL-05: a amostra é do que DISPARARIA — as primeiras sessões quaisquer não
+            # dizem nada sobre a regra.
+            if would_trigger and len(sample_triggers) < settings_sample:
                 sample_triggers.append(DryRunConversationResult(
                     session_id=session_contexts[0].session_id if session_contexts else "unknown",
                     would_trigger=would_trigger,

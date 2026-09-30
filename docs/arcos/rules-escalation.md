@@ -58,7 +58,15 @@ ai-gateway ──pub/sub session:updates:{sid}──▶ rules-engine
 - **Corrida com a escalação do próprio fluxo.** Se o fluxo chega ao seu `escalate` antes da marca,
   ele decide; a marca sobra sem efeito (TTL 24 h) — ou o bridge já recusa com `no_ai_conductor`.
 - **Regra não tem filtro por pool.** Vale para o tenant inteiro.
-- Não há dry-run histórico (`RUL-05`, recusa 501).
+- O histórico do dry-run nasceu em 2026-09-30: janela anterior é parcial (a tela diz).
+
+## Dry-run histórico (RUL-05)
+
+O rules-engine publica o contexto de todo turno (`rules.turn_contexts`, todo tenant, com ou sem
+regra); a analytics-api grava `rule_turn_contexts` (TTL 90 d); `history_reader.py` o relê e o
+`DryRunEngine` avalia com o mesmo avaliador. `POST /rules/{id}/dry-run` (janela ≤ 90 d) e
+`POST /rules/dry-run` (regra não salva, a tool `rule_dry_run`). Sem histórico: taxa `null` e
+`coverage_from: null`; ClickHouse fora: 503. Tela: *Simular* em `/config/rules`.
 
 ## Qual sentimento a regra vê (RUL-04)
 

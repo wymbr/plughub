@@ -37,7 +37,7 @@ export const RulesEvaluationContextSchema = z.object({
   intent_confidence:  z.number().min(0).max(1).default(0),
   /** Arbitrary string flags set by the rule engine (e.g. "high_value_customer") */
   flags:              z.array(z.string()).default([]),
-  sentiment_history:  z.array(z.number().min(-1).max(1)).default([]),
+  // `sentiment_history` saiu na RUL-04: não há série de sentimento MEDIDO por sessão.
 })
 export type RulesEvaluationContext = z.infer<typeof RulesEvaluationContextSchema>
 
@@ -99,3 +99,30 @@ export const RulesEventSchema = z.discriminatedUnion("shadow_mode", [
   RulesShadowEventSchema,
 ])
 export type RulesEvent = z.infer<typeof RulesEventSchema>
+
+// ─────────────────────────────────────────────
+// rules.turn_contexts — RUL-05
+// ─────────────────────────────────────────────
+
+/**
+ * The context a rule SAW on one turn, published by the rules-engine for EVERY update of every
+ * tenant (with or without rules) and written by analytics-api to `rule_turn_contexts` (TTL 90
+ * days). The historical dry-run re-evaluates these rows with the same evaluator.
+ *
+ * `trigger`: `turn` (the ai-gateway's per-turn update) or `sentiment_measured` (the measurement
+ * landed after the turn — RUL-04). Only numbers and flag names; `sentiment_score: null` = not
+ * measured. Keyed by `session_id`.
+ */
+export const RulesTurnContextEventSchema = z.object({
+  event_id:          z.string().uuid(),
+  tenant_id:         z.string().min(1),
+  session_id:        z.string().min(1),
+  observed_at:       z.string().datetime({ offset: true }),
+  trigger:           z.enum(["turn", "sentiment_measured"]),
+  turn_count:        z.number().int().nonnegative(),
+  elapsed_ms:        z.number().int().nonnegative(),
+  sentiment_score:   z.number().min(-1).max(1).nullable(),
+  intent_confidence: z.number().min(0).max(1),
+  flags:             z.array(z.string()),
+}).strict()
+export type RulesTurnContextEvent = z.infer<typeof RulesTurnContextEventSchema>

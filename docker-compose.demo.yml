@@ -531,6 +531,7 @@ services:
           menu.wake
           rules.escalation.events
           rules.shadow.events
+          rules.turn_contexts
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
@@ -815,6 +816,11 @@ services:
       PLUGHUB_API_PORT: "3201"
       PLUGHUB_AUTH_JWT_SECRET: changeme_auth_jwt_secret_demo_32c   # AUT-65 — == o do auth-api
       PLUGHUB_RULES_SERVICE_TOKEN: changeme_rules_service_token_demo   # AUT-65 — mcp-server, e2e-runner
+      # RUL-05 — o dry-run LÊ `rule_turn_contexts` (quem escreve é a analytics-api)
+      PLUGHUB_CLICKHOUSE_URL:      http://clickhouse:8123
+      PLUGHUB_CLICKHOUSE_DB:       plughub_demo
+      PLUGHUB_CLICKHOUSE_USER:     plughub
+      PLUGHUB_CLICKHOUSE_PASSWORD: plughub
     depends_on:
       redis:
         condition: service_healthy

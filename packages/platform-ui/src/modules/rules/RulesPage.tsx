@@ -15,7 +15,7 @@ import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import EmptyState from '@/components/ui/EmptyState'
 import {
-  Condition, Lifecycle, Logic, Operator, Parameter, Rule, RuleBody, RuleStatus,
+  Condition, DryRunResult, Lifecycle, Logic, Operator, Parameter, Rule, RuleBody, RuleStatus,
   fetchPoolIds, makeRulesApi,
 } from './api'
 
@@ -67,6 +67,7 @@ export default function RulesPage() {
   const [error, setError] = useState('')
   const [editing, setEditing] = useState<Rule | 'new' | null>(null)
   const [delTarget, setDelTarget] = useState<Rule | null>(null)
+  const [simTarget, setSimTarget] = useState<Rule | null>(null)
   const [busy, setBusy] = useState('')
 
   const load = useCallback(async () => {
@@ -163,6 +164,10 @@ export default function RulesPage() {
               </div>
               {canWrite && (
                 <div className="flex gap-1 flex-shrink-0">
+                  <button disabled={!!busy} onClick={() => setSimTarget(r)}
+                    className="px-3 py-1.5 text-xs text-primary hover:bg-primary-light rounded-lg disabled:opacity-40">
+                    {t('actions.simulate')}
+                  </button>
                   <button disabled={!editable(r) || !!busy} onClick={() => setEditing(r)}
                     title={editable(r) ? '' : t('card.lockedHint')}
                     className="px-3 py-1.5 text-xs text-primary hover:bg-primary-light rounded-lg disabled:opacity-40 disabled:hover:bg-transparent">
@@ -206,6 +211,11 @@ export default function RulesPage() {
             await load()
           }}
         />
+      )}
+
+      {simTarget && (
+        <SimulateModal rule={simTarget} run={days => api.dryRun(simTarget.rule_id, days)}
+          onClose={() => setSimTarget(null)} />
       )}
 
       {delTarget && (
@@ -369,6 +379,92 @@ function RuleForm({ rule, pools, poolsError, taken, onClose, onSave }: {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+// ── Simulação (RUL-05) ───────────────────────────────────────────────────────
+
+const SIM_WINDOWS = [7, 30, 90]
+
+function SimulateModal({ rule, run, onClose }: {
+  rule: Rule
+  run: (days: number) => Promise<DryRunResult>
+  onClose: () => void
+}) {
+  const { t } = useTranslation('rules')
+  const [days, setDays] = useState(30)
+  const [result, setResult] = useState<DryRunResult | null>(null)
+  const [error, setError] = useState('')
+  const [running, setRunning] = useState(false)
+
+  async function go() {
+    setRunning(true); setError(''); setResult(null)
+    try { setResult(await run(days)) }
+    catch (e) { setError(t('sim.error', { detail: (e as Error).message })) }
+    finally { setRunning(false) }
+  }
+
+  const partial = !!result?.coverage_from && new Date(result.coverage_from.replace(' ', 'T') + 'Z') > new Date(result.window_start)
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 className="text-base font-semibold text-dark">{t('sim.title', { name: rule.name })}</h2>
+          <button onClick={onClose} className="text-muted-light hover:text-muted text-xl leading-none">×</button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <p className="text-xs text-muted">{t('sim.info')}</p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-dark">{t('sim.window')}</span>
+            {SIM_WINDOWS.map(d => (
+              <button key={d} onClick={() => setDays(d)}
+                className={`px-3 py-1 text-xs rounded-lg border ${days === d ? 'border-primary bg-primary-light text-primary' : 'border-border text-dark'}`}>
+                {t('sim.days', { n: d })}
+              </button>
+            ))}
+            <button onClick={go} disabled={running}
+              className="ml-auto px-4 py-2 text-sm bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50">
+              {running ? t('sim.running') : t('sim.run')}
+            </button>
+          </div>
+          {running && <div className="flex justify-center py-4"><Spinner /></div>}
+          {error && <p className="text-sm text-red-text whitespace-pre-wrap">{error}</p>}
+          {result && (
+            <div className="space-y-2 text-sm">
+              {result.coverage_from === null ? (
+                <p className="text-warning-text">{t('sim.noHistory')}</p>
+              ) : (
+                <>
+                  <p className="text-dark">
+                    {t('sim.summary', { n: result.would_have_escalated, total: result.sessions_evaluated })}
+                    {result.escalation_rate !== null && ` (${(result.escalation_rate * 100).toFixed(1)}%)`}
+                  </p>
+                  <p className="text-xs text-muted">{t('sim.turns', { n: result.turn_contexts })}</p>
+                  {partial && (
+                    <p className="text-xs text-warning-text">
+                      {t('sim.partial', { since: new Date(result.coverage_from.replace(' ', 'T') + 'Z').toLocaleString() })}
+                    </p>
+                  )}
+                  {result.truncated && <p className="text-xs text-warning-text">{t('sim.truncated')}</p>}
+                  {!rule.target_pool && <p className="text-xs text-muted">{t('sim.noPool')}</p>}
+                  {result.sample_sessions.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-dark mb-1">{t('sim.samples')}</p>
+                      <ul className="text-xs text-muted font-mono space-y-0.5">
+                        {result.sample_sessions.map(s => (
+                          <li key={s.session_id}>{s.session_id} — {t('sim.atTurn', { n: s.at_turn ?? '?' })}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

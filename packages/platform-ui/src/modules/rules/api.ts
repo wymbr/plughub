@@ -46,6 +46,21 @@ export interface RuleBody {
   customer_notice: string | null
 }
 
+/** RUL-05 — simulação contra o contexto que as regras VIRAM por turno (≤ 90 dias). */
+export interface DryRunResult {
+  sessions_evaluated: number
+  would_have_escalated: number
+  /** `null` quando não houve sessão — "0%" sobre nada pareceria medição. */
+  escalation_rate: number | null
+  sample_sessions: Array<{ session_id: string; at_turn: number | null }>
+  window_start: string
+  window_end: string
+  turn_contexts: number
+  /** Desde quando há histórico do tenant; janela que começa antes é parcial. */
+  coverage_from: string | null
+  truncated: boolean
+}
+
 export interface Lifecycle {
   transitions: Record<RuleStatus, RuleStatus[]>
   editable_statuses: RuleStatus[]
@@ -86,6 +101,14 @@ export function makeRulesApi(tenantId: string) {
       call<Rule>(`/rules/${encodeURIComponent(id)}?${q}`, { method: 'PUT', body: JSON.stringify(body) }),
     remove: (id: string) =>
       call<void>(`/rules/${encodeURIComponent(id)}?${q}`, { method: 'DELETE' }),
+    dryRun: (id: string, days: number) => {
+      const end = new Date()
+      const start = new Date(end.getTime() - days * 86_400_000)
+      return call<DryRunResult>(`/rules/${encodeURIComponent(id)}/dry-run`, {
+        method: 'POST',
+        body: JSON.stringify({ tenant_id: tenantId, start_date: start.toISOString(), end_date: end.toISOString() }),
+      })
+    },
     setStatus: (id: string, status: RuleStatus) =>
       call<Rule>(`/rules/${encodeURIComponent(id)}/status?${q}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   }

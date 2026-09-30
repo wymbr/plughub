@@ -47,7 +47,8 @@ async def run() -> None:
     await kafka_producer.start()
     # RUL-02 — sem publicador, nem o shadow saía (medido em 2026-09-30: `Escalator()` era
     # montado sem ele, e o tópico de shadow nunca teve evento).
-    escalator  = Escalator(KafkaPublisher(kafka_producer))
+    publisher  = KafkaPublisher(kafka_producer)
+    escalator  = Escalator(publisher)
 
     sampler = EvaluationSampler(
         redis             = redis_main,
@@ -59,7 +60,7 @@ async def run() -> None:
     # Run both loops concurrently
     try:
         await asyncio.gather(
-            _run_escalation_loop(redis_sub, rule_store, evaluator, escalator, redis_main, settings),
+            _run_escalation_loop(redis_sub, rule_store, evaluator, escalator, redis_main, settings, publisher),
             _run_kafka_consumer(sampler, settings),
         )
     finally:
@@ -79,6 +80,7 @@ async def _run_escalation_loop(
     escalator:  Escalator,
     redis_main: aioredis.Redis,
     settings,
+    publisher:  KafkaPublisher | None = None,
 ) -> None:
     pubsub = redis_sub.pubsub()
     await pubsub.psubscribe(f"{settings.redis_session_channel}:*")
@@ -89,7 +91,8 @@ async def _run_escalation_loop(
             if message["type"] not in ("pmessage", "message"):
                 continue
             disparar(
-                _process_update(message, rule_store, evaluator, escalator, redis_main), nome="process-update")
+                _process_update(message, rule_store, evaluator, escalator, redis_main, publisher),
+                nome="process-update")
     finally:
         await pubsub.aclose()
 
@@ -100,6 +103,7 @@ async def _process_update(
     evaluator:  RuleEvaluator,
     escalator:  Escalator,
     redis:      aioredis.Redis,
+    publisher:  KafkaPublisher | None = None,
 ) -> None:
     try:
         data       = json.loads(message.get("data", "{}"))
@@ -110,6 +114,12 @@ async def _process_update(
             return
 
         ctx   = await _build_context(redis, session_id, tenant_id, data)
+        # RUL-05 — todo contexto vai ao histórico, ANTES de olhar se o tenant tem regra: quem
+        # escreve a primeira regra precisa de passado para simular. Task própria: o broker lento
+        # (o send bloqueia até o timeout) não pode atrasar a avaliação.
+        if publisher is not None:
+            trigger = "sentiment_measured" if data.get("trigger") == "sentiment_measured" else "turn"
+            disparar(publisher.publish_turn_context(ctx, trigger), nome="turn-context")
         rules = await rule_store.get_active_rules(tenant_id)
         if not rules:
             return

@@ -252,8 +252,23 @@ class DryRunApiRequest(BaseModel):
     tenant_id:  str
 
 
+class DryRunUnsavedRequest(BaseModel):
+    """RUL-05 — a regra ainda não salva, no MESMO formato da edição (a tool `rule_dry_run`)."""
+    tenant_id:           str
+    rule:                RuleUpdateRequest
+    history_window_days: int = Field(default=30, ge=1, le=90)
+
+
 class DryRunApiResponse(BaseModel):
     sessions_evaluated:    int
     would_have_escalated:  int
-    escalation_rate:       float
+    # RUL-05: `None` quando não houve sessão — "taxa 0.0" sobre nada parecia medição.
+    escalation_rate:       float | None
     sample_sessions:       list[dict]
+    window_start:          str
+    window_end:            str
+    turn_contexts:         int
+    # Desde quando há histórico gravado para o tenant (o produtor nasceu em 2026-09-30, e a
+    # tabela guarda 90 dias). Janela que começa antes disso é parcial — a tela precisa dizer.
+    coverage_from:         str | None
+    truncated:             bool

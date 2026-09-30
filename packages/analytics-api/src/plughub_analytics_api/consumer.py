@@ -70,6 +70,7 @@ from .models import (
     parse_journey_merged,
     parse_pool_occupancy,
     parse_speech_metrics_event,
+    parse_rule_turn_context_event,
     parse_audit_access_event,
     parse_media_call_event,
 )
@@ -317,6 +318,7 @@ _TOPICS = [
     "speech.metrics",
     "audit.access",
     "media.calls",
+    "rules.turn_contexts",        # RUL-05 — contexto do turno para o dry-run histórico
 ]
 
 # Maps topic → parser function.
@@ -342,6 +344,7 @@ _PARSERS = {
     "speech.metrics":             parse_speech_metrics_event,
     "audit.access":               parse_audit_access_event,
     "media.calls":                parse_media_call_event,
+    "rules.turn_contexts":        parse_rule_turn_context_event,
 }
 
 # Topics that require segment_id enrichment before being passed to the parser.
@@ -1030,6 +1033,8 @@ async def _write_row(
             await store.insert_audit_access_log(row)
         elif table == "call_intervals":
             await store.upsert_call_interval(row)
+        elif table == "rule_turn_contexts":
+            await store.insert_rule_turn_context(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

@@ -40,6 +40,9 @@ New rules NEVER go directly to active without passing through dry-run.
 - When target_pool is absent → triggers nothing
 - Shadow mode → evaluates but does not trigger the Escalation Engine
 - Every escalation recorded in the audit log (ClickHouse)
+- Every evaluated context is published to `rules.turn_contexts` (every tenant, with or without
+  rules) — the historical dry-run re-reads it from ClickHouse `rule_turn_contexts` (RUL-05).
+  The rules-engine READS ClickHouse; the analytics-api is the only writer
 
 ## Stack
 

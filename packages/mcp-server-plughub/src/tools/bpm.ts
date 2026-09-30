@@ -98,10 +98,19 @@ const ConversationEndInputSchema = z.object({
 const RuleDryRunInputSchema = z.object({
   tenant_id:    z.string(),
   /** Definição da regra a ser simulada */
+  // RUL-05: o formato é o da EDIÇÃO no rules-engine (`RuleUpdateRequest`). Era um
+  // `expression` livre que o serviço nunca entendeu — a tool nunca tinha alcançado nada.
   rule: z.object({
-    name:       z.string(),
-    expression: z.record(z.unknown()),
-    target_pool: z.string(),
+    name:        z.string(),
+    conditions:  z.array(z.object({
+      parameter: z.enum(["sentiment_score", "intent_confidence", "turn_count", "elapsed_ms", "flag"]),
+      operator:  z.enum(["lt", "lte", "gt", "gte", "eq", "neq", "contains"]),
+      value:     z.union([z.number(), z.string()]),
+      flag_name: z.string().optional(),
+    })).min(1),
+    logic:       z.enum(["AND", "OR"]).default("AND"),
+    target_pool: z.string().optional(),
+    priority:    z.number().int().min(1).max(10).default(1),
   }),
   /** Janela histórica em dias para simulação */
   history_window_days: z.number().int().min(1).max(90).default(30),
@@ -511,8 +520,8 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       // `/v1/rules/dry-run` (rota inexistente), sem env no compose caía no default 3500 (a
       // analytics-api) e devolvia o erro DENTRO do conteúdo, sem `isError` — o chamador lia
       // "simulação" onde havia falha. Agora: rota real, credencial de serviço, e falha é
-      // `isError` nomeando o motivo. O rules-engine hoje RECUSA o dry-run histórico com 501
-      // (não há parâmetros por turno persistidos — RUL-05), e esse motivo chega inteiro.
+      // `isError` nomeando o motivo. Desde a RUL-05 o rules-engine simula contra o contexto
+      // que as regras viram por turno; 503 (histórico indisponível) e 422 chegam inteiros.
       const rulesEngineUrl = process.env["RULES_ENGINE_URL"] ?? ""
       const serviceToken   = process.env["RULES_ENGINE_SERVICE_TOKEN"] ?? ""
       const falha = (motivo: string) => ({

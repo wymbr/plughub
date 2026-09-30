@@ -157,7 +157,9 @@ describe("Tools BPM — validação de input", () => {
   // AUT-65: o teste antigo aceitava "simulation pode ter 'error' — ambos são válidos" e por isso
   // não podia reprovar — enquanto a tool nunca alcançou o rules-engine. Agora cada ramo tem dono.
   const DRY = { tenant_id: "tenant_test", history_window_days: 7,
-                rule: { name: "churn_escalation", expression: { sentiment_below: -0.5 },
+                // RUL-05: o formato da edição do rules-engine (era um `expression` que ele não entendia)
+                rule: { name: "churn_escalation",
+                        conditions: [{ parameter: "sentiment_score", operator: "lt", value: -0.5 }],
                         target_pool: "retencao_especialista" } }
 
   it("rule_dry_run sem URL/token configurados é isError, nomeando o que falta", async () => {
@@ -173,20 +175,23 @@ describe("Tools BPM — validação de input", () => {
     }
   })
 
-  it("rule_dry_run chama a rota REAL com credencial e devolve a recusa do serviço como isError", async () => {
+  it("rule_dry_run chama a rota REAL com credencial, manda a regra no formato do serviço e devolve a falha como isError", async () => {
     process.env["RULES_ENGINE_URL"] = "http://rules-engine:3201"
     process.env["RULES_ENGINE_SERVICE_TOKEN"] = "svc"
     const original = globalThis.fetch
-    const chamadas: Array<{ url: string; headers: Record<string, string> }> = []
-    globalThis.fetch = (async (url: string, init: { headers: Record<string, string> }) => {
-      chamadas.push({ url, headers: init.headers })
-      return new Response(JSON.stringify({ detail: "dry-run historico indisponivel (RUL-05)" }), { status: 501 })
+    const chamadas: Array<{ url: string; headers: Record<string, string>; body: string }> = []
+    globalThis.fetch = (async (url: string, init: { headers: Record<string, string>; body: string }) => {
+      chamadas.push({ url, headers: init.headers, body: init.body })
+      return new Response(JSON.stringify({ detail: "histórico de turnos indisponível" }), { status: 503 })
     }) as unknown as typeof fetch
     try {
       const res = await server.callTool("rule_dry_run", DRY)
       expect(res.isError).toBe(true)
-      expect(JSON.stringify(res)).toContain("501")
+      expect(JSON.stringify(res)).toContain("503")
       expect(chamadas).toHaveLength(1)
+      const enviado = JSON.parse(chamadas[0]!.body)
+      expect(enviado.rule.conditions[0]).toMatchObject({ parameter: "sentiment_score", operator: "lt" })
+      expect(enviado.history_window_days).toBe(7)
       expect(chamadas[0]!.url).toBe("http://rules-engine:3201/rules/dry-run")
       expect(chamadas[0]!.headers["X-Service-Token"]).toBe("svc")
     } finally {
@@ -199,12 +204,12 @@ describe("Tools BPM — validação de input", () => {
     process.env["RULES_ENGINE_URL"] = "http://rules-engine:3201"
     process.env["RULES_ENGINE_SERVICE_TOKEN"] = "svc"
     const original = globalThis.fetch
-    globalThis.fetch = (async () => new Response(JSON.stringify({ total_conversations: 3 }), { status: 200 })
+    globalThis.fetch = (async () => new Response(JSON.stringify({ sessions_evaluated: 3 }), { status: 200 })
     ) as unknown as typeof fetch
     try {
       const res = await server.callTool("rule_dry_run", DRY)
       expect(res.isError).toBeFalsy()
-      expect(_body(res)).toMatchObject({ rule_name: "churn_escalation", simulation: { total_conversations: 3 } })
+      expect(_body(res)).toMatchObject({ rule_name: "churn_escalation", simulation: { sessions_evaluated: 3 } })
     } finally {
       globalThis.fetch = original
       delete process.env["RULES_ENGINE_URL"]; delete process.env["RULES_ENGINE_SERVICE_TOKEN"]

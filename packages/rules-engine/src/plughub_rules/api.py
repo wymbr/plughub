@@ -5,14 +5,14 @@ Spec: PlugHub v24.0 section 3.2
 
 AUT-65 (2026-09-30): toda rota menos `/health` exige credencial (`auth.py`) — capacidade
 `config.rules`, tenant do token, `X-Service-Token` para chamador interno. E o dry-run deixou de
-devolver ZEROS: não há histórico por turno de onde simular (os parâmetros vivem só no Redis
-da sessão), e "0 sessões, taxa 0.0" parecia medição. Agora recusa com 501 nomeando o que falta
-(`RUL-05`).
+devolver ZEROS como se tivesse medido. Desde a RUL-05 ele simula de verdade, contra o contexto
+que as regras VIRAM em cada turno (`rule_turn_contexts`, 90 dias), com o mesmo avaliador.
 """
 
 from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 import redis.asyncio as aioredis
@@ -25,6 +25,8 @@ from .evaluator import RuleEvaluator
 from .models import (
     DryRunApiRequest,
     DryRunApiResponse,
+    DryRunRequest,
+    DryRunUnsavedRequest,
     EscalationDecision,
     Rule,
     RuleCreateRequest,
@@ -34,6 +36,8 @@ from .models import (
 from .rule_registry import RuleLockedError, RuleRegistry
 from .rule_store import RuleStore
 from .session_reader import SessionParamsReader
+from .dry_run import DryRunEngine
+from .history_reader import History, HistoryReader, HistoryUnavailable
 
 logger = logging.getLogger("plughub.rules")
 
@@ -103,11 +107,50 @@ async def health() -> dict:
 # Toda rota abaixo passa pela credencial ANTES do corpo (anônimo = 401, nunca 422).
 router = APIRouter(dependencies=[Depends(require_credential)])
 
-DRY_RUN_UNAVAILABLE = (
-    "dry-run historico indisponivel: os parametros por turno (sentimento, confianca, flags, "
-    "tempo) so existem no Redis da sessao e expiram — nao ha historico de onde simular (RUL-05). "
-    "Use o modo shadow para medir a regra contra o trafego real."
-)
+MAX_WINDOW_DAYS = 90   # = a retenção de `rule_turn_contexts` (RUL-05)
+
+
+def get_history_reader() -> HistoryReader:
+    return HistoryReader()
+
+
+def _parse_instant(raw: str, campo: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"{campo} não é uma data ISO: {raw!r}")
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def _simulate(rule: Rule, tenant_id: str, start: datetime, end: datetime,
+                    reader: HistoryReader) -> DryRunApiResponse:
+    if end <= start:
+        raise HTTPException(status_code=422, detail="a janela termina antes de começar")
+    if end - start > timedelta(days=MAX_WINDOW_DAYS):
+        raise HTTPException(status_code=422,
+                            detail=f"janela de no máximo {MAX_WINDOW_DAYS} dias — é o que o histórico guarda")
+    try:
+        hist: History = await reader.load(tenant_id, start, end)
+    except HistoryUnavailable as exc:
+        logger.warning("dry-run tenant=%s rule=%s: histórico indisponível — %s", tenant_id, rule.rule_id, exc)
+        raise HTTPException(status_code=503, detail=f"histórico de turnos indisponível: {exc}")
+    days = max(1, min(MAX_WINDOW_DAYS, (end - start).days or 1))
+    result = await DryRunEngine().dry_run_historico(
+        DryRunRequest(tenant_id=tenant_id, rule=rule, history_window_days=days), hist.sessions)
+    total = result.total_conversations
+    return DryRunApiResponse(
+        sessions_evaluated=   total,
+        would_have_escalated= result.would_trigger_count,
+        escalation_rate=      result.trigger_rate if total else None,
+        sample_sessions=[{"session_id": s.session_id, "at_turn": s.at_turn,
+                          "context": s.context_at_trigger.model_dump() if s.context_at_trigger else None}
+                         for s in result.sample_triggers],
+        window_start=  start.isoformat(),
+        window_end=    end.isoformat(),
+        turn_contexts= hist.turn_contexts,
+        coverage_from= hist.coverage_from,
+        truncated=     hist.truncated,
+    )
 
 
 @router.post("/evaluate", response_model=EscalationDecision)
@@ -249,13 +292,19 @@ async def list_rules(
     return await registry.list_rules(tenant_id, status=status)
 
 
-@router.post("/rules/dry-run")
-async def dry_run_unsaved_rule(request: Request, body: dict) -> dict:
-    """Dry-run de uma regra AINDA NÃO SALVA (a tool `rule_dry_run`). Recusa, dita — ver o topo.
-    Corpo livre de propósito: a tool manda a regra no formato DELA, e validar o `Rule` aqui só
-    trocaria o 501 honesto por um 422 sobre um formato que não vai ser usado."""
-    authorize(request, str(body.get("tenant_id", "") or ""), write=True)
-    raise HTTPException(status_code=501, detail=DRY_RUN_UNAVAILABLE)
+@router.post("/rules/dry-run", response_model=DryRunApiResponse)
+async def dry_run_unsaved_rule(
+    request: Request,
+    body:    DryRunUnsavedRequest,
+    reader:  Annotated[HistoryReader, Depends(get_history_reader)],
+) -> DryRunApiResponse:
+    """Dry-run de uma regra AINDA NÃO SALVA (a tool `rule_dry_run`): os últimos N dias.
+    A regra passa pela mesma validação da edição (janela de média recusada, RUL-04)."""
+    tenant_id = authorize(request, body.tenant_id, write=True)
+    now = datetime.now(timezone.utc)
+    rule = Rule(rule_id="unsaved", tenant_id=tenant_id, status="draft",
+                created_at=now.isoformat(), updated_at=now.isoformat(), **body.rule.model_dump())
+    return await _simulate(rule, tenant_id, now - timedelta(days=body.history_window_days), now, reader)
 
 
 @router.post("/rules/{rule_id}/dry-run", response_model=DryRunApiResponse)
@@ -264,12 +313,15 @@ async def dry_run_rule(
     rule_id:   str,
     body:      DryRunApiRequest,
     registry:  Annotated[RuleRegistry, Depends(get_registry)],
+    reader:    Annotated[HistoryReader, Depends(get_history_reader)],
 ) -> DryRunApiResponse:
-    """Dry-run de uma regra salva. Devolvia ZEROS como se tivesse medido; agora recusa, dita."""
+    """Dry-run de uma regra salva contra a janela pedida (≤ 90 dias)."""
     tenant_id = authorize(request, body.tenant_id, write=True)
-    if await registry.get(tenant_id, rule_id) is None:
+    rule = await registry.get(tenant_id, rule_id)
+    if rule is None:
         raise HTTPException(status_code=404, detail=f"Rule not found: {rule_id}")
-    raise HTTPException(status_code=501, detail=DRY_RUN_UNAVAILABLE)
+    return await _simulate(rule, tenant_id, _parse_instant(body.start_date, "start_date"),
+                           _parse_instant(body.end_date, "end_date"), reader)
 
 
 @router.get("/rules/{rule_id}/report")

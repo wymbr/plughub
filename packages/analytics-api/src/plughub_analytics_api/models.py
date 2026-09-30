@@ -1523,3 +1523,37 @@ def parse_calibration_event(payload: dict[str, Any]) -> dict | None:
         "note_id":        payload.get("note_id") or None,
         "event_time":     payload.get("event_time") or payload.get("timestamp") or _now(),
     }
+
+
+# ─── rules.turn_contexts (RUL-05) ─────────────────────────────────────────────
+
+_TURN_TRIGGERS = ("turn", "sentiment_measured")
+
+
+def parse_rule_turn_context_event(payload: dict[str, Any]) -> dict | None:
+    """rules.turn_contexts → `rule_turn_contexts` — o contexto que uma regra VIU num turno.
+
+    É o insumo do dry-run histórico: o rules-engine o releitura com o MESMO avaliador. Por
+    isso nada é completado aqui — campo numérico ausente recusa a linha (um 0 inventado
+    faria a simulação disparar ou calar sobre um turno que não foi assim), e sentimento
+    ausente fica NULL (não medido), nunca neutro. Só números e nomes de flag atravessam."""
+    event_id, tenant_id, session_id = payload.get("event_id"), payload.get("tenant_id"), payload.get("session_id")
+    observed_at = payload.get("observed_at")
+    if not event_id or not tenant_id or not session_id or not observed_at:
+        return None
+    try:
+        turn_count = int(payload["turn_count"])
+        elapsed_ms = int(payload["elapsed_ms"])
+        confidence = float(payload["intent_confidence"])
+        s = payload.get("sentiment_score")
+        sentiment = None if s is None or isinstance(s, bool) else float(s)
+    except (KeyError, TypeError, ValueError):
+        return None
+    flags = [f for f in (payload.get("flags") or []) if isinstance(f, str)][:32]
+    trigger = payload.get("trigger") if payload.get("trigger") in _TURN_TRIGGERS else "turn"
+    return {
+        "table": "rule_turn_contexts", "event_id": event_id, "tenant_id": tenant_id,
+        "session_id": session_id, "observed_at": observed_at, "trigger": trigger,
+        "turn_count": max(turn_count, 0), "elapsed_ms": max(elapsed_ms, 0),
+        "sentiment_score": sentiment, "intent_confidence": confidence, "flags": flags,
+    }

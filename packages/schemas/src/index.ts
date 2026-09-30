@@ -671,6 +671,7 @@ export {
   RulesActiveEventSchema,
   RulesShadowEventSchema,
   RulesEventSchema,
+  RulesTurnContextEventSchema,
 } from "./rules-events"
 
 export type {
@@ -679,6 +680,7 @@ export type {
   RulesActiveEvent,
   RulesShadowEvent,
   RulesEvent,
+  RulesTurnContextEvent,
 } from "./rules-events"
 
 // ── Platform / cross-cutting Kafka events ────────────────────────────────────

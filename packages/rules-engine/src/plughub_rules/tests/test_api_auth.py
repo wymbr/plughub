@@ -133,17 +133,65 @@ def test_missing_jwt_secret_is_503_never_accept(client, monkeypatch):
     assert client.get(f"/rules?tenant_id={T}", headers=_tok("read_write")).status_code == 503
 
 
-def test_dry_run_refuses_loudly_instead_of_zeros(client):
+def test_dry_run_simulates_against_the_turn_history(client):
+    """RUL-05 — a regra salva é simulada contra o contexto que as regras VIRAM por turno."""
+    from plughub_rules.history_reader import History
+    from plughub_rules.models import EvaluationContext
+
+    def ctx(sid, turns):
+        return EvaluationContext(session_id=sid, tenant_id=T, turn_count=turns, elapsed_ms=0)
+
+    class Reader:
+        async def load(self, tenant_id, start, end):
+            assert tenant_id == T
+            return History(sessions=[[ctx("s1", 1), ctx("s1", 5)], [ctx("s2", 1)]],
+                           turn_contexts=3, coverage_from="2026-09-30 10:00:00.000")
+    api_mod.app.dependency_overrides[api_mod.get_history_reader] = lambda: Reader()
     h = _tok("read_write")
-    client.post("/rules", json=RULE, headers=h)
+    client.post("/rules", json={**RULE, "conditions": [
+        {"parameter": "turn_count", "operator": "gte", "value": 3}]}, headers=h)
     r = client.post("/rules/r1/dry-run", json={"start_date": "2026-09-01", "end_date": "2026-09-30",
                                                 "tenant_id": T}, headers=h)
-    assert r.status_code == 501 and "RUL-05" in r.text
-    r = client.post("/rules/dry-run", json={"tenant_id": T, "rule": {"name": "x"}},
-                    headers={"X-Service-Token": SVC})
-    assert r.status_code == 501 and "RUL-05" in r.text
-    assert client.post("/rules/nao_existe/dry-run", json={"start_date": "a", "end_date": "b",
-                                                           "tenant_id": T}, headers=h).status_code == 404
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert (b["sessions_evaluated"], b["would_have_escalated"], b["escalation_rate"]) == (2, 1, 0.5)
+    assert [x["session_id"] for x in b["sample_sessions"]] == ["s1"]
+    assert b["sample_sessions"][0]["at_turn"] == 2
+    assert b["coverage_from"].startswith("2026-09-30") and b["turn_contexts"] == 3
+
+    r = client.post("/rules/dry-run", json={"tenant_id": T, "history_window_days": 7, "rule": {
+        "name": "x", "conditions": [{"parameter": "turn_count", "operator": "gte", "value": 9}]}},
+        headers={"X-Service-Token": SVC})
+    assert r.status_code == 200 and r.json()["would_have_escalated"] == 0
+
+
+def test_dry_run_without_history_has_no_rate_and_unavailable_is_503(client):
+    from plughub_rules.history_reader import History, HistoryUnavailable
+
+    class Empty:
+        async def load(self, *a):
+            return History()
+
+    class Down:
+        async def load(self, *a):
+            raise HistoryUnavailable("ClickHouse fora")
+    h = _tok("read_write")
+    client.post("/rules", json=RULE, headers=h)
+    body = {"start_date": "2026-09-01", "end_date": "2026-09-30", "tenant_id": T}
+    api_mod.app.dependency_overrides[api_mod.get_history_reader] = lambda: Empty()
+    b = client.post("/rules/r1/dry-run", json=body, headers=h).json()
+    assert b["sessions_evaluated"] == 0 and b["escalation_rate"] is None and b["coverage_from"] is None
+    api_mod.app.dependency_overrides[api_mod.get_history_reader] = lambda: Down()
+    r = client.post("/rules/r1/dry-run", json=body, headers=h)
+    assert r.status_code == 503 and "ClickHouse fora" in r.text
+    # janela maior que o histórico guarda, janela invertida, regra inexistente
+    assert client.post("/rules/r1/dry-run", json={**body, "start_date": "2026-01-01"}, headers=h).status_code == 422
+    assert client.post("/rules/r1/dry-run", json={**body, "end_date": "2026-08-01"}, headers=h).status_code == 422
+    assert client.post("/rules/nao_existe/dry-run", json=body, headers=h).status_code == 404
+    # regra não salva com janela de média: a mesma recusa da edição
+    r = client.post("/rules/dry-run", json={"tenant_id": T, "rule": {"name": "x", "conditions": [
+        {"parameter": "sentiment_score", "operator": "lt", "value": 0, "window_turns": 3}]}}, headers=h)
+    assert r.status_code == 422 and "RUL-04" in r.text
 
 
 # ─── RUL-03 — editar e apagar só em draft/disabled ─────────────────────────────

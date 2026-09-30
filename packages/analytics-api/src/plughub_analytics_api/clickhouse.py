@@ -1244,6 +1244,31 @@ _DDL_SPEECH_COLLECT_MIGRATE_PROFILE = (
     " ADD COLUMN IF NOT EXISTS speech_profile_id Nullable(String) AFTER duration_ms"
 )
 
+# RUL-05 — o contexto que uma regra VIU em cada turno, para o dry-run histórico reler com o
+# mesmo avaliador. Escritor único: este consumer (tópico `rules.turn_contexts`, produtor o
+# rules-engine). Só números e nomes de flag. 90 dias = o teto da janela do dry-run (decisão
+# do dono, 2026-09-30). `sentiment_score` NULL = não medido, nunca neutro.
+_DDL_RULE_TURN_CONTEXTS = """
+CREATE TABLE IF NOT EXISTS {db}.rule_turn_contexts
+(
+    event_id           String,
+    tenant_id          String,
+    session_id         String,
+    observed_at        DateTime64(3, 'UTC'),
+    trigger            LowCardinality(String),
+    turn_count         UInt32,
+    elapsed_ms         UInt64,
+    sentiment_score    Nullable(Float64),
+    intent_confidence  Float64,
+    flags              Array(String),
+    date               Date
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, observed_at, event_id)
+TTL toDateTime(observed_at) + INTERVAL 90 DAY
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
     _DDL_AUDIT_ACCESS_LOG,
@@ -1276,6 +1301,7 @@ _ALL_DDL = [
     _DDL_SPEECH_COLLECT_OUTCOMES,
     _DDL_SPEECH_CHECKS,
     _DDL_CALL_INTERVALS,              # WCH-02
+    _DDL_RULE_TURN_CONTEXTS,          # RUL-05
     # Materialized views: nenhuma. As duas que havia, ambas sobre `segments` (RMT),
     # contavam versões e foram aposentadas — APF-01 (performance) e APF-02 (summary).
 ]
@@ -1841,6 +1867,22 @@ class AnalyticsStore:
         # row_version omitido — DEFAULT coalesce(ended_at, started_at)
         "date",
     ]
+
+    _RULE_TURN_COLS = [
+        "event_id", "tenant_id", "session_id", "observed_at", "trigger", "turn_count",
+        "elapsed_ms", "sentiment_score", "intent_confidence", "flags", "date",
+    ]
+
+    async def insert_rule_turn_context(self, row: dict) -> None:
+        observed = _parse_dt(row.get("observed_at"))
+        if observed is None:
+            logger.warning("rule_turn_contexts: evento %s com observed_at ilegível — linha NAO gravada",
+                           row.get("event_id"))
+            return
+        vals = [row["event_id"], row["tenant_id"], row["session_id"], observed, row["trigger"],
+                row["turn_count"], row["elapsed_ms"], row["sentiment_score"], row["intent_confidence"],
+                list(row["flags"]), observed.date()]
+        await asyncio.to_thread(self._insert, "rule_turn_contexts", [vals], self._RULE_TURN_COLS)
 
     async def upsert_call_interval(self, row: dict) -> None:
         started = _parse_dt(row.get("started_at"))
