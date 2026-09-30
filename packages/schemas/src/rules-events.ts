@@ -32,7 +32,8 @@ export const RulesEvaluationContextSchema = z.object({
   tenant_id:          z.string(),
   turn_count:         z.number().int().nonnegative().default(0),
   elapsed_ms:         z.number().int().nonnegative().default(0),
-  sentiment_score:    z.number().min(-1).max(1).default(0),
+  /** null = NOT MEASURED (ai-gateway since 2026-08-23); 0 is neutral, a real point of the scale */
+  sentiment_score:    z.number().min(-1).max(1).nullable(),
   intent_confidence:  z.number().min(0).max(1).default(0),
   /** Arbitrary string flags set by the rule engine (e.g. "high_value_customer") */
   flags:              z.array(z.string()).default([]),
@@ -51,12 +52,12 @@ export type RulesEvaluationContext = z.infer<typeof RulesEvaluationContextSchema
  *   • `rules.escalation.events` — shadow_mode: false (rule is ACTIVE)
  *   • `rules.shadow.events`     — shadow_mode: true  (rule is in SHADOW/monitoring mode)
  *
- * ⚠️ RUL-01 (2026-09-29): nobody consumes `rules.escalation.events`, and nobody
- * publishes to either topic today — the rules-engine builds its Escalator without a
- * Kafka publisher, and neither topic exists on the broker. The claim that the Routing
- * Engine re-routes on this event was false. Rule-driven escalation has no path yet:
- * the active mode refuses (and the API refuses to activate a rule with target_pool)
- * until RUL-02 designs who stops the running agent before routing.
+ * RUL-02 (2026-09-30): the rules-engine publishes both, keyed by `session_id`. The
+ * consumer of `rules.escalation.events` is the orchestrator-bridge (owner of agent
+ * activation), NOT the Routing Engine: it checks that an AI conducts the session with no
+ * human in it, marks the preemption once per session, and the skill-flow engine stops the
+ * AI at the next step boundary — the AI then escalates itself through the regular
+ * `escalate`. Nobody consumes `rules.shadow.events` yet (measurement only).
  */
 export const RulesEscalationEventSchema = z.object({
   session_id:   z.string(),
@@ -68,6 +69,9 @@ export const RulesEscalationEventSchema = z.object({
   shadow_mode:  z.boolean().default(false),
   triggered_at: z.string().datetime(),
   context:      RulesEvaluationContextSchema,
+  /** RUL-02 — what the customer reads before the handoff; the rule's, optional (the platform
+   *  never invents customer-facing text). Sent verbatim, without interpolation. */
+  customer_notice: z.string().max(500).nullish(),
 })
 export type RulesEscalationEvent = z.infer<typeof RulesEscalationEventSchema>
 

@@ -637,6 +637,7 @@ export async function executeMenu(
           case "trigger_step":
             return { next_step_id: sinal.step, transition_reason: "on_success" }
           case "terminate":
+          case "preempt":   // RUL-02: o topo do loop escala antes de o on_failure rodar
             return { next_step_id: step.on_failure, transition_reason: "on_failure" }
           case "collect":
             if (sinal.outcome === "timeout") {

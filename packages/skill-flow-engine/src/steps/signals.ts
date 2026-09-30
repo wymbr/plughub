@@ -10,6 +10,9 @@
 export type PlatformSignal =
   | { kind: "trigger_step"; step: string }   // @mention trigger_step
   | { kind: "terminate" }                     // @mention terminate_self
+  // RUL-02: uma regra escalou a sessão. Só ACORDA a espera; quem escala é o topo do loop do
+  // engine (`rule-preemption.ts`), que intercepta antes de o `on_failure` do passo rodar
+  | { kind: "preempt" }
   // desfecho da coleta por voz/teclado. `aborted` (NIV-07): o CANAL não conseguiu garantir a
   // coleta protegida — ex.: não tirou da sala quem ouviria a tecla mascarada — e a desfez
   | { kind: "collect"; outcome: "timeout" | "invalid" | "aborted" }
@@ -28,6 +31,7 @@ export function parseSignal(raw: string): PlatformSignal {
     return { kind: "trigger_step", step: p["_mention_trigger_step"] as string }
   }
   if (p["_mention_terminate"] === true) return { kind: "terminate" }
+  if (p["_rule_preempt"] === true) return { kind: "preempt" }
   if (p["_collect_outcome"] === "timeout" || p["_collect_outcome"] === "invalid"
       || p["_collect_outcome"] === "aborted") {
     return { kind: "collect", outcome: p["_collect_outcome"] }

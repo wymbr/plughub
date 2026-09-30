@@ -271,7 +271,7 @@ export async function executeResolve(
       if (sinal.kind === "trigger_step") {
         return { next_step_id: sinal.step, transition_reason: "on_success" }
       }
-      if (sinal.kind !== "terminate") {
+      if (sinal.kind !== "terminate" && sinal.kind !== "preempt") {
         // o resolve não coleta por voz/teclado: um desfecho de coleta aqui é sinal fora de lugar
         console.warn(`[resolve] sinal ${sinal.kind} inesperado em ${step.id} — on_failure`)
       }

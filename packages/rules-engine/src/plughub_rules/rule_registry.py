@@ -58,6 +58,7 @@ class RuleRegistry:
             logic=       req.logic,
             target_pool= req.target_pool,
             priority=    req.priority,
+            customer_notice= (req.customer_notice or "").strip() or None,
             created_at=  now,
             updated_at=  now,
         )
@@ -114,15 +115,9 @@ class RuleRegistry:
 
         validate_transition(rule.status, new_status)
 
-        # RUL-01 — ativar uma regra com `target_pool` é prometer uma escalação que o engine
-        # não sabe fazer (o caminho é a RUL-02). Recusar aqui é o que impede a promessa de
-        # nascer: em shadow ela mede; ativa, só enganaria. Regra ativa SEM pool segue válida.
-        if new_status == "active" and rule.target_pool:
-            raise ValueError(
-                f"regra '{rule_id}' tem target_pool='{rule.target_pool}' e não pode ser ATIVADA: "
-                "a escalação por regra ainda não tem caminho (RUL-02 — quem para o agente em "
-                "curso antes de rotear). Mantenha em 'shadow' para medir o que ela faria."
-            )
+        # RUL-01 recusava ativar regra com `target_pool` enquanto a escalação não tinha
+        # caminho. A RUL-02 (2026-09-30) deu o caminho — evento → bridge → a IA para na
+        # fronteira do passo —, e a trava saiu: ativa, a regra escala de verdade.
 
         updated = rule.model_copy(update={
             "status":     new_status,

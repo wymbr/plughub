@@ -66,6 +66,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from .instance_bootstrap import InstanceBootstrap
 from .registry_syncer import RegistrySyncer
 from .session_config import session_config
+from . import rule_escalation as _rule_esc
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,6 +134,7 @@ TOPIC_CONFIG_CHANGED    = "config.changed"
 TOPIC_PARTICIPANTS      = "conversations.participants"
 # DUR-01 F3 — chegou algo para um menu que pode estar estacionado (Console, agente de fila).
 TOPIC_MENU_WAKE         = "menu.wake"
+TOPIC_RULE_ESCALATION   = "rules.escalation.events"   # RUL-02 — o bridge é o consumidor
 TOPIC_LIFECYCLE         = "agent.lifecycle"
 GROUP_ID                = "orchestrator-bridge"
 
@@ -6032,6 +6034,56 @@ async def process_menu_wake(msg: dict, redis_client: aioredis.Redis) -> str:
     return resultado
 
 
+async def process_rule_escalation(msg: dict, redis_client: aioredis.Redis) -> str:
+    """
+    RUL-02 — uma regra ATIVA disparou (`rules.escalation.events`). O bridge, dono da
+    ativação, decide se a IA que conduz pode ser tirada (`rule_escalation.decide_conductor`),
+    grava a marca UMA vez por sessão e acorda a IA: sinal na fila dela (espera bloqueada) e
+    `wake_parked_run` (espera estacionada). Quem escala é a própria IA, no topo do próximo
+    passo do engine. Devolve o desfecho, que também vai ao log — recusa nunca é muda.
+    """
+    motivo = _rule_esc.validate_event(msg)
+    if motivo:
+        logger.error("rules.escalation descartado (%s): %s", motivo, str(msg)[:200])
+        return "invalid"
+    sid, rule_id, alvo = msg["session_id"], msg["rule_id"], msg["target_pool"]
+    if not await redis_client.exists(f"session:{sid}:meta"):
+        logger.warning("rules.escalation: session=%s rule=%s — sessão já encerrada, nada a escalar",
+                       sid, rule_id)
+        return "session_gone"
+    roster = None
+    try:
+        raw = await redis_client.get(f"session:{sid}:participants")
+        roster = json.loads(raw) if raw else None
+    except Exception as exc:
+        logger.warning("rules.escalation: roster ilegível session=%s — %s", sid, exc)
+    humanos = set(await redis_client.smembers(f"session:{sid}:human_agents") or set())
+    decisao = _rule_esc.decide_conductor(roster, humanos)
+    if not decisao.ok:
+        logger.warning(
+            "rules.escalation RECUSADA: session=%s rule=%s → pool=%s — %s (a regra só tira o "
+            "contato de uma IA que conduz, sem humano na sessão)", sid, rule_id, alvo, decisao.reason,
+        )
+        return decisao.reason
+    marcou = await redis_client.set(
+        _rule_esc.mark_key(sid), _rule_esc.build_mark(msg, decisao.instance_id),
+        ex=_rule_esc.MARK_TTL_S, nx=True,
+    )
+    if not marcou:
+        logger.info("rules.escalation: session=%s rule=%s descartada — a sessão já foi escalada "
+                    "por regra (uma vez por sessão)", sid, rule_id)
+        return "already_escalated"
+    sinal = menu_signal_key(sid, decisao.instance_id)
+    await redis_client.lpush(sinal, _rule_esc.preempt_signal())
+    await redis_client.expire(sinal, 3600)
+    _spawn(wake_parked_run(redis_client, sid, decisao.instance_id, "rule_escalation"))
+    logger.warning(
+        "rules.escalation MARCADA: session=%s rule=%s instance=%s → pool=%s — a IA escala na "
+        "fronteira do próximo passo", sid, rule_id, decisao.instance_id, alvo,
+    )
+    return "marked"
+
+
 async def wake_all_parked_runs(redis_client: aioredis.Redis, session_id: str, reason: str) -> int:
     """Acorda toda conversa estacionada da sessão (fechamento do contato). Devolve quantas."""
     fields = await redis_client.smembers(_parked_runs_set(session_id)) or set()
@@ -11271,6 +11323,7 @@ async def run() -> None:
         TOPIC_REGISTRY_CHANGED,
         TOPIC_CONFIG_CHANGED,
         TOPIC_MENU_WAKE,
+        TOPIC_RULE_ESCALATION,
         bootstrap_servers=KAFKA_BROKERS,
         group_id=GROUP_ID,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
@@ -11500,6 +11553,8 @@ async def _dispatch_once(
         await process_contact_event(payload, redis_client, http)
     elif topic == TOPIC_MENU_WAKE:
         await process_menu_wake(payload, redis_client)
+    elif topic == TOPIC_RULE_ESCALATION:
+        await process_rule_escalation(payload, redis_client)
     elif topic == TOPIC_REGISTRY_CHANGED:
         # Agent Registry published a structural change (AgentType/Pool/Skill CRUD).
         entity_type = payload.get("entity_type", "?")

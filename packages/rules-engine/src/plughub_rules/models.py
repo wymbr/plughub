@@ -45,6 +45,9 @@ class Rule(BaseModel):
     logic:        RuleLogic       = "AND"
     target_pool:  str | None      = None  # no pool = no action
     priority:     int             = Field(default=1, ge=1, le=10)
+    # RUL-02 — o que o cliente lê quando a regra o transfere. Opcional: ausente, ele vê só a
+    # saída do agente e o que o pool de destino disser (a plataforma não inventa texto).
+    customer_notice: str | None   = Field(default=None, max_length=500)
     created_at:   str
     updated_at:   str
 
@@ -58,7 +61,11 @@ class EvaluationContext(BaseModel):
     tenant_id:        str
     turn_count:       int   = 0
     elapsed_ms:       int   = 0
-    sentiment_score:  float = Field(default=0.0, ge=-1.0, le=1.0)
+    # `None` = NÃO MEDIDO (o ai-gateway publica assim desde 2026-08-23, e 0.0 é neutro, um
+    # ponto legítimo da escala). Até a RUL-02 este campo exigia float: TODA avaliação de regra
+    # quebrava na validação, logada como ERROR por mais de um mês — nenhuma regra, nem em
+    # shadow, avaliou nada. Condição de sentimento sem medida NÃO casa (`_apply_operator`).
+    sentiment_score:  float | None = Field(default=None, ge=-1.0, le=1.0)
     intent_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     flags:            list[str] = Field(default_factory=list)
     sentiment_history: list[float] = Field(default_factory=list)
@@ -95,6 +102,7 @@ class EscalationTrigger(BaseModel):
     shadow_mode:  bool = False
     triggered_at: str
     context:      EvaluationContext
+    customer_notice: str | None = None   # RUL-02 — da regra; o engine envia antes de escalar
 
 
 # ─────────────────────────────────────────────
@@ -197,6 +205,7 @@ class RuleCreateRequest(BaseModel):
     target_pool:  str | None      = None
     priority:     int             = Field(default=1, ge=1, le=10)
     description:  str             = ""
+    customer_notice: str | None   = Field(default=None, max_length=500)   # RUL-02
 
 
 class RuleStatusPatch(BaseModel):

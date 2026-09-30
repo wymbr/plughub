@@ -6,7 +6,7 @@ Spec: PlugHub v24.0 section 3.2 / 3.2b
 1. Integration: read params from Redis key written by AI Gateway
 2. Dry-run: no Kafka event published
 3. Shadow: event to rules.shadow.events only
-4. Active: REFUSED loudly — no escalation path yet (RUL-01/RUL-02); activation refused too
+4. Active: publishes to rules.escalation.events — the bridge acts on it (RUL-02)
 5. Lifecycle: draft → active rejected
 """
 
@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from plughub_rules.dry_run import DryRunEngine
-from plughub_rules.escalator import ESCALATION_PATH_TICKET, Escalator
+from plughub_rules.escalator import Escalator
 from plughub_rules.rule_registry import RuleRegistry
 from plughub_rules.evaluator import RuleEvaluator
 from plughub_rules.lifecycle import validate_transition
@@ -131,9 +131,11 @@ async def test_shadow_publishes_to_shadow_topic_only():
     class FakePublisher:
         async def publish_shadow(self, trigger):
             shadow_events.append(trigger.model_dump())
+            return True
 
         async def publish_escalation(self, trigger):
             escalation_events.append(trigger.model_dump())
+            return True
 
     escalator   = Escalator(kafka_publisher=FakePublisher())
 
@@ -164,20 +166,21 @@ async def test_shadow_publishes_to_shadow_topic_only():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 4 — Active: REFUSED loudly (RUL-01)
+# Test 4 — Active: publishes the escalation (RUL-02)
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# Até 2026-09-29 este teste fazia o mock de `http.post` responder 200 e asseria o evento de
-# escalação — o mock CRIOU a rota `/tools/conversation_escalate`, que o mcp-server nunca teve.
-# Agora o contrato é o que o código consegue cumprir: nada escalado, nada publicado como se
-# tivesse sido, e o log diz onde está o trabalho que falta.
+# RUL-01 recusava o modo ativo (a escalação não tinha caminho). A RUL-02 deu o caminho: o
+# evento vai ao bridge, que para a IA na fronteira do passo. Aqui o contrato é: ativa publica
+# em `rules.escalation.events` (e só lá), com o aviso ao cliente da regra; publicação que
+# falha NÃO devolve trigger — o chamador nunca afirma uma escalação que não saiu.
 
-def _rule(status: str, target_pool: str | None = "pool_retencao") -> Rule:
+def _rule(status: str, target_pool: str | None = "pool_retencao", notice: str | None = None) -> Rule:
     now = datetime.now(timezone.utc).isoformat()
     return Rule(
         rule_id="rule_x", tenant_id="tenant_test", name="Rule X", status=status,
         conditions=[Condition(parameter="sentiment_score", operator="lt", value=-0.3)],
         logic="AND", target_pool=target_pool, created_at=now, updated_at=now,
+        customer_notice=notice,
     )
 
 
@@ -190,37 +193,84 @@ def _fired(rule: Rule):
 
 
 class _Publisher:
-    def __init__(self) -> None:
+    def __init__(self, ok: bool = True) -> None:
+        self.ok = ok
         self.shadow: list[dict] = []
         self.escalation: list[dict] = []
 
     async def publish_shadow(self, trigger):
         self.shadow.append(trigger.model_dump())
+        return self.ok
 
     async def publish_escalation(self, trigger):
         self.escalation.append(trigger.model_dump())
+        return self.ok
 
 
 @pytest.mark.asyncio
-async def test_active_is_refused_loudly_and_publishes_nothing(caplog):
+async def test_active_publishes_the_escalation_with_the_notice():
     pub = _Publisher()
-    with caplog.at_level("ERROR", logger="plughub.rules"):
-        trigger = await Escalator(kafka_publisher=pub).trigger(_fired(_rule("active")))
-    assert trigger is None
-    assert pub.escalation == [] and pub.shadow == []
-    assert "SEM CAMINHO" in caplog.text and ESCALATION_PATH_TICKET in caplog.text
-    assert "pool_retencao" in caplog.text
+    trigger = await Escalator(kafka_publisher=pub).trigger(
+        _fired(_rule("active", notice="Vou te passar para um especialista.")))
+    assert trigger is not None and trigger.shadow_mode is False
+    assert pub.shadow == [] and len(pub.escalation) == 1
+    ev = pub.escalation[0]
+    assert ev["target_pool"] == "pool_retencao" and ev["session_id"] == "s1"
+    assert ev["customer_notice"] == "Vou te passar para um especialista."
 
 
 @pytest.mark.asyncio
-async def test_control_shadow_still_measures(caplog):
-    """Controle: a recusa é do modo ATIVO — shadow continua medindo, sem ERROR."""
+async def test_control_shadow_publishes_only_to_shadow():
     pub = _Publisher()
-    with caplog.at_level("ERROR", logger="plughub.rules"):
-        trigger = await Escalator(kafka_publisher=pub).trigger(_fired(_rule("shadow")))
+    trigger = await Escalator(kafka_publisher=pub).trigger(_fired(_rule("shadow")))
     assert trigger is not None and trigger.shadow_mode is True
     assert len(pub.shadow) == 1 and pub.escalation == []
-    assert "SEM CAMINHO" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_failed_publish_returns_nothing():
+    pub = _Publisher(ok=False)
+    assert await Escalator(kafka_publisher=pub).trigger(_fired(_rule("active"))) is None
+    assert len(pub.escalation) == 1, "tentou publicar"
+
+
+@pytest.mark.asyncio
+async def test_without_publisher_nothing_is_claimed(caplog):
+    with caplog.at_level("ERROR", logger="plughub.rules"):
+        assert await Escalator().trigger(_fired(_rule("active"))) is None
+    assert "NÃO há publicador" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_rule_without_pool_publishes_nothing():
+    pub = _Publisher()
+    assert await Escalator(kafka_publisher=pub).trigger(_fired(_rule("active", target_pool=None))) is None
+    assert pub.shadow == [] and pub.escalation == []
+
+
+def test_notice_has_a_ceiling():
+    with pytest.raises(Exception):
+        _rule("active", notice="x" * 501)
+
+
+@pytest.mark.asyncio
+async def test_publisher_keys_by_session_and_reports_failure():
+    from plughub_rules.kafka_publisher import KafkaPublisher, TOPIC_ESCALATION
+
+    class Prod:
+        def __init__(self, fail=False):
+            self.fail, self.sent = fail, []
+
+        async def send_and_wait(self, topic, value=None, key=None):
+            if self.fail:
+                raise RuntimeError("broker down")
+            self.sent.append((topic, key))
+
+    trig = await Escalator(kafka_publisher=_Publisher()).trigger(_fired(_rule("active")))
+    prod = Prod()
+    assert await KafkaPublisher(prod).publish_escalation(trig) is True
+    assert prod.sent == [(TOPIC_ESCALATION, b"s1")], "sem chave, eventos da sessão perdem a ordem"
+    assert await KafkaPublisher(Prod(fail=True)).publish_escalation(trig) is False
 
 
 class _FakeRedis:
@@ -250,20 +300,19 @@ async def _registry_with(rule: Rule) -> RuleRegistry:
 
 
 @pytest.mark.asyncio
-async def test_activation_with_target_pool_is_refused():
+async def test_activation_with_target_pool_now_passes():
+    """RUL-02: a trava da RUL-01 saiu junto com o caminho que ela esperava."""
     reg = await _registry_with(_rule("shadow"))
-    with pytest.raises(ValueError) as exc:
-        await reg.update_status("tenant_test", "rule_x", "active")
-    assert ESCALATION_PATH_TICKET in str(exc.value)
-    assert (await reg.get("tenant_test", "rule_x")).status == "shadow", "nada pode ter sido gravado"
+    updated = await reg.update_status("tenant_test", "rule_x", "active")
+    assert updated.status == "active" and updated.target_pool == "pool_retencao"
 
 
 @pytest.mark.asyncio
-async def test_control_activation_without_target_pool_passes():
-    """Controle: regra ativa SEM pool (sem escalação) segue válida — a recusa não é geral."""
-    reg = await _registry_with(_rule("shadow", target_pool=None))
-    updated = await reg.update_status("tenant_test", "rule_x", "active")
-    assert updated.status == "active"
+async def test_control_lifecycle_still_guards_the_jump():
+    """Controle: sair da trava não abre o ciclo — draft não pula para active."""
+    reg = await _registry_with(_rule("draft"))
+    with pytest.raises(ValueError):
+        await reg.update_status("tenant_test", "rule_x", "active")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,3 +421,57 @@ async def test_pubsub_publish_triggers_escalation():
     assert triggered[0].triggered        is True
     assert triggered[0].rule.rule_id     == "rule_e2e"
     assert triggered[0].rule.target_pool == "pool_retention"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test 7 — RUL-02: a atualização REAL do ai-gateway (sentimento não medido = null)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# O teste acima publica `sentiment_score: -0.6` — um payload que o ai-gateway não produz
+# desde 2026-08-23 na maioria dos turnos: sem medida ele publica `null`. Com o campo
+# exigindo float, TODA avaliação quebrava na validação (medido ao vivo na RUL-02), e o teste
+# acima seguia verde. Este usa o payload de verdade.
+
+def _payload(sentiment):
+    return {"type": "pmessage", "channel": "session:updates:s-null",
+            "data": json.dumps({"session_id": "s-null", "tenant_id": "t", "sentiment_score": sentiment,
+                                "intent_confidence": 0.0, "flags": [], "turn_count": 0,
+                                "elapsed_ms": 900})}
+
+
+async def _fire(rule, sentiment):
+    redis = AsyncMock()
+    redis.get.return_value = None
+    store = AsyncMock(spec=RuleStore)
+    store.get_active_rules.return_value = [rule]
+    got: list = []
+
+    class Esc:
+        async def trigger(self, result):
+            got.append(result)
+
+    await _process_update(message=_payload(sentiment), rule_store=store,
+                          evaluator=RuleEvaluator(), escalator=Esc(), redis=redis)
+    return got
+
+
+@pytest.mark.asyncio
+async def test_unmeasured_sentiment_still_evaluates_the_other_conditions():
+    now = datetime.now(timezone.utc).isoformat()
+    rule = Rule(rule_id="r_el", tenant_id="t", name="tempo", status="active",
+                conditions=[Condition(parameter="elapsed_ms", operator="gte", value=500)],
+                target_pool="p", created_at=now, updated_at=now)
+    got = await _fire(rule, None)
+    assert len(got) == 1 and got[0].triggered, "sentimento nulo derrubava a avaliação inteira"
+    assert got[0].context.sentiment_score is None
+
+
+@pytest.mark.asyncio
+async def test_unmeasured_sentiment_never_matches_a_sentiment_condition():
+    """Controle: sem medida não é neutro — `sentiment_score lt 0.5` NÃO casa com null."""
+    now = datetime.now(timezone.utc).isoformat()
+    rule = Rule(rule_id="r_s", tenant_id="t", name="humor", status="active",
+                conditions=[Condition(parameter="sentiment_score", operator="lt", value=0.5)],
+                target_pool="p", created_at=now, updated_at=now)
+    assert await _fire(rule, None) == [], "null tratado como neutro dispararia aqui"
+    assert len(await _fire(rule, 0.1)) == 1, "com medida, casa"

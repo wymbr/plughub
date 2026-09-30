@@ -110,7 +110,7 @@ so it is always removed regardless of how the BLPOP resolves (success, timeout, 
 | `menu:result` key fired (customer replied) | `on_success` |
 | `session:closed` key fired (customer disconnected) | `on_disconnect` (falls back to `on_failure`) |
 | `nil` (BLPOP timed out) | `on_timeout` (falls back to `on_failure`) |
-| `menu:signal` key fired | per signal: `trigger_step` → that step · `terminate` → `on_failure` · collect `timeout` → `on_timeout` · collect `invalid` → `on_invalid` (both fall back to `on_failure`) · unreadable → warn + `on_failure` |
+| `menu:signal` key fired | per signal: `trigger_step` → that step · `terminate` / `preempt` (RUL-02) → `on_failure` · collect `timeout` → `on_timeout` · collect `invalid` → `on_invalid` (both fall back to `on_failure`) · unreadable → warn + `on_failure` |
 
 **Choice menus only accept an option id (NIV-13, 2026-09-24):** for `button`/`list`/`checklist`,
 `answerOutsideOptions` checks the answer against the resolved option ids (static or dynamic). Outside
@@ -124,6 +124,17 @@ DECLARED (`on_timeout` / `on_invalid` / `on_disconnect`), the menu returns `decl
 and the engine follows it instead of rewinding to the block's `on_failure`. Either way the transaction
 ends and the masked scope is discarded. A fallback to the menu's own `on_failure`, and a channel
 `aborted`, still rewind. Tests: `engine-transaction.test.ts` § NIV-19 (mutation-checked).
+
+### Rule preemption (RUL-02, 2026-09-30)
+
+At the top of every loop iteration — BEFORE the step runs — the engine checks
+`session:{sid}:rule_escalation` (written by the bridge when an active rule fires). Only the run of
+the NAMED instance obeys, and only once (`…:taken`, SET NX). It clears its signal queue, sends the
+rule's `customer_notice` (verbatim, no interpolation) and runs a synthetic `escalate`
+(`reason: rule_escalation`), returning `escalated_human`. A `preempt` signal only WAKES a blocked
+menu/resolve; the step's `on_failure` never runs because the loop top intercepts first. Escalation
+failure ⇒ ERROR and the flow continues the current step. `receive` is not woken. Code:
+`src/rule-preemption.ts`; tests: `src/__tests__/rule-preemption.test.ts`.
 
 ### Park mode — `menuWait: "park"` (DUR-01 F1, 2026-09-28)
 

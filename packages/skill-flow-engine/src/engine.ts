@@ -16,6 +16,7 @@ import type { IContextStore } from "./context-types"
 import { PipelineStateManager } from "./state"
 import { executeStep }          from "./executor"
 import type { StepContext, StepResult } from "./executor"
+import { claimRulePreemption, runRuleEscalation } from "./rule-preemption"
 
 // ─────────────────────────────────────────────
 // Tipos públicos
@@ -709,6 +710,25 @@ export class SkillFlowEngine {
         maskedScope, transactionOnFailure ?? null, resumeContext, segmentId, journeyId, config,
       )
       ctx.menuWait = menuWait
+
+      // RUL-02 — escalação por REGRA: a IA que conduz pára AQUI, na fronteira do passo,
+      // e escala a si mesma pelo `escalate` de sempre. Só a instância nomeada na marca
+      // obedece, e uma vez só (`rule-preemption.ts`). Falhou → segue o passo corrente, dito.
+      const preempt = await claimRulePreemption(this.config.redis, sessionId, instanceId)
+      if (preempt) {
+        const r = await runRuleEscalation(preempt, ctx, currentStep.id)
+        state = ctx.state
+        if (r !== null) {
+          if (r.output_as && r.output_value !== undefined) {
+            state = PipelineStateManager.setResult(state, r.output_as, r.output_value)
+          }
+          state = PipelineStateManager.addTransition(
+            state, currentStep.id, "__rule_escalation__", "on_success",
+          )
+          await this.stateManager.complete(tenantId, pipelineSessionId, state)
+          return { outcome: "escalated_human", pipeline_state: { ...state, status: "completed" as const } }
+        }
+      }
 
       // Executar step
       const result = await executeStep(currentStep, ctx)

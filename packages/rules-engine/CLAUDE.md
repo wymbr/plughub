@@ -8,12 +8,14 @@ conversation and no LLM dependency.
 
 ## Main flow
 
-1. Listens for Redis updates (pub/sub on session:{id}:ai)
+1. Listens for Redis pub/sub `session:updates:{session_id}` (published by ai-gateway on every `reason`/turn)
 2. Loads active rules for the tenant
-3. Evaluates each rule against the current turn's parameters
-4. If a rule fires AND has target_pool → triggers escalation
-5. If the rule is in shadow_mode → records without triggering
-6. Records firing metrics in ClickHouse
+3. Evaluates each rule against the current turn's parameters — `sentiment_score: null` means
+   NOT MEASURED and never matches a sentiment condition (it crashed every evaluation until 2026-09-30)
+4. If a rule fires AND has target_pool → publishes `rules.escalation.events` (active) or
+   `rules.shadow.events` (shadow), keyed by `session_id`
+5. It never stops an agent nor routes: the orchestrator-bridge consumes the active event and the
+   skill-flow engine stops the AI at the next step boundary (RUL-02, `docs/arcos/rules-escalation.md`)
 
 ## Observable parameters (spec 3.2)
 
@@ -41,7 +43,7 @@ New rules NEVER go directly to active without passing through dry-run.
 
 - Python 3.11+
 - redis[hiredis] — pub/sub for session updates
-- httpx — calls to mcp-server-plughub (conversation_escalate)
+- aiokafka — publishes the rule events (RUL-01 removed the HTTP call to a route that never existed)
 - asyncpg — metrics in ClickHouse (via HTTP driver)
 - pydantic + pydantic-settings
 

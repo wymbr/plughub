@@ -51,6 +51,7 @@ runs a continuous event loop consuming from `conversations.events` and `conversa
 | `conversations.inbound` | Normalised inbound messages (text, MenuSubmitEvent, etc.) |
 | `conversations.events` | `contact_closed`, `agent.activated`, and other lifecycle events |
 | `menu.wake` | `menu_wake` — wake a parked menu (DUR-01 F3, `MenuWakeEventSchema`) |
+| `rules.escalation.events` | active rule fired — `process_rule_escalation` marks `session:{sid}:rule_escalation` once, only for an AI conductor with no human, and wakes it (RUL-02, `rule_escalation.py`) |
 
 ## Kafka topics produced
 

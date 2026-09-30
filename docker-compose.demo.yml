@@ -529,6 +529,8 @@ services:
           audit.access
           media.calls
           menu.wake
+          rules.escalation.events
+          rules.shadow.events
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \

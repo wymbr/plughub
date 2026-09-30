@@ -26,6 +26,7 @@ from .config import get_settings
 from .models import EvaluationContext, ContactClosedEvent, PoolEvaluationConfig
 from .evaluator import RuleEvaluator
 from .escalator import Escalator
+from .kafka_publisher import KafkaPublisher
 from .rule_store import RuleStore
 from .evaluation_sampler import EvaluationSampler
 from plughub_tasks import disparar
@@ -40,11 +41,12 @@ async def run() -> None:
 
     rule_store = RuleStore(redis_main)
     evaluator  = RuleEvaluator()
-    escalator  = Escalator()   # RUL-01: sem HTTP — o modo ativo recusa até a RUL-02
-
-    # Kafka producer for evaluation.requested events
+    # Kafka producer for evaluation.requested and the rule events (shadow + escalation)
     kafka_producer = AIOKafkaProducer(bootstrap_servers=settings.kafka_broker)
     await kafka_producer.start()
+    # RUL-02 — sem publicador, nem o shadow saía (medido em 2026-09-30: `Escalator()` era
+    # montado sem ele, e o tópico de shadow nunca teve evento).
+    escalator  = Escalator(KafkaPublisher(kafka_producer))
 
     sampler = EvaluationSampler(
         redis             = redis_main,
@@ -134,7 +136,7 @@ async def _build_context(
     sentiment_history: list[float] = []
     turn_count        = data.get("turn_count", 0)
     elapsed_ms        = data.get("elapsed_ms", 0)
-    sentiment_score   = data.get("sentiment_score", 0.0)
+    sentiment_score   = data.get("sentiment_score")   # None = não medido; nunca 0.0 inventado
     intent_confidence = data.get("intent_confidence", 0.0)
     flags             = data.get("flags", [])
 
@@ -145,8 +147,9 @@ async def _build_context(
             sentiment_history = [t.get("sentiment_score", 0.0) for t in turns]
             if not turn_count:
                 turn_count    = len(turns)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("session %s: %s ilegível (%s) — regras avaliam sem o histórico de "
+                           "sentimento", session_id, session_key, exc)
 
     return EvaluationContext(
         session_id=        session_id,

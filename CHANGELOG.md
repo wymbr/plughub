@@ -1,5 +1,70 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (13) — RUL-02: a escalação por regra tem caminho — a IA para na fronteira do passo e escala a si mesma
+
+**O que a ficha registrava:** desde a RUL-01 o modo ativo recusava e a API recusava ativar regra
+com `target_pool`, porque não havia quem parasse a IA em curso antes de rotear. Chamar
+`conversation_escalate` de fora mandaria o contato a um humano com a IA ainda rodando.
+
+**Decisões do dono (2026-09-30):**
+1. **Parar na fronteira do passo**, não no meio: o passo em curso termina (no pior caso uma
+   chamada de LLM ou um notify já despachado) e nada fica pela metade;
+2. **aviso ao cliente opcional, da regra** (`customer_notice`, ≤ 500) — a plataforma não inventa;
+3. **só com IA conduzindo e sem humano** na sessão;
+4. **uma vez por sessão**.
+
+**O caminho, e por que cada peça mora onde mora:**
+
+| peça | casa | faz |
+|---|---|---|
+| decisão | rules-engine | publica `rules.escalation.events` (ativa) e `rules.shadow.events`, chave `session_id`; falha de publicação ativa é ERROR e não devolve trigger |
+| autorização | orchestrator-bridge (`rule_escalation.py`) | conductor = roster sem `left_at`, `primary`, `native`; humano presente, roster ausente ou dois condutores ⇒ recusa nomeada; marca `session:{sid}:rule_escalation` (SET NX, 24 h) e acorda: sinal `_rule_preempt` na fila da instância + `wake_parked_run` |
+| parada | skill-flow-engine (`rule-preemption.ts`) | no topo do loop, a run DA instância nomeada toma a marca (`…:taken`, SET NX — uma réplica só), limpa a fila de sinal, envia o aviso SEM interpolação, e roda um `escalate` sintético (`reason: rule_escalation`) |
+
+Quem escala continua sendo o fluxo, pelo `escalate` de sempre: `participant_left`, novo roteamento,
+e o bridge fecha o segmento como escalado sem encerrar o contato. Menu estacionado é acordado; menu
+bloqueado recebe o sinal e sai para `on_failure`, que o topo do loop intercepta antes de rodar.
+Escalar falhou ⇒ ERROR e o fluxo segue o passo em que estava; a marca fica tomada e a regra não
+tenta de novo. ⚠️ **Limite:** um passo `receive` não é acordado — a preempção espera ele voltar.
+
+**Achado no caminho, e maior que a ficha: nenhuma regra avaliava nada desde 2026-08-23.** O
+ai-gateway passou a publicar `sentiment_score: null` quando não mede (0.0 é neutro, correção
+deliberada daquele dia), e o `EvaluationContext` exigia `float`: toda atualização quebrava na
+validação, com `ERROR … Error processing session update` no log e nenhum vermelho. O teste
+ponta a ponta do pub/sub seguia verde porque publicava `-0.6`, um payload que o gateway não produz
+na maioria dos turnos. Agora `null` = não medido: a condição de sentimento não casa, as outras
+avaliam. Teste novo com o payload real; a mutação que devolve o `float` fica vermelha.
+
+Dois defeitos menores do mesmo serviço: o shadow nunca publicava (o `Escalator` era montado sem
+publicador) e o `_build_context` engolia histórico ilegível com `except: pass` — agora WARNING.
+
+**Prova ao vivo (tenant_demo):**
+- Regra ativa `elapsed_ms ≥ 0 → auth_form_ia`, com aviso. IA do `sac_ia` estacionada no primeiro
+  menu. A atualização de turno foi publicada no canal do ai-gateway; o elo gateway → rules-engine já
+  tinha se provado vivo no primeiro ensaio, que é onde o `null` quebrava.
+- rules-engine publicou; o bridge marcou (`instance=sac_ia-001`); o engine parou antes do
+  `menu_motivo`. O cliente recebeu o aviso e, em seguida, o formulário do `auth_form_ia`.
+- Segmentos: `sac_ia primary escalated_human rule_escalation` → `auth_form_ia primary`.
+- O segundo disparo foi descartado como *"já escalada por regra"*. A fila de sinal ficou vazia.
+- Em outro ensaio (`demo_llm_ia`) o fluxo escalou sozinho antes da marca chegar. É a corrida da
+  fronteira: quem chega primeiro decide.
+- O desfecho do segmento diz `escalated_human` mesmo com destino de IA — é o rótulo que o `escalate`
+  já dava, não desta ficha.
+
+**Testes e verificação:**
+- **Testes:** engine 354 (`test-with-redis.sh`, com `tsc`), bridge 271, rules-engine 37.
+- **Contraprovas**, cada uma com vermelho: sem conferir a instância; sem SET NX (na marca e no
+  taken); sem recusa por humano; dois condutores escolhendo um; ativa publicando no shadow;
+  publicação sem chave; aviso enviado sem texto; fila de sinal não limpa; escalação falha tratada
+  como sucesso; campo `float` de volta.
+- **Gates:** suítes Python, supervisão de tasks, varredura de rotas, perfil de skill e invariantes de
+  config verdes.
+
+**Registra** `RUL-03` (regras sem tela, e sem rota de edição/remoção — três regras de prova ficaram
+`disabled` no demo) e `RUL-04` (regra de sentimento não vê a medição, e o histórico grava `0.0` para
+turno sem sentimento). A `AUT-65` ficou mais grave: ativar regra, que segue anônimo na rede interna,
+agora tira contatos da IA.
+
 ## 2026-09-30 (12) — RPL-03: não era regressão — o gate pedia o vazamento que a MSK-06 fechou
 
 **O que a ficha registrava:** `probe_replay_customer_text.sh` com A1 vermelho — nenhuma linha com

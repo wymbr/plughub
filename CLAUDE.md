@@ -667,7 +667,9 @@ dos defeitos medidos, as quatro superfícies), [`docs/arcos/ai-gateway.md`](docs
 
 ## Rules Engine — Scope
 
-Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandoned`, `agent.done`. Publishes: `rules.escalation.events`, `rules.shadow.events`, `rules.session_tagged`. Does NOT: monitor Redis, evaluate sentiment, make routing decisions, maintain state between events.
+Escuta o pub/sub Redis `session:updates:*` (o ai-gateway publica a cada `reason`/turno: sentimento, confiança, flags, turnos, tempo) e avalia as regras do tenant **no meio da conversa**; o laço Kafka (`conversations.events`, `agent.lifecycle`) é só amostragem de avaliação. Publica `rules.escalation.events` (regra ativa) e `rules.shadow.events` (shadow), chave `session_id`. NÃO roteia, NÃO para agente, NÃO guarda estado por sessão. *(Correção 2026-09-30, RUL-02: esta linha dizia que consumia `conversations.routed/queued/abandoned` e `agent.done` e que não monitorava Redis nem avaliava sentimento — medido, era o contrário.)*
+
+**Escalação por regra (RUL-02)** — quem tira o contato da IA é o dono da ativação, nunca o rules-engine: o **bridge** consome o evento, só age se uma IA **conduz** e não há humano na sessão, grava a marca `session:{sid}:rule_escalation` **uma vez por sessão** (SET NX) e acorda a IA; o engine de skill-flow a **para na fronteira do passo** e ela escala a si mesma pelo `escalate` de sempre, depois de enviar o `customer_notice` da regra (opcional; a plataforma não inventa texto). ⚠️ **`sentiment_score` nulo = não medido**, nunca neutro: exigir `float` quebrou TODA avaliação de regra de 2026-08-23 a 2026-09-30, com o ERROR no log e nenhum vermelho. → [`docs/arcos/rules-escalation.md`](docs/arcos/rules-escalation.md)
 
 ---
 
@@ -682,8 +684,8 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `conversations.session_opened/closed` | Core | Analytics, LGPD |
 | `conversations.message_sent` | Core | Analytics |
 | `conversations.participants` | orchestrator-bridge | analytics-api → ClickHouse |
-| `rules.escalation.events` | Rules Engine | **nenhum** — e hoje **nem publicado**: o `main.py` monta o `Escalator` sem publicador, e o tópico não existe no broker. ⚠️ **A escalação por regra NÃO EXISTE** (RUL-01, 2026-09-29): o modo ativo chamava `POST /tools/conversation_escalate`, rota que o mcp-server nunca teve, e engolia o 404. Hoje recusa alto, e a API recusa ATIVAR regra com `target_pool`; o caminho (quem para a IA em curso antes de rotear) é a RUL-02 |
-| `rules.shadow.events` | Rules Engine (só shadow; hoje sem publicador — ver linha acima) | Analytics |
+| `rules.escalation.events` | Rules Engine (regra ATIVA; chave `session_id`) | orchestrator-bridge — marca a preempção da IA que conduz; a IA escala a si mesma na fronteira do passo (RUL-02) |
+| `rules.shadow.events` | Rules Engine (regra em shadow; chave `session_id`) | **nenhum** — medida sem leitor ainda; *(dizia "Analytics", que nunca o consumiu)* |
 | `registry.changed` | Agent Registry | Routing Engine, Core, orchestrator-bridge |
 | `config.changed` | Config API | orchestrator-bridge, routing-engine |
 | `gateway.heartbeat` | Channel Gateway | Routing Engine |

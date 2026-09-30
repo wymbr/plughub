@@ -234,6 +234,7 @@ Documentação técnica detalhada por Arc ou componente: implementação, contra
 | [arcos/arc6-evaluation.md](arcos/arc6-evaluation.md) | Quality Evaluation Platform (Forms, Campaigns, Contestação, RAG) |
 | [arcos/arc6-phase2-observability.md](arcos/arc6-phase2-observability.md) | Observabilidade de mudanças e comparação por deploy epoch |
 | [arcos/arc7-auth.md](arcos/arc7-auth.md) | Auth, RBAC, ABAC, performance routing, JWT |
+| [arcos/rules-escalation.md](arcos/rules-escalation.md) | Escalação por regra (RUL-02): rules-engine decide, o bridge marca, a IA para na fronteira do passo e escala a si mesma |
 | [arcos/arc8-agent-availability.md](arcos/arc8-agent-availability.md) | Disponibilidade e pausas de agentes humanos, pipeline ClickHouse |
 | [arcos/arc9-agent-groups.md](arcos/arc9-agent-groups.md) | Agent Groups, Supervisor Scope, shift resolution, JWT claims |
 | [arcos/arc10-journey.md](arcos/arc10-journey.md) | Journey multi-sessão, fases A–F, Kafka journey.events |
