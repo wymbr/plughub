@@ -1,5 +1,32 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (1) — ROT-01: F5 e link direto em /config/* abrem a página, sem lista no nginx
+
+**O defeito:** o nginx do platform-ui entregava o SPA só para uma **allowlist** de páginas sob
+`/config/*`; o resto ia ao config-api. Página nascida depois da lista (`agent-reports`,
+`context-map`, `dialog-forms`) respondia **422 JSON** a quem abrisse o link direto ou desse F5.
+Medido de novo hoje, antes do conserto.
+
+**A decisão foi denylist, e na medição ela ficou mais simples:** o próprio comentário do nginx já
+dizia que o discriminador é o `Accept`, não o caminho, e o proxy do vite já fazia assim para
+`/config` inteiro. O config-api é API JSON e não serve navegação, então não há lista a manter:
+`Accept: text/html` recebe o SPA, qualquer outro vai à API. Um `location` só.
+
+**O gate que não podia reprovar:** o `probe_config_route_collision.sh` lia os nomes de página **da
+mesma allowlist** que devia julgar, e navegava só às páginas que colidem com namespace. Medir a
+lista contra ela mesma nunca reprovava página nova. Agora a fonte é o roteador do SPA
+(`app/routes.tsx`), e a navegação cobre **toda** rota `config/*`. Contraprova: rodado contra o nginx
+antigo, ele reprovou exatamente as três; depois do conserto, OK.
+
+**Conferido depois:**
+- as 15 páginas abrem por navegação;
+- o fetch de namespace colidente (`masking`) segue JSON;
+- escrita anônima pela borda ainda chega ao config-api e é recusada (401);
+- `probe_ui_same_origin` e `probe_edge_surface` verdes.
+
+A skill `platform-ui-change` mandava *"acrescente o segmento à lista"*; passou a dizer que não há
+lista e que não se deve reintroduzi-la.
+
 ## 2026-09-29 (16) — CAP-15: fechada pela própria bifurcação, sem remover a porta do demo
 
 A ficha estava `adiado`, com um gatilho escrito: *"decidir se o alvo é rede compartilhada ou deploy

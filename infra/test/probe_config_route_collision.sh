@@ -28,7 +28,7 @@
 UI_PORT="${UI_PORT:-5174}"
 CFG_PORT="${CFG_PORT:-3600}"
 TENANT="${TENANT:-tenant_demo}"
-DF="${DF:-packages/platform-ui/Dockerfile}"
+ROUTES="${ROUTES:-packages/platform-ui/src/app/routes.tsx}"
 
 fail=0
 note() { echo "  $*"; }
@@ -40,16 +40,19 @@ ctype() { # $1 = url, $2 = accept header
 echo "═══ probe_config_route_collision — UI :$UI_PORT · config-api :$CFG_PORT ═══"
 
 command -v jq >/dev/null || { echo "INCONCLUSIVO: jq ausente"; exit 2; }
-[ -f "$DF" ] || { echo "INCONCLUSIVO: $DF não encontrado (rode da raiz do repo)"; exit 2; }
+[ -f "$ROUTES" ] || { echo "INCONCLUSIVO: $ROUTES não encontrado (rode da raiz do repo)"; exit 2; }
 
-# ── 1. Fonte A: nomes de página, lidos do Dockerfile (não de uma cópia aqui) ───
-PAGES=$(grep -o '/config/([a-z|]\+)' "$DF" | head -1 | sed 's|/config/(||; s|)||' | tr '|' ' ')
-if [ -z "$PAGES" ]; then
-  echo "INCONCLUSIVO: não consegui extrair a lista de páginas de $DF"
-  note "esperava uma linha 'location ~ ^/config/(a|b|c)/?\$'"
+# ── 1. Fonte A: as páginas /config/* do ROTEADOR do SPA ───────────────────────
+# ROT-01 (2026-09-30): a fonte era a allowlist do nginx no Dockerfile — a MESMA lista
+# que envelhecia. Medir a lista contra ela mesma nunca reprovava página nova: as três
+# que nasceram depois dela (agent-reports, context-map, dialog-forms) davam 422 JSON na
+# navegação e este gate seguia verde. A fonte agora é quem DECLARA a página.
+PAGES=$(grep -o "path: *'config/[a-z0-9-]*'" "$ROUTES" | sed "s/.*'config\///; s/'//" | sort -u | tr '\n' ' ')
+if [ -z "${PAGES// /}" ]; then
+  echo "INCONCLUSIVO: não consegui extrair as rotas config/* de $ROUTES"
   exit 2
 fi
-note "páginas SPA declaradas: $(echo "$PAGES" | wc -w)"
+note "páginas /config/* no roteador do SPA: $(echo "$PAGES" | wc -w)"
 
 # ── 2. Fonte B: namespaces que o config-api realmente tem ─────────────────────
 ALL=$(curl -s -m 10 "http://localhost:$CFG_PORT/config?tenant_id=$TENANT" 2>/dev/null)
@@ -103,10 +106,12 @@ else
   esac
 fi
 
-# ── 6. CONTRA-TESTE: navegação continua recebendo o SPA ───────────────────────
-# O conserto ingênuo (apagar a rota de SPA) passaria no ramo 4 e reprovaria aqui.
-echo "── contra-teste: navegação (Accept: text/html) tem de receber HTML"
-for ns in $COLLIDE; do
+# ── 6. CONTRA-TESTE: navegação a TODA página /config/* recebe o SPA ───────────
+# O conserto ingênuo (apagar a rota de SPA) passaria no ramo 4 e reprovaria aqui. E,
+# desde a ROT-01, o ramo cobre TODAS as páginas do roteador, não só as que colidem com
+# namespace: página nova que o nginx não entregue ao SPA reprova aqui.
+echo "── contra-teste: navegação (Accept: text/html) a toda página tem de receber HTML"
+for ns in $PAGES; do
   r=$(ctype "http://localhost:$UI_PORT/config/$ns" 'text/html,application/xhtml+xml')
   case "$r" in
     *text/html*) note "✓ $ns → $r" ;;

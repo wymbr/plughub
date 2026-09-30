@@ -31,9 +31,11 @@ existe.** Onde divergirem, **vale o código** — e o doc precisa ser corrigido 
 4. **Campo ABAC novo?** Declare em `infra/modules.yaml` (+ rótulo nos dois locales de `access`) e
    recrie o auth-api com `--force-recreate` (skill `deployment` § 4). O campo do menu tem de ser o
    que o backend exige.
-5. **Rota sob `/config/*`:** o nginx do `Dockerfile` só devolve o SPA para uma **allowlist**
-   (`access|billing|platform|masking|…|outbound`); o resto vai ao config-api, e link direto/F5 dá
-   JSON de erro (`ROT-01`). Acrescente o segmento à lista, ou a tela nova quebra no F5.
+5. **Rota sob `/config/*`:** nada a declarar no nginx. Desde a `ROT-01` (2026-09-30) quem
+   decide é o `Accept`, para todo `/config/*`: `text/html` (navegação, F5, link direto) recebe o
+   SPA; o resto vai ao config-api. Não reintroduza lista de páginas: a que existia envelhecia, e
+   cada página nova dava JSON de erro no F5. O `probe_config_route_collision.sh` navega a toda
+   rota `config/*` de `app/routes.tsx`.
 
 ## 2. Texto visível
 

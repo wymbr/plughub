@@ -205,8 +205,7 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # SPA routes under /config — must come BEFORE config-api proxy.\n\
-    # These are React Router PAGE routes (single segment).\n\
+    # /config/* — paginas do SPA (navegacao) E namespaces do config-api (fetch).\n\
     #\n\
     # O DISCRIMINADOR E O `Accept`, NUNCA O CAMINHO. `masking` e ao mesmo tempo nome de\n\
     # pagina do React Router E namespace do config-api, e as duas URIs sao IDENTICAS:\n\
@@ -225,22 +224,18 @@ RUN printf 'server {\n\
     # fetch e degradavam para DEFAULT_DISPLAY_RULE — invisivel, porque default parece certo.\n\
     # Medido 2026-08-26. Gate: infra/test/probe_config_route_collision.sh\n\
     #\n\
+    # ROT-01 (2026-09-30): o `Accept` decide para TODO /config/*, sem LISTA de paginas.\n\
+    # Havia uma allowlist de nomes de pagina aqui, e ela envelhecia: toda pagina nascida\n\
+    # depois dela (agent-reports, context-map, dialog-forms) respondia 422 JSON do\n\
+    # config-api a quem abrisse o link direto ou desse F5, sem nada ficar vermelho. O\n\
+    # config-api e API JSON e nao serve navegacao, entao `text/html` e sempre do SPA —\n\
+    # a mesma regra do proxy do vite (`bypass` do ^/config).\n\
+    #\n\
     # `rewrite ... last` dentro de `if` e um dos dois usos seguros de `if` em location.\n\
-    location ~ ^/config/(access|billing|platform|masking|recursos|resources|channels|canais|groups|calendars|schedules|outbound)/?$ {\n\
+    location ~ ^/config/ {\n\
         if ($http_accept ~* "text/html") {\n\
             rewrite ^ /index.html last;\n\
         }\n\
-        set $up_config_ns http://config-api:3600;\n\
-        proxy_pass         $up_config_ns;\n\
-        proxy_http_version 1.1;\n\
-        proxy_set_header   Host $host;\n\
-        proxy_set_header   X-Admin-Token $http_x_admin_token;\n\
-        proxy_buffering    off;\n\
-        proxy_read_timeout 60s;\n\
-    }\n\
-\n\
-    # config-api (namespace/key CRUD — all other /config/* routes)\n\
-    location ~ ^/config/ {\n\
         set $up_config http://config-api:3600;\n\
         proxy_pass         $up_config;\n\
         proxy_http_version 1.1;\n\

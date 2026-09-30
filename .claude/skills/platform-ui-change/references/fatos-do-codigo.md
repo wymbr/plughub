@@ -39,7 +39,7 @@
 | Token em memória; single-flight | `pui/src/auth/token-store.ts:8-16`, `:50-59` |
 | Refresh em `localStorage`, `buildSession`, `perms`, `accessiblePools` | `pui/src/auth/AuthContext.tsx:6-8`, `:141-167`, `:193-228`, `:288-378` |
 | Proxy dev | `pui/vite.config.ts:14-134` (`/config` com bypass de `text/html` em `:87-95`) |
-| Allowlist nginx de `/config/*` **(conferido)** | `pui/Dockerfile` (location `^/config/(access|…|outbound)/?$`) |
+| `/config/*` no nginx: `Accept: text/html` → SPA, resto → config-api, sem lista (ROT-01) **(conferido)** | `pui/Dockerfile` (location `^/config/`) |
 
 ## Build
 
