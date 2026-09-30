@@ -75,7 +75,7 @@ login() {  # $1=email $2=senha → imprime o access_token (vazio em falha)
 # criar — o probe reprovava o produto por defeito próprio, e a mensagem ("portão
 # recusando quem deveria passar") era convincente. Nome distinto por cenário elimina a
 # dependência de ordem entre eles.
-cal_body() { echo "{\"organization_id\":\"$TENANT\",\"tenant_id\":\"$TENANT\",\"name\":\"probe_write_gate_$1\",\"always_open\":true}"; }
+cal_body() { echo "{\"tenant_id\":\"$TENANT\",\"name\":\"probe_write_gate_$1\",\"always_open\":true}"; }
 JSONH=(-H 'content-type: application/json')
 
 # ── pré-condição ──────────────────────────────────────────────────────────────

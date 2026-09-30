@@ -9,7 +9,7 @@ import { apiFetch } from '@/api/apiFetch'
  * SchedulesMonitorPage (operation).
  */
 
-const ORG_ID = import.meta.env.VITE_CALENDAR_ORG_ID ?? 'org-default'
+// CAL-01: a organização é a instalação; o calendar-api a preenche (não mandar).
 
 // ── Types (mirror @plughub/schemas/scheduler.ts + scheduler-api router models) ──
 
@@ -132,7 +132,7 @@ export async function fetchWebhookPools(tenantId: string): Promise<WebhookPool[]
 /** Calendars from calendar-api (for the business-day calendar_id dropdown). */
 export async function fetchCalendars(tenantId: string): Promise<Array<{ id: string; name: string }>> {
   try {
-    const data = await jsonFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${tenantId}`)
+    const data = await jsonFetch(`/v1/calendars?tenant_id=${tenantId}`)
     return (data ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))
   } catch {
     return []

@@ -21,6 +21,11 @@
     "channel":  "Channel",
     "workflow": "Workflow"
   },
+  "organization": {
+    "badge":    "Organization",
+    "readOnly": "Organization-wide",
+    "hint":     "Shared by every tenant of this installation. Editing it requires the Platform settings permission."
+  },
   "calendar": {
     "info":         "Define calendars with weekly hours and linked special days.",
     "new":          "New Calendar",

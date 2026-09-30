@@ -1857,6 +1857,9 @@ services:
       PLUGHUB_CALENDAR_DATABASE_URL:  postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_CALENDAR_REDIS_URL:     redis://redis:6379
       PLUGHUB_CALENDAR_KAFKA_BROKERS: kafka:29092
+      # CAL-01 — a organização é a INSTALAÇÃO (uma por deploy). Topologia, não negócio:
+      # o calendar-api carimba toda linha com ela e recusa (422) quem mandar outra.
+      PLUGHUB_CALENDAR_ORGANIZATION_ID: org-default
       # Portao de escrita LIGADO. Vazio o desabilitaria — e um portao desligado no
       # demo e a razao de este servico ter aceitado `POST /v1/calendars` anonimo ate
       # 2026-08-27. As rotas /v1/engine/* seguem abertas (chamadores internos).

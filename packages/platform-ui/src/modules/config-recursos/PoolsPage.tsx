@@ -793,10 +793,9 @@ const PoolsPage: React.FC = () => {
   const loadCalendars = useCallback(async () => {
     if (!session) return
     try {
-      const params = new URLSearchParams({
-        organization_id: session.tenantId,
-        tenant_id:       session.tenantId,
-      })
+      // CAL-01: mandava o TENANT como organização — outra organização que a das demais
+      // telas. A organização é a instalação, e o calendar-api a preenche.
+      const params = new URLSearchParams({ tenant_id: session.tenantId })
       const res = await apiFetch(`/v1/calendars?${params}`)
       if (res.ok) {
         const data = await res.json() as Array<{ id: string; name: string }>

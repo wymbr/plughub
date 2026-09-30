@@ -19,7 +19,8 @@ import EmptyState from '@/components/ui/EmptyState'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const ORG_ID  = import.meta.env.VITE_CALENDAR_ORG_ID ?? 'org-default'
+// CAL-01 (2026-09-30): a organização é a INSTALAÇÃO, e o calendar-api a preenche. Esta
+// tela mandava `VITE_CALENDAR_ORG_ID ?? 'org-default'` — env que build nenhum define.
 
 const DAY_LABELS: Record<string, string> = {
   monday:    'Seg',
@@ -78,6 +79,7 @@ interface CalendarObj {
   weekly_schedule: WeeklyDaySchedule[]
   holiday_set_ids: string[]
   exceptions:      ExceptionEntry[]
+  tenant_id:       string | null   // null = linha da ORGANIZAÇÃO (CAL-02)
   created_at:      string
   updated_at:      string
 }
@@ -96,6 +98,7 @@ interface HolidaySet {
   description: string
   year:        number | null
   holidays:    HolidayEntry[]
+  tenant_id:   string | null   // null = linha da ORGANIZAÇÃO (CAL-02)
   created_at:  string
   updated_at:  string
 }
@@ -130,7 +133,7 @@ function makeCalApi(tenantId: string) {
   return {
     // Holiday sets
     listHolidaySets: () =>
-      apiFetch(`/v1/holiday-sets?organization_id=${ORG_ID}&tenant_id=${tenantId}`),
+      apiFetch(`/v1/holiday-sets?tenant_id=${tenantId}`),
     createHolidaySet: (body: object) =>
       apiFetch('/v1/holiday-sets', { method: 'POST', body: JSON.stringify(body) }),
     updateHolidaySet: (id: string, body: object) =>
@@ -140,7 +143,7 @@ function makeCalApi(tenantId: string) {
 
     // Calendars
     listCalendars: () =>
-      apiFetch(`/v1/calendars?organization_id=${ORG_ID}&tenant_id=${tenantId}`),
+      apiFetch(`/v1/calendars?tenant_id=${tenantId}`),
     createCalendar: (body: object) =>
       apiFetch('/v1/calendars', { method: 'POST', body: JSON.stringify(body) }),
     updateCalendar: (id: string, body: object) =>
@@ -700,7 +703,9 @@ interface CalendarsTabProps { holidaySets: HolidaySet[]; onGoToHolidaySets: () =
 
 function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
   const { t } = useTranslation('calendars')
-  const { tenantId } = useAuth()
+  const { tenantId, perms } = useAuth()
+  // CAL-02: linha da organização (tenant_id nulo) só é editável com config.platform.
+  const canEditOrgRows = perms.can('config', 'platform', 'read_write')
   const calApi = makeCalApi(tenantId)
   const [calendars, setCalendars] = useState<CalendarObj[]>([])
   const [loading,   setLoading]   = useState(true)
@@ -778,7 +783,6 @@ function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
       // Commit any half-typed exception add-row (Save without pressing "Add").
       const finalExceptions = excEditorRef.current?.flushPending() ?? fExceptions
       const body = {
-        organization_id: ORG_ID,
         tenant_id:       tenantId,
         name:            fName,
         description:     fDesc,
@@ -875,7 +879,15 @@ function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
             <div key={c.id}
               className="flex items-start gap-3 px-4 py-3 bg-white border border-border rounded-xl hover:border-primary/30 transition-colors">
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-dark">{c.name}</p>
+                <p className="text-sm font-semibold text-dark">
+                  {c.name}
+                  {!c.tenant_id && (
+                    <span className="ml-2 text-xs font-normal bg-surface-alt text-muted px-2 py-0.5 rounded-full"
+                          title={t('organization.hint')}>
+                      {t('organization.badge')}
+                    </span>
+                  )}
+                </p>
                 {c.description && <p className="text-xs text-muted mt-0.5">{c.description}</p>}
                 <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                   <span className="text-xs bg-surface-alt text-muted px-2 py-0.5 rounded-full">
@@ -902,6 +914,7 @@ function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
                   )}
                 </div>
               </div>
+              {(c.tenant_id || canEditOrgRows) ? (
               <div className="flex gap-1 flex-shrink-0">
                 <button onClick={() => openEdit(c)}
                   className="px-3 py-1.5 text-xs text-primary hover:bg-primary-light rounded-lg transition-colors">
@@ -912,6 +925,11 @@ function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
                   {t('calendar.delete')}
                 </button>
               </div>
+              ) : (
+                <span className="text-xs text-muted-light italic flex-shrink-0" title={t('organization.hint')}>
+                  {t('organization.readOnly')}
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -1080,7 +1098,9 @@ interface HolidaysTabProps { onSetsChange: (sets: HolidaySet[]) => void }
 
 function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
   const { t } = useTranslation('calendars')
-  const { tenantId } = useAuth()
+  const { tenantId, perms } = useAuth()
+  // CAL-02: linha da organização (tenant_id nulo) só é editável com config.platform.
+  const canEditOrgRows = perms.can('config', 'platform', 'read_write')
   const calApi = makeCalApi(tenantId)
   const [sets,      setSets]      = useState<HolidaySet[]>([])
   const [loading,   setLoading]   = useState(true)
@@ -1135,7 +1155,6 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
       // Commit any half-typed add-row (user clicked Save without pressing "+").
       const finalHols = holEditorRef.current?.flushPending() ?? fHols
       const body = {
-        organization_id: ORG_ID,
         tenant_id:       tenantId,
         name:            fName,
         description:     fDesc,
@@ -1203,6 +1222,12 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-dark">{hs.name}</span>
+                    {!hs.tenant_id && (
+                      <span className="text-xs bg-surface-alt text-muted px-2 py-0.5 rounded-full"
+                            title={t('organization.hint')}>
+                        {t('organization.badge')}
+                      </span>
+                    )}
                     {hs.year && (
                       <span className="text-xs bg-warning-light text-warning-text px-2 py-0.5 rounded-full">
                         {hs.year}
@@ -1217,6 +1242,7 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
                   )}
                 </button>
                 <div className="flex gap-1 flex-shrink-0">
+                  {(hs.tenant_id || canEditOrgRows) ? (<>
                   <button onClick={() => openEdit(hs)}
                     className="px-3 py-1.5 text-xs text-primary hover:bg-primary-light rounded-lg transition-colors">
                     {t('calendar.edit')}
@@ -1225,6 +1251,11 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
                     className="px-3 py-1.5 text-xs text-red hover:bg-red-light rounded-lg transition-colors">
                     {t('calendar.delete')}
                   </button>
+                  </>) : (
+                    <span className="text-xs text-muted-light italic self-center" title={t('organization.hint')}>
+                      {t('organization.readOnly')}
+                    </span>
+                  )}
                   <span className="text-border-strong text-sm self-center">
                     {expanded === hs.id ? '▲' : '▼'}
                   </span>

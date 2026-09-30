@@ -519,3 +519,124 @@ class TestAddBusinessDurationCalendar:
 
     def test_anonimo_e_401(self):
         assert self._post(self._CAL, headers={}).status_code == 401
+
+
+class TestOrganizationIsTheInstallation:
+    """CAL-01/CAL-02: a organização vem da config do servidor, e a linha dela (feriado
+    compartilhado) é de quem tem `config.platform`. Cada ramo com o seu controle positivo."""
+
+    def setup_method(self):
+        self.pool = _make_pool()
+        app.state.pool = self.pool
+        app.state.settings = _make_settings(jwt_secret=_SECRET, service_token=_SVC)
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    def _create(self, body, headers):
+        ins = AsyncMock(return_value={"id": "c1"})
+        with _patch("plughub_calendar_api.router.db_create_calendar", new=ins), \
+             _patch("plughub_calendar_api.router.db_get_tenant_config",
+                    new=AsyncMock(return_value={"default_timezone": "UTC"})):
+            r = self.client.post("/v1/calendars", json=body, headers=headers)
+        return r, ins
+
+    # CAL-01 ──────────────────────────────────────────────────────────────────
+    def test_list_without_organization_uses_the_installation_and_the_token_tenant(self):
+        lst = AsyncMock(return_value=[])
+        with _patch("plughub_calendar_api.router.db_list_calendars", new=lst):
+            r = self.client.get("/v1/calendars", headers=_user())
+        assert r.status_code == 200, r.text
+        lst.assert_awaited_once()
+        assert lst.await_args.args[1:] == ("org-test", "tenant-abc")
+
+    def test_list_with_another_organization_is_422_and_reads_nothing(self):
+        lst = AsyncMock(return_value=[])
+        with _patch("plughub_calendar_api.router.db_list_calendars", new=lst):
+            r = self.client.get("/v1/calendars", params={"organization_id": "tenant-abc"}, headers=_user())
+        assert r.status_code == 422
+        assert "organization_mismatch" in r.json()["detail"]
+        lst.assert_not_awaited()
+
+    def test_list_holiday_sets_same_rule(self):
+        lst = AsyncMock(return_value=[])
+        with _patch("plughub_calendar_api.router.db_list_holiday_sets", new=lst):
+            ok = self.client.get("/v1/holiday-sets", headers=_user())
+            bad = self.client.get("/v1/holiday-sets", params={"organization_id": "org-default"}, headers=_user())
+        assert ok.status_code == 200 and bad.status_code == 422
+        assert lst.await_args.args[1:] == ("org-test", "tenant-abc")
+
+    def test_create_fills_the_organization(self):
+        r, ins = self._create({"name": "c", "timezone": "UTC"}, _user(calendars="read_write"))
+        assert r.status_code == 201, r.text
+        data = ins.await_args.args[1]
+        assert data["organization_id"] == "org-test"
+        assert data["tenant_id"] == "tenant-abc" and data["scope"] == "tenant"
+
+    def test_create_with_another_organization_is_422(self):
+        r, ins = self._create({"organization_id": "org-default", "name": "c"}, _user(calendars="read_write"))
+        assert r.status_code == 422
+        ins.assert_not_awaited()
+
+    # CAL-02 ──────────────────────────────────────────────────────────────────
+    def test_system_create_without_tenant_is_no_longer_an_organization_row(self):
+        """Antes: sem `tenant_id`, nascia calada uma linha da ORGANIZAÇÃO."""
+        r, ins = self._create({"name": "c"}, _WRITE_HEADERS)
+        assert r.status_code == 422
+        ins.assert_not_awaited()
+
+    def test_user_organization_row_needs_platform(self):
+        r, ins = self._create({"name": "feriados", "scope": "organization"}, _user(calendars="read_write"))
+        assert r.status_code == 403
+        ins.assert_not_awaited()
+
+    def test_user_with_platform_creates_organization_row(self):
+        r, ins = self._create({"name": "feriados", "scope": "organization"},
+                              _user(calendars="read_write", platform="read_write"))
+        assert r.status_code == 201, r.text
+        assert ins.await_args.args[1]["tenant_id"] is None
+
+    def test_organization_row_with_tenant_is_422(self):
+        r, ins = self._create({"name": "x", "scope": "organization", "tenant_id": "tenant-abc"},
+                              _user(calendars="read_write", platform="read_write"))
+        assert r.status_code == 422
+
+    def test_installation_scope_is_refused(self):
+        r, ins = self._create({"name": "x", "scope": "installation"}, _WRITE_HEADERS)
+        assert r.status_code == 422
+
+    def _patch_row(self, row, headers, getter="db_get_calendar", updater="db_update_calendar",
+                   path="/v1/calendars/c1"):
+        upd = AsyncMock(return_value={"id": "c1"})
+        with _patch(f"plughub_calendar_api.router.{getter}", new=AsyncMock(return_value=row)), \
+             _patch(f"plughub_calendar_api.router.{updater}", new=upd):
+            r = self.client.patch(path, headers=headers, json={"name": "y"})
+        return r, upd
+
+    def test_patch_organization_row_with_calendars_only_is_403_and_writes_nothing(self):
+        r, upd = self._patch_row({"id": "c1", "tenant_id": None}, _user(calendars="read_write"))
+        assert r.status_code == 403
+        upd.assert_not_awaited()
+
+    def test_patch_organization_row_with_platform_passes(self):
+        r, upd = self._patch_row({"id": "c1", "tenant_id": None},
+                                 _user(calendars="read_write", platform="read_write"))
+        assert r.status_code == 200, r.text
+        upd.assert_awaited_once()
+
+    def test_patch_own_tenant_row_needs_only_calendars(self):
+        r, upd = self._patch_row({"id": "c1", "tenant_id": "tenant-abc"}, _user(calendars="read_write"))
+        assert r.status_code == 200, r.text
+
+    def test_delete_organization_holiday_set_with_calendars_only_is_403(self):
+        dele = AsyncMock(return_value=True)
+        with _patch("plughub_calendar_api.router.db_get_holiday_set",
+                    new=AsyncMock(return_value={"id": "h1", "tenant_id": None})), \
+             _patch("plughub_calendar_api.router.db_delete_holiday_set", new=dele):
+            r = self.client.delete("/v1/holiday-sets/h1", headers=_user(calendars="read_write"))
+        assert r.status_code == 403
+        dele.assert_not_awaited()
+
+    def test_organization_row_is_still_readable_by_any_tenant_user(self):
+        with _patch("plughub_calendar_api.router.db_get_calendar",
+                    new=AsyncMock(return_value={"id": "c1", "tenant_id": None, "name": "org"})):
+            r = self.client.get("/v1/calendars/c1", headers=_user())
+        assert r.status_code == 200

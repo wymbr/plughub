@@ -163,6 +163,88 @@ async def _own(request: Request, pool, getter, id: str, what: str) -> dict:
     return row
 
 
+def _organization(request: Request, asked: str | None) -> str:
+    """CAL-01 (2026-09-30): a organização é a INSTALAÇÃO — a v1 é instância dedicada, uma
+    organização por deploy, lida da config do servidor (`PLUGHUB_CALENDAR_ORGANIZATION_ID`).
+
+    Antes, quem chamava dizia a organização: quatro telas mandavam `VITE_CALENDAR_ORG_ID ??
+    'org-default'` (env que build nenhum define) e a de Pools mandava o TENANT. Cada tela
+    listava os calendários de uma organização diferente, sem erro. Quem ainda manda o campo
+    é conferido: divergir é 422 nomeado, nunca "a do servidor vence" calado."""
+    org = _settings(request).organization_id
+    if asked and asked != org:
+        logger.warning("calendar RECUSA organization_id=%s (a desta instalação é %s) em %s",
+                       asked, org, request.url.path)
+        raise HTTPException(422, f"organization_mismatch: esta instalação é a organização {org!r}; "
+                                 "não mande organization_id")
+    return org
+
+
+def _list_tenant(request: Request, asked: str | None) -> str | None:
+    """Tenant de uma LISTA: o do token para usuário (sem ele, a lista trazia só as linhas
+    da organização); o da query para serviço e sistema."""
+    caller = request.state.caller
+    return caller["tenant"] if caller["kind"] == "user" else asked
+
+
+def _can_edit_organization_rows(request: Request) -> bool:
+    caller = request.state.caller
+    if caller["kind"] == "system":
+        return True
+    if caller["kind"] != "user":
+        return False
+    return abac_can(caller["claims"], "config", "platform", "read_write")
+
+
+def _require_organization_write(request: Request) -> None:
+    """CAL-02: a linha da ORGANIZAÇÃO (`tenant_id` nulo — feriado nacional compartilhado)
+    vale para todos os tenants da instalação. Até aqui `config.calendars` de QUALQUER tenant a
+    editava; com dois tenants, o administrador de um reescrevia o feriado do outro. Agora ela é
+    de quem administra a plataforma (`config.platform`), como as demais configs horizontais."""
+    if not _can_edit_organization_rows(request):
+        caller = request.state.caller
+        logger.warning("calendar RECUSA escrita em linha da organização: %s sub=%s (%s)",
+                       caller["kind"], (caller.get("claims") or {}).get("sub"), request.url.path)
+        raise HTTPException(403, "forbidden: linha da organização exige config.platform (read_write)")
+
+
+def _placement(request: Request, data: dict) -> dict:
+    """Onde uma linha NOVA nasce (CAL-02). `scope` decide, e `tenant_id` tem de concordar:
+
+      · `tenant` (default): a linha é do tenant — o do token para usuário. Sem tenant é 422:
+        antes, criar sem `tenant_id` criava, calado, uma linha da ORGANIZAÇÃO;
+      · `organization`: `tenant_id` nulo, e exige `config.platform`;
+      · `installation`: recusado — a organização É a instalação (CAL-01), e dois nomes para a
+        mesma linha dariam duas regras de posse.
+    """
+    caller = request.state.caller
+    scope = data.get("scope") or "tenant"
+    data["organization_id"] = _organization(request, data.get("organization_id"))
+    if scope == "installation":
+        raise HTTPException(422, "scope 'installation' não é oferecido: a organização é a instalação (use 'organization')")
+    if scope == "organization":
+        if data.get("tenant_id"):
+            raise HTTPException(422, "linha da organização não tem tenant_id")
+        _require_organization_write(request)
+        data["tenant_id"] = None
+    elif scope == "tenant":
+        if caller["kind"] == "user":
+            data["tenant_id"] = caller["tenant"]   # divergência já é 403 no `_caller`
+        if not data.get("tenant_id"):
+            raise HTTPException(422, "linha de tenant exige tenant_id (para a linha da organização, scope='organization')")
+    else:
+        raise HTTPException(422, f"scope desconhecido: {scope!r}")
+    data["scope"] = scope
+    return data
+
+
+async def _own_for_write(request: Request, pool, getter, id: str, what: str) -> dict:
+    row = await _own(request, pool, getter, id, what)
+    if not row.get("tenant_id"):
+        _require_organization_write(request)
+    return row
+
+
 router = APIRouter(dependencies=[Depends(_caller)])
 _WRITE = Depends(_require_calendars_write)
 
@@ -170,7 +252,7 @@ _WRITE = Depends(_require_calendars_write)
 # ── Holiday Sets ──────────────────────────────────────────────────────────────
 
 class HolidaySetCreate(BaseModel):
-    organization_id: str
+    organization_id: str | None = None   # CAL-01: preenchido pelo servidor; divergir é 422
     tenant_id:       str | None = None
     scope:           str = "tenant"
     name:            str
@@ -188,11 +270,13 @@ class HolidaySetUpdate(BaseModel):
 
 @router.get("/v1/holiday-sets")
 async def list_holiday_sets(
-    organization_id: str,
+    request: Request,
+    organization_id: str | None = None,
     tenant_id: str | None = None,
     pool=Depends(_pool),
 ):
-    return await db_list_holiday_sets(pool, organization_id, tenant_id)
+    return await db_list_holiday_sets(pool, _organization(request, organization_id),
+                                      _list_tenant(request, tenant_id))
 
 
 @router.post("/v1/holiday-sets", status_code=201, dependencies=[_WRITE])
@@ -202,7 +286,7 @@ async def create_holiday_set(
     pool=Depends(_pool),
 ):
     settings = _settings(request)
-    data = body.model_dump()
+    data = _placement(request, body.model_dump())
     data["installation_id"] = settings.installation_id
     return await db_create_holiday_set(pool, data)
 
@@ -214,7 +298,7 @@ async def get_holiday_set(id: str, request: Request, pool=Depends(_pool)):
 
 @router.patch("/v1/holiday-sets/{id}", dependencies=[_WRITE])
 async def update_holiday_set(id: str, body: HolidaySetUpdate, request: Request, pool=Depends(_pool)):
-    await _own(request, pool, db_get_holiday_set, id, "holiday_set")
+    await _own_for_write(request, pool, db_get_holiday_set, id, "holiday_set")
     row = await db_update_holiday_set(pool, id, body.model_dump(exclude_none=True))
     if not row:
         raise HTTPException(404, "holiday_set not found")
@@ -223,7 +307,7 @@ async def update_holiday_set(id: str, body: HolidaySetUpdate, request: Request, 
 
 @router.delete("/v1/holiday-sets/{id}", status_code=204, dependencies=[_WRITE])
 async def delete_holiday_set(id: str, request: Request, pool=Depends(_pool)):
-    await _own(request, pool, db_get_holiday_set, id, "holiday_set")
+    await _own_for_write(request, pool, db_get_holiday_set, id, "holiday_set")
     deleted = await db_delete_holiday_set(pool, id)
     if not deleted:
         raise HTTPException(404, "holiday_set not found")
@@ -268,7 +352,7 @@ async def update_tenant_config(
 # ── Calendars ─────────────────────────────────────────────────────────────────
 
 class CalendarCreate(BaseModel):
-    organization_id: str
+    organization_id: str | None = None   # CAL-01: preenchido pelo servidor; divergir é 422
     tenant_id:       str | None = None
     scope:           str = "tenant"
     name:            str
@@ -292,11 +376,13 @@ class CalendarUpdate(BaseModel):
 
 @router.get("/v1/calendars")
 async def list_calendars(
-    organization_id: str,
+    request: Request,
+    organization_id: str | None = None,
     tenant_id: str | None = None,
     pool=Depends(_pool),
 ):
-    return await db_list_calendars(pool, organization_id, tenant_id)
+    return await db_list_calendars(pool, _organization(request, organization_id),
+                                   _list_tenant(request, tenant_id))
 
 
 @router.post("/v1/calendars", status_code=201, dependencies=[_WRITE])
@@ -306,7 +392,7 @@ async def create_calendar(
     pool=Depends(_pool),
 ):
     settings = _settings(request)
-    data = body.model_dump()
+    data = _placement(request, body.model_dump())
     data["installation_id"] = settings.installation_id
 
     # If the caller did not provide an explicit timezone, inherit the tenant's
@@ -327,7 +413,7 @@ async def get_calendar(id: str, request: Request, pool=Depends(_pool)):
 
 @router.patch("/v1/calendars/{id}", dependencies=[_WRITE])
 async def update_calendar(id: str, body: CalendarUpdate, request: Request, pool=Depends(_pool)):
-    await _own(request, pool, db_get_calendar, id, "calendar")
+    await _own_for_write(request, pool, db_get_calendar, id, "calendar")
     row = await db_update_calendar(pool, id, body.model_dump(exclude_none=True))
     if not row:
         raise HTTPException(404, "calendar not found")
@@ -336,7 +422,7 @@ async def update_calendar(id: str, body: CalendarUpdate, request: Request, pool=
 
 @router.delete("/v1/calendars/{id}", status_code=204, dependencies=[_WRITE])
 async def delete_calendar(id: str, request: Request, pool=Depends(_pool)):
-    await _own(request, pool, db_get_calendar, id, "calendar")
+    await _own_for_write(request, pool, db_get_calendar, id, "calendar")
     deleted = await db_delete_calendar(pool, id)
     if not deleted:
         raise HTTPException(404, "calendar not found")

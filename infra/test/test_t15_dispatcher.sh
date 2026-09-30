@@ -64,7 +64,7 @@ CAL_ADMIN_TOKEN="${CAL_ADMIN_TOKEN:-demo_calendar_admin_token}"   # portao de es
 # ── CASO 3 — janela FECHADA → 0 ───────────────────────────────────────────────
 echo "══ CASO 3 — calendário fechado associado → não despacha (in_window=false) ══"
 CAL_CLOSED=$($CURL -X POST "$CAL/v1/calendars" $JSON -H "X-Admin-Token: $CAL_ADMIN_TOKEN" -d "{
-  \"organization_id\":\"$TENANT\",\"tenant_id\":\"$TENANT\",\"name\":\"t15_closed\",
+  \"tenant_id\":\"$TENANT\",\"name\":\"t15_closed\",
   \"always_open\":false,\"weekly_schedule\":[]}" | jq -r '.id // empty')
 C3=$($CURL -X POST "$EVAL/v1/evaluation/campaigns" $JSON -d "{
   \"tenant_id\":\"$TENANT\",\"name\":\"t15_closed_camp\",\"form_id\":\"$F\",
@@ -85,7 +85,7 @@ fi
 # ── CASO 4 — janela ABERTA (always_open) → despacha ───────────────────────────
 echo "══ CASO 4 — calendário always_open associado → despacha (in_window=true) ══"
 CAL_OPEN=$($CURL -X POST "$CAL/v1/calendars" $JSON -H "X-Admin-Token: $CAL_ADMIN_TOKEN" -d "{
-  \"organization_id\":\"$TENANT\",\"tenant_id\":\"$TENANT\",\"name\":\"t15_open_cal\",
+  \"tenant_id\":\"$TENANT\",\"name\":\"t15_open_cal\",
   \"always_open\":true}" | jq -r '.id // empty')
 C4=$($CURL -X POST "$EVAL/v1/evaluation/campaigns" $JSON -d "{
   \"tenant_id\":\"$TENANT\",\"name\":\"t15_open_camp\",\"form_id\":\"$F\",

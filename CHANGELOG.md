@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (6) — CAL-01/CAL-02: a organização é a instalação, e a linha dela é de quem administra a plataforma
+
+**O defeito da CAL-01:** o `organization_id` de um calendário vinha de quem chamava, e cada tela dizia
+outra coisa. `CalendarsPage`, `CampaignsPage`, `outbound/api.ts` e `schedules/api.ts` mandavam
+`VITE_CALENDAR_ORG_ID ?? 'org-default'`, env que build nenhum define. O `PoolsPage` mandava o TENANT.
+Com linhas no banco, a tela de Pools listaria os calendários de uma organização e as outras quatro,
+de outra, sem erro em lugar nenhum.
+
+**Decisão do dono (2026-09-30): organização = a INSTALAÇÃO.** A v1 é instância dedicada, então há uma
+organização por deploy, e ela é topologia: mora na config do servidor
+(`PLUGHUB_CALENDAR_ORGANIZATION_ID`, agora declarada no compose), nunca em env de build.
+- O calendar-api carimba toda linha com ela. Listas e criação aceitam o campo ausente.
+- Quem ainda mandar OUTRA organização recebe **422 `organization_mismatch`**, com log. Não é "a do
+  servidor vence" calado.
+- A lista de usuário usa o tenant do TOKEN. Sem ele, trazia só as linhas da organização.
+- As cinco telas pararam de mandar o campo, e três scripts de teste também (dois mandavam o tenant
+  como organização).
+
+**O defeito da CAL-02:** a linha da organização (`tenant_id` nulo, o feriado nacional compartilhado)
+era editável e apagável por `config.calendars` de QUALQUER tenant. E criar sem `tenant_id` criava,
+calado, uma linha da organização.
+
+**Decisão do dono: a linha da organização é de quem tem `config.platform`.** `scope` passou a decidir
+onde a linha nasce:
+- `tenant` (default): a linha é do tenant do token. Sem tenant (sistema sem `tenant_id`) é 422;
+- `organization`: `tenant_id` nulo e `config.platform` em escrita;
+- `installation`: recusado, porque a organização É a instalação e dois nomes para a mesma linha
+  dariam duas regras de posse.
+
+Editar ou apagar linha da organização pede `config.platform`; ler continua aberto a qualquer usuário
+do tenant, que é para isso que a linha existe. A tela de Calendários mostra o selo "Organização" e
+esconde Editar/Apagar para quem não tem o grant: a tela não oferece o que o servidor recusa.
+
+**Medido ao vivo:**
+- lista sem organização: 200; com a organização errada: 422 nomeado;
+- criar linha de tenant grava `org-default` e `tenant_demo`; criar linha da organização com o admin
+  (que tem `config.platform`) grava `tenant_id` nulo;
+- lista pela borda da UI (5174): 200. As linhas de teste foram apagadas.
+
+**Instrumentos:**
+- calendar-api 100 (15 novos, cada ramo com o seu controle positivo);
+- contraprova no módulo instalado: desligar a guarda da linha da organização (3 vermelhos), a
+  conferência da organização (3), a recusa de linha de tenant sem tenant (1), e a lista pelo tenant
+  do token (2);
+- gates verdes: `probe_config_service_write_gate`, `probe_route_anon_sweep` e chaves i18n
+  duplicadas.
+
 ## 2026-09-30 (5) — WFL-01: a workflow-api e o skill-flow-worker saem do ar, com o tópico `workflow.events`
 
 **O defeito da ficha:** os dois serviços estavam de pé servindo uma cadeia morta. Depois da AUT-64 a

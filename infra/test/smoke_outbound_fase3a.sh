@@ -37,7 +37,7 @@ STAMP=$(date +%s)
 echo "1) Cria calendário SEMPRE FECHADO (weekly_schedule vazio) ..."
 CAL_ADMIN_TOKEN="${CAL_ADMIN_TOKEN:-demo_calendar_admin_token}"   # portao de escrita (sistema)
 CALID=$(curl -s -X POST "$CAL/v1/calendars" -H 'content-type: application/json' -H "X-Admin-Token: $CAL_ADMIN_TOKEN" -d "{
-  \"organization_id\":\"org-default\",\"tenant_id\":\"$TENANT\",\"scope\":\"tenant\",
+  \"tenant_id\":\"$TENANT\",\"scope\":\"tenant\",
   \"name\":\"F3a closed $STAMP\",\"always_open\":false,\"weekly_schedule\":[]
 }" | jqid)
 [ -n "$CALID" ] || { echo "FALHA: calendário sem id (calendar-api :3700 no ar?)"; exit 1; }

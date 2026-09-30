@@ -50,16 +50,14 @@ function usePoolOptions(tenantId: string) {
 
 interface CalendarOption { id: string; name: string }
 
-// organization_id is the owning scope above tenant (installation → organization → tenant);
-// calendars live at org level and are optionally narrowed by tenant. The list endpoint
-// REQUIRES organization_id, so it must be passed alongside tenant_id (never tenant-as-org).
-const CALENDAR_ORG_ID = import.meta.env.VITE_CALENDAR_ORG_ID ?? 'org-default'
+// CAL-01 (2026-09-30): the organization is the INSTALLATION and calendar-api fills it in.
+// This screen used to send `VITE_CALENDAR_ORG_ID ?? 'org-default'`, an env no build defines.
 
 function useCalendarOptions(tenantId: string) {
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   useEffect(() => {
     if (!tenantId) return
-    apiFetch(`/v1/calendars?organization_id=${encodeURIComponent(CALENDAR_ORG_ID)}&tenant_id=${encodeURIComponent(tenantId)}`)
+    apiFetch(`/v1/calendars?tenant_id=${encodeURIComponent(tenantId)}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`calendars ${r.status}`)))
       .then(rows => setCalendars(Array.isArray(rows) ? rows : []))
       .catch(err => { console.error('[CampaignsPage] failed to load calendars', err); setCalendars([]) })

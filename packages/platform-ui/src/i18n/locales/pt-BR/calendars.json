@@ -21,6 +21,11 @@
     "channel":  "Canal",
     "workflow": "Workflow"
   },
+  "organization": {
+    "badge":    "Organização",
+    "readOnly": "Da organização",
+    "hint":     "Compartilhado por todos os tenants desta instalação. Editar exige a permissão de Configurações gerais."
+  },
   "calendar": {
     "info":         "Defina calendários com horários semanais e dias especiais vinculados.",
     "new":          "Novo Calendário",
