@@ -43,6 +43,13 @@ TARGETS: tuple[tuple[str, str, str, str], ...] = (
      f"content IS NOT NULL AND content != '{EXPIRED}'"),
     ("contact_insights", "timestamp", f"value = '{EXPIRED}'", f"value != '{EXPIRED}'"),
     ("session_timeline", "timestamp", "payload = '{}'", "payload != '{}'"),
+    # AUD-09 — o resumo de wrap-up é conteúdo da conversa escrito pelo atendente; a AUD-08
+    # não o tinha na lista. Vazio fica vazio (NULL não vira texto).
+    ("segments", "started_at",
+     f"wrapup_summary = if(coalesce(wrapup_summary, '') = '', wrapup_summary, '{EXPIRED}'), "
+     f"wrapup_next_steps = if(coalesce(wrapup_next_steps, '') = '', wrapup_next_steps, '{EXPIRED}')",
+     f"(coalesce(wrapup_summary, '') NOT IN ('', '{EXPIRED}') "
+     f"OR coalesce(wrapup_next_steps, '') NOT IN ('', '{EXPIRED}'))"),
 )
 
 

@@ -33,7 +33,7 @@ from .stream_persister import StreamPersister
 from .pipeline_persister import PipelineStatePersister
 from .context_persister import ContextStorePersister
 from .import_stream_consumer import ImportStreamConsumer
-from . import retention_purge
+from . import data_subject_api, retention_purge
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +214,9 @@ class SessionReplayerConsumer:
             import_consumer.run(),
             # AUD-07 — expurgo do original_content desmascarado por retenção do tenant.
             retention_purge.run_forever(self._pg_pool, self._config_api_url),
+            # AUD-09 — porta SÓ de serviço: dossiê e eliminação do titular nas três
+            # tabelas deste serviço. Morrer aqui derruba o `gather`, e o processo sai.
+            data_subject_api.serve(lambda: self._pg_pool),
         )
 
     async def stop(self) -> None:

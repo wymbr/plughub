@@ -16,7 +16,9 @@ RUN pip install --no-cache-dir --break-system-packages \
     "redis[asyncio]>=5.0.0" \
     "asyncpg>=0.29.0" \
     "pydantic>=2.5.0" \
-    "python-dotenv>=1.0.0"
+    "python-dotenv>=1.0.0" \
+    "fastapi>=0.110.0" \
+    "uvicorn>=0.29.0"
 
 # Copy source
 COPY packages/session-replayer/src ./src

@@ -43,6 +43,10 @@ _DOSSIER = {
     "attachments": {"status": "ok", "items": [{}]},
     "outbound": {"status": "ok", "entries": [{}], "contact_log": [{}, {}]},
     "surveys": {"status": "ok", "items": [{}]},
+    "wrapups": {"status": "ok", "items": [{}]},
+    "session_record": {"status": "ok", "stream_events": [{}, {}], "context_snapshots": [{}],
+                       "pipeline_states": []},
+    "evaluations": {"status": "ok", "items": [{}]},
 }
 
 
@@ -117,6 +121,9 @@ def test_preview_touches_nothing_and_counts_per_store(app):
     assert body["messages"]["count"] == 3
     assert body["outbound"] == {"status": "ok", "entries": 1, "contact_log": 2}
     assert body["identity"]["veto_kept"] is True
+    assert body["session_record"] == {"status": "ok", "stream_events": 2, "context_snapshots": 1,
+                                      "pipeline_states": 0}
+    assert body["evaluations"]["count"] == 1 and body["wrapups"]["count"] == 1
     assert body["not_covered"], "a prévia tem de dizer o que NÃO é alcançado"
     assert app[1]["execute"] == []
     assert app[0].state.store.log[-1]["endpoint"] == "audit.data_requests.erasure_preview"
@@ -172,8 +179,8 @@ class _CH:
 def test_clickhouse_mutations_are_scoped_and_quoted():
     ch = _CH()
     counts = ds.erase_clickhouse(ch, "db", "t1", ["s1", "s'2"], "erased:abc")
-    assert counts == {"sessions": 5, "messages": 5, "insights": 5, "timeline": 5}
-    assert len(ch.commands) == 5
+    assert counts == {"sessions": 5, "messages": 5, "insights": 5, "timeline": 5, "wrapups": 5}
+    assert len(ch.commands) == 6
     for sql in ch.commands:
         assert "tenant_id = 't1'" in sql
         assert "('s1','s\\'2')" in sql, "id com aspa tem de ir escapado"
@@ -184,12 +191,15 @@ def test_clickhouse_mutations_are_scoped_and_quoted():
     author = next(c for c in ch.commands if "UPDATE author_id" in c)
     assert "author_role = 'customer'" in author
     assert all(s == {"mutations_sync": 2} for s in ch.settings)
+    wrap = next(c for c in ch.commands if ".segments UPDATE" in c)
+    assert "wrapup_summary = if(coalesce(wrapup_summary, '') = '', wrapup_summary, '[erased]')" in wrap
+    assert "NOT IN ('', '[erased]')" in wrap, "sem isto, repetir recontaria"
 
 
 def test_clickhouse_without_sessions_mutates_nothing():
     ch = _CH()
     assert ds.erase_clickhouse(ch, "db", "t1", [], "erased:abc") == \
-        {"sessions": 0, "messages": 0, "insights": 0, "timeline": 0}
+        {"sessions": 0, "messages": 0, "insights": 0, "timeline": 0, "wrapups": 0}
     assert ch.commands == []
 
 
@@ -219,6 +229,18 @@ def test_execute_names_the_failed_store_and_erases_identity_last(monkeypatch):
     monkeypatch.setattr(ds, "mailing_erase", _mail)
     monkeypatch.setattr(ds, "survey_erase", _surv)
     monkeypatch.setattr(ds, "gateway_erase", _gw)
+
+    async def _rep(settings, tenant_id, sids, marker):
+        order.append("replayer")
+        assert sids == ["s1", "s'2"] and marker == "erased:abc"
+        return {"status": "ok", "stream_events": 4}
+
+    async def _ev(settings, tenant_id, sids, marker):
+        order.append("evaluations")
+        return {"status": "ok", "quotes_erased": 1}
+
+    monkeypatch.setattr(ds, "replayer_erase", _rep)
+    monkeypatch.setattr(ds, "evaluations_erase", _ev)
     out = asyncio.run(ds.execute_erasure(object(), Store(), "t1", {"customer_ids": ["cus_1"]},
                                          [{"kind": "phone", "value": "+55"}], "erased:abc"))
     assert out["complete"] is False
@@ -226,3 +248,33 @@ def test_execute_names_the_failed_store_and_erases_identity_last(monkeypatch):
     assert out["identity"]["kept_veto"] is True
     assert out["clickhouse"]["sessions_found"] == 2
     assert order[-1] == "gateway", f"o cadastro sai por último: {order}"
+    assert out["session_record"]["stream_events"] == 4 and out["evaluations"]["quotes_erased"] == 1
+
+
+def test_aud09_clickhouse_fora_as_lojas_por_sessao_saem_como_falha_nunca_zero(monkeypatch):
+    """Sem as sessões, replayer e avaliações não têm o que apagar; dizer "ok, 0" seria
+    afirmar uma eliminação que não aconteceu."""
+    class Store:
+        _database = "db"
+
+        def new_client(self):
+            raise OSError("clickhouse down")
+
+    async def _ok(*a, **k):
+        return {"status": "ok"}
+
+    async def _gw(*a, **k):
+        return {"identity_status": "ok", "attachments_status": "ok"}
+
+    async def _boom(*a, **k):
+        raise AssertionError("sem sessões não se chama a loja")
+
+    for name in ("mailing_erase", "survey_erase"):
+        monkeypatch.setattr(ds, name, _ok)
+    monkeypatch.setattr(ds, "gateway_erase", _gw)
+    monkeypatch.setattr(ds, "replayer_erase", _boom)
+    monkeypatch.setattr(ds, "evaluations_erase", _boom)
+    out = asyncio.run(ds.execute_erasure(object(), Store(), "t1", {"customer_ids": ["cus_1"]},
+                                         [], "erased:abc"))
+    assert out["complete"] is False
+    assert {"clickhouse", "session_record", "evaluations"} <= set(out["failed_stores"])

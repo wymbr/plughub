@@ -12,8 +12,10 @@ O percurso, e por que nesta ordem:
      sem eles, as sessões anteriores à fusão ficariam de fora.
   3. **As sessões** (ClickHouse `sessions`, por `customer_id`). É o pivô: quase toda
      loja da plataforma é chaveada por sessão, não por pessoa.
-  4. **O que cada loja guarda**, pelas sessões ou pelos ids: mensagens (mascaradas) e
-     insights do ClickHouse, anexos e gravações (metadado), outbound e pesquisas.
+  4. **O que cada loja guarda**, pelas sessões ou pelos ids: mensagens (mascaradas),
+     insights e resumos de wrap-up do ClickHouse, o registro durável da sessão
+     (session-replayer: stream, contexto, trajetória), avaliações (evaluation-api),
+     anexos e gravações (metadado), outbound e pesquisas.
 
 Cada seção diz o seu `status` — `ok`, `not_found`, `unavailable: <motivo>`. Um dossiê
 que omite uma loja EM SILÊNCIO afirma ao titular que ela não guarda nada dele, e esse
@@ -38,16 +40,10 @@ logger = logging.getLogger("plughub.analytics.data_subject")
 
 MAX_SESSIONS = 500
 
-# Lojas com dado do titular que este dossiê AINDA não percorre, e por quê. Faz parte da
-# resposta: o DPO precisa saber o que NÃO foi olhado.
+# Lojas com dado do titular que este dossiê NÃO percorre, e por quê. Faz parte da
+# resposta: o DPO precisa saber o que NÃO foi olhado. Desde a AUD-09 sobram só as que
+# expiram sozinhas; loja durável nova entra no percurso, nunca aqui.
 NOT_COVERED = [
-    {"store": "postgres.session_stream_events",
-     "why": "stream durável com original_content desmascarado; sem API de leitura por "
-            "sessão fora do session-replayer (AUD-01 trata o desmascarado)"},
-    {"store": "postgres.session_pipeline_state / session_context_snapshot",
-     "why": "estado de execução do fluxo; sem API de leitura"},
-    {"store": "postgres.evaluation instances/results",
-     "why": "avaliação do ATENDIMENTO, não do titular; chaveada por sessão"},
     {"store": "redis (contexto de sessão 4 h, journey 30 d, cliente 90 d)",
      "why": "efêmero; expira sozinho"},
     {"store": "kafka",
@@ -148,6 +144,44 @@ async def survey_export(settings: Any, tenant_id: str, customer_ids: list[str],
     return {"status": "ok", "surveys": data.get("surveys") or []}
 
 
+async def replayer_export(settings: Any, tenant_id: str, session_ids: list[str]) -> dict:
+    """AUD-09 — o registro durável da sessão, no dono (session-replayer). Nunca traz o
+    desmascarado: a porta tira o `original_content` antes de responder."""
+    if not settings.session_replayer_url or not settings.session_replayer_service_token:
+        return {"status": _unavailable("session-replayer",
+                                       "PLUGHUB_SESSION_REPLAYER_URL/SERVICE_TOKEN not set")}
+    try:
+        code, data = await _post(
+            f"{settings.session_replayer_url}/v1/data-subject/sessions/export",
+            settings.session_replayer_service_token,
+            {"tenant_id": tenant_id, "session_ids": session_ids}, timeout=30.0,
+        )
+    except Exception as exc:
+        return {"status": _unavailable("session-replayer", exc)}
+    if code != 200 or not isinstance(data, dict):
+        return {"status": _unavailable("session-replayer", f"HTTP {code}: {data}")}
+    return {"status": "ok", **data}
+
+
+async def evaluations_export(settings: Any, tenant_id: str, session_ids: list[str]) -> dict:
+    """AUD-09 — avaliações das sessões da pessoa (a evidência cita a conversa)."""
+    if not settings.evaluation_api_url or not settings.evaluation_service_token:
+        return {"status": _unavailable("evaluation-api",
+                                       "PLUGHUB_EVALUATION_API_URL/SERVICE_TOKEN not set"),
+                "evaluations": []}
+    try:
+        code, data = await _post(
+            f"{settings.evaluation_api_url}/v1/evaluation/data-subject/evaluations",
+            settings.evaluation_service_token,
+            {"tenant_id": tenant_id, "session_ids": session_ids},
+        )
+    except Exception as exc:
+        return {"status": _unavailable("evaluation-api", exc), "evaluations": []}
+    if code != 200 or not isinstance(data, dict):
+        return {"status": _unavailable("evaluation-api", f"HTTP {code}: {data}"), "evaluations": []}
+    return {"status": "ok", "evaluations": data.get("evaluations") or []}
+
+
 def _iso(ts: Any) -> str | None:
     if ts is None:
         return None
@@ -178,6 +212,7 @@ def fetch_clickhouse(client: Any, db: str, tenant_id: str, customer_ids: list[st
     sids = [s["session_id"] for s in sessions]
     messages: list[dict] = []
     insights: list[dict] = []
+    wrapups: list[dict] = []
     if sids:
         for r in client.query(
             f"""
@@ -211,7 +246,21 @@ def fetch_clickhouse(client: Any, db: str, tenant_id: str, customer_ids: list[st
             sid, itype, cat, val, ts = r
             insights.append({"session_id": sid, "insight_type": itype, "category": cat,
                              "value": val, "timestamp": _iso(ts)})
-    return {"sessions": sessions, "truncated": truncated, "messages": messages, "insights": insights}
+        for r in client.query(
+            f"""
+            SELECT session_id, segment_id, role, wrapup_summary, wrapup_next_steps, started_at
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{t:String}} AND session_id IN {{s:Array(String)}}
+              AND (coalesce(wrapup_summary, '') != '' OR coalesce(wrapup_next_steps, '') != '')
+            ORDER BY session_id, started_at
+            """,
+            parameters={"t": tenant_id, "s": sids},
+        ).result_rows:
+            sid, seg, role, summ, nxt, ts = r
+            wrapups.append({"session_id": sid, "segment_id": str(seg), "role": role,
+                            "summary": summ, "next_steps": nxt, "started_at": _iso(ts)})
+    return {"sessions": sessions, "truncated": truncated, "messages": messages,
+            "insights": insights, "wrapups": wrapups}
 
 
 async def build_access_dossier(settings: Any, store: Any, tenant_id: str, *,
@@ -244,7 +293,7 @@ async def build_access_dossier(settings: Any, store: Any, tenant_id: str, *,
     # cujo `customer_id` é `+55…`). Sem isto, pedir pelo telefone perdia as chamadas.
     session_keys = list(dict.fromkeys([*ids, *contact_values]))
 
-    ch: dict = {"sessions": [], "truncated": False, "messages": [], "insights": []}
+    ch: dict = {"sessions": [], "truncated": False, "messages": [], "insights": [], "wrapups": []}
     ch_status = "ok"
     if session_keys:
         try:
@@ -259,18 +308,34 @@ async def build_access_dossier(settings: Any, store: Any, tenant_id: str, *,
     dossier["messages"] = {"status": ch_status, "note": "conteúdo MASCARADO (o desmascarado é AUD-01)",
                            "items": ch["messages"]}
     dossier["insights"] = {"status": ch_status, "items": ch["insights"]}
+    dossier["wrapups"] = {"status": ch_status, "note": "resumo e próximos passos escritos no fim do atendimento",
+                          "items": ch["wrapups"]}
 
-    att, mail, surv = await asyncio.gather(
+    no_sessions = {"status": "ok", "stream_events": [], "context_snapshots": [], "pipeline_states": []}
+    att, mail, surv, rec, evals = await asyncio.gather(
         gateway_export(settings, tenant_id, "", sids) if sids else
         asyncio.sleep(0, result={"attachments": [], "attachments_status": "ok"}),
         mailing_export(settings, tenant_id, ids, contact_values),
         survey_export(settings, tenant_id, ids, sids),
+        replayer_export(settings, tenant_id, sids) if sids else asyncio.sleep(0, result=no_sessions),
+        evaluations_export(settings, tenant_id, sids) if sids else
+        asyncio.sleep(0, result={"status": "ok", "evaluations": []}),
     )
     dossier["attachments"] = {"status": att.get("attachments_status"),
                               "note": "metadado; os arquivos não são entregues por aqui",
                               "items": att.get("attachments") or []}
     dossier["outbound"] = mail
     dossier["surveys"] = {"status": surv["status"], "items": surv["surveys"]}
+    dossier["session_record"] = {
+        "status": rec.get("status"),
+        "note": "registro durável da sessão, MASCARADO (o desmascarado é AUD-01)",
+        "stream_events": rec.get("stream_events") or [],
+        "context_snapshots": rec.get("context_snapshots") or [],
+        "pipeline_states": rec.get("pipeline_states") or [],
+    }
+    dossier["evaluations"] = {"status": evals["status"],
+                              "note": "avaliação do atendimento; a evidência cita a conversa",
+                              "items": evals["evaluations"]}
     return dossier
 
 
@@ -318,6 +383,10 @@ def fetch_all_session_ids(client: Any, db: str, tenant_id: str, keys: list[str])
 _CH_TABLES = (("sessions", "sessions"), ("messages", "messages"),
               ("insights", "contact_insights"), ("timeline", "session_timeline"))
 
+# AUD-09 — o resumo de wrap-up é texto livre sobre o atendimento, e a AUD-06 não o via.
+_WRAPUP_PENDING = ("(coalesce(wrapup_summary, '') NOT IN ('', {e}) "
+                   "OR coalesce(wrapup_next_steps, '') NOT IN ('', {e}))")
+
 
 def erase_clickhouse(client: Any, db: str, tenant_id: str, session_ids: list[str],
                      marker: str) -> dict:
@@ -327,13 +396,23 @@ def erase_clickhouse(client: Any, db: str, tenant_id: str, session_ids: list[str
     Conta ANTES de mutar, porque mutação não devolve contagem; `mutations_sync=2` faz a
     resposta só voltar depois de aplicada em todas as réplicas."""
     if not session_ids:
-        return {k: 0 for k, _ in _CH_TABLES}
+        return {**{k: 0 for k, _ in _CH_TABLES}, "wrapups": 0}
     t, s, m = _q(tenant_id), _in(session_ids), _q(marker)
     where = f"tenant_id = {t} AND session_id IN {s}"
     counts = {}
     for key, tbl in _CH_TABLES:
         counts[key] = int(client.query(f"SELECT count() FROM {db}.{tbl} WHERE {where}").result_rows[0][0])
+    e = _q(ERASED_TEXT)
+    wrap_where = f"{where} AND " + _WRAPUP_PENDING.format(e=e)
+    counts["wrapups"] = int(client.query(
+        f"SELECT count() FROM {db}.segments WHERE {wrap_where}").result_rows[0][0])
     sync = {"mutations_sync": 2}
+    if counts["wrapups"]:
+        client.command(
+            f"ALTER TABLE {db}.segments UPDATE "
+            f"wrapup_summary = if(coalesce(wrapup_summary, '') = '', wrapup_summary, {e}), "
+            f"wrapup_next_steps = if(coalesce(wrapup_next_steps, '') = '', wrapup_next_steps, {e}) "
+            f"WHERE {wrap_where}", settings=sync)
     client.command(f"ALTER TABLE {db}.sessions UPDATE customer_id = {m}, ani = NULL WHERE {where}",
                    settings=sync)
     client.command(f"ALTER TABLE {db}.messages UPDATE content = {_q(ERASED_TEXT)} WHERE {where}",
@@ -404,6 +483,43 @@ async def survey_erase(settings: Any, tenant_id: str, customer_ids: list[str],
     return {"status": "ok", **data}
 
 
+async def replayer_erase(settings: Any, tenant_id: str, session_ids: list[str],
+                         marker: str) -> dict:
+    if not settings.session_replayer_url or not settings.session_replayer_service_token:
+        return {"status": _unavailable("session-replayer",
+                                       "PLUGHUB_SESSION_REPLAYER_URL/SERVICE_TOKEN not set")}
+    try:
+        code, data = await _post(
+            f"{settings.session_replayer_url}/v1/data-subject/sessions/erase",
+            settings.session_replayer_service_token,
+            {"tenant_id": tenant_id, "session_ids": session_ids, "marker": marker}, timeout=60.0,
+        )
+    except Exception as exc:
+        return {"status": _unavailable("session-replayer", exc)}
+    if code != 200 or not isinstance(data, dict):
+        return {"status": _unavailable("session-replayer", f"HTTP {code}: {data}")}
+    return {"status": "ok", **data}
+
+
+async def evaluations_erase(settings: Any, tenant_id: str, session_ids: list[str],
+                            marker: str) -> dict:
+    """Sai a CITAÇÃO da conversa; ficam scores, decisões e o texto do avaliador e do
+    atendente (decisão do dono, 2026-09-30 — apagá-lo tiraria a base de uma contestação)."""
+    if not settings.evaluation_api_url or not settings.evaluation_service_token:
+        return {"status": _unavailable("evaluation-api", "PLUGHUB_EVALUATION_API_URL/SERVICE_TOKEN not set")}
+    try:
+        code, data = await _post(
+            f"{settings.evaluation_api_url}/v1/evaluation/data-subject/evaluations/erase",
+            settings.evaluation_service_token,
+            {"tenant_id": tenant_id, "session_ids": session_ids, "marker": marker}, timeout=60.0,
+        )
+    except Exception as exc:
+        return {"status": _unavailable("evaluation-api", exc)}
+    if code != 200 or not isinstance(data, dict):
+        return {"status": _unavailable("evaluation-api", f"HTTP {code}: {data}")}
+    return {"status": "ok", **data}
+
+
 def erasure_preview(dossier: dict) -> dict:
     """O que a eliminação alcançaria, por loja — contagens, nunca o conteúdo: a prévia
     serve para decidir, e repetir o dossiê aqui seria uma segunda porta de acesso."""
@@ -425,6 +541,13 @@ def erasure_preview(dossier: dict) -> dict:
                      "entries": len(out_b.get("entries") or []),
                      "contact_log": len(out_b.get("contact_log") or [])},
         "surveys": {"status": dossier["surveys"]["status"], "count": len(dossier["surveys"]["items"])},
+        "wrapups": {"status": dossier["wrapups"]["status"], "count": len(dossier["wrapups"]["items"])},
+        "session_record": {"status": dossier["session_record"]["status"],
+                           "stream_events": len(dossier["session_record"]["stream_events"]),
+                           "context_snapshots": len(dossier["session_record"]["context_snapshots"]),
+                           "pipeline_states": len(dossier["session_record"]["pipeline_states"])},
+        "evaluations": {"status": dossier["evaluations"]["status"],
+                        "count": len(dossier["evaluations"]["items"])},
         "not_covered": NOT_COVERED,
     }
 
@@ -455,16 +578,24 @@ async def execute_erasure(settings: Any, store: Any, tenant_id: str, dossier: di
             ch_status = _unavailable("clickhouse", exc)
     result["clickhouse"] = {"status": ch_status, "sessions_found": len(sids), **ch_counts}
 
-    mail, surv = await asyncio.gather(
+    # Sem sessão encontrada (ClickHouse fora), replayer e avaliações não têm o que
+    # procurar: saem como a loja que falhou, nunca como "ok, zero".
+    no_sids = {"status": ch_status} if ch_status != "ok" else {"status": "ok"}
+    mail, surv, rec, evals = await asyncio.gather(
         mailing_erase(settings, tenant_id, ids, contact_values, marker),
         survey_erase(settings, tenant_id, ids, sids, marker),
+        replayer_erase(settings, tenant_id, sids, marker) if sids else asyncio.sleep(0, result=no_sids),
+        evaluations_erase(settings, tenant_id, sids, marker) if sids else asyncio.sleep(0, result=no_sids),
     )
     result["outbound"] = mail
     result["surveys"] = surv
+    result["session_record"] = rec
+    result["evaluations"] = evals
     gw = await gateway_erase(settings, tenant_id, ids[0] if ids else "", sids)
     result["identity"] = {"status": gw.get("identity_status"), **(gw.get("identity") or {})}
     result["attachments"] = {"status": gw.get("attachments_status"), **(gw.get("attachments") or {})}
-    failed = [k for k in ("clickhouse", "outbound", "surveys", "identity", "attachments")
+    failed = [k for k in ("clickhouse", "outbound", "surveys", "session_record", "evaluations",
+                          "identity", "attachments")
               if str((result[k] or {}).get("status", "")).startswith("unavailable")]
     result["complete"] = not failed
     result["failed_stores"] = failed

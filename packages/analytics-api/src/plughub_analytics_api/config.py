@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     channel_gateway_service_token: str = ""   # == PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN
     mailing_api_url: str = ""
     mailing_service_token: str = ""           # == PLUGHUB_MAILING_SERVICE_TOKEN
+    # AUD-09 — o registro durável da sessão (stream, contexto, trajetória) é do session-replayer.
+    session_replayer_url: str = ""
+    session_replayer_service_token: str = ""  # == SESSION_REPLAYER_SERVICE_TOKEN do replayer
 
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without

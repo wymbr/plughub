@@ -1603,6 +1603,39 @@ async def survey_data_subject_erase(body: SurveySubjectEraseRequest, request: Re
     )
 
 
+class EvaluationSubjectRequest(BaseModel):
+    tenant_id:   str
+    session_ids: list[str] = []
+
+
+@router.post("/v1/evaluation/data-subject/evaluations",
+             dependencies=[Depends(_require_service)])
+async def evaluation_data_subject_export(body: EvaluationSubjectRequest, request: Request) -> dict:
+    """AUD-09 — as avaliações das sessões do titular, para o dossiê. SÓ SERVIÇO, como as
+    pesquisas: a analytics-api confere o DPO e grava a trilha."""
+    rows = await _db.evaluation_subject_export(
+        _pool(request), tenant_id=body.tenant_id, session_ids=body.session_ids[:5000],
+    )
+    return {"evaluations": rows}
+
+
+class EvaluationSubjectEraseRequest(EvaluationSubjectRequest):
+    marker: str
+
+
+@router.post("/v1/evaluation/data-subject/evaluations/erase",
+             dependencies=[Depends(_require_service)])
+async def evaluation_data_subject_erase(body: EvaluationSubjectEraseRequest, request: Request) -> dict:
+    """AUD-09 — sai a citação da conversa; ficam scores, decisões e o texto do avaliador
+    (decisão do dono, 2026-09-30). SÓ SERVIÇO."""
+    if not body.marker.startswith("erased:"):
+        raise HTTPException(422, "marker deve comecar com 'erased:'")
+    return await _db.evaluation_subject_erase(
+        _pool(request), tenant_id=body.tenant_id, session_ids=body.session_ids[:5000],
+        marker=body.marker,
+    )
+
+
 @router.get("/v1/evaluation/survey/responses",
             dependencies=[Depends(_require_any_evaluation)])
 async def list_survey_responses(

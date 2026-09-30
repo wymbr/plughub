@@ -148,8 +148,7 @@ gate `audit.data_requests`). Percurso em `data_subject.py`:
    `POST /v1/evaluation/data-subject/surveys`.
 
 Cada seção traz `status` (`ok` · `not_found` · `unavailable: <motivo>`), e `not_covered` lista as
-lojas que o dossiê ainda não percorre (stream durável do Postgres, estado de pipeline, avaliações,
-Redis, Kafka). A trilha grava o `customer_id` — ou só os TIPOS de identificador —, nunca o telefone
+lojas que o dossiê não percorre — desde a AUD-09 só Redis e Kafka, que expiram sozinhos. A trilha grava o `customer_id` — ou só os TIPOS de identificador —, nunca o telefone
 ou o e-mail. Tela: aba *Req. de Dados* em `/audit`, com download do JSON.
 
 **Eliminação — feita em 2026-09-30 (AUD-06).** `POST /v1/audit/data-requests/erasure` (gate
@@ -173,7 +172,7 @@ As lojas donas ganharam rota de eliminação **só de serviço**, gêmea da de e
 
 Regras que a implementação fixou:
 - **mesmas lojas do dossiê, nenhuma além**: o que o dossiê não olha (`not_covered`) a eliminação
-  também não alcança, e a resposta diz isso. A extensão das duas é a `AUD-09`;
+  também não alcança, e a resposta diz isso;
 - **sem o teto do dossiê**: a eliminação busca TODAS as sessões da pessoa (o dossiê para em 500);
 - **loja que falha sai nomeada** em `failed_stores`, a resposta é **207** e a trilha grava `partial`.
   Repetir o pedido é seguro: o cadastro de identidade é o ÚLTIMO a sair, porque é ele que liga o
@@ -183,13 +182,26 @@ Regras que a implementação fixou:
   junto com o dossiê que o dava como `not_found`;
 - a trilha (`audit_access_log`) fica fora da eliminação: é obrigação própria.
 
+**Lojas que ficavam de fora — feito em 2026-09-30 (AUD-09).** Entraram no dossiê e na eliminação:
+
+| Loja | Dono · rota (só serviço) | Sai / vira marcador | Fica |
+|---|---|---|---|
+| stream durável (`session_stream_events`) | session-replayer 3880 · `/v1/data-subject/sessions/{export,erase}` | `payload` inteiro; autor cliente → marcador; `original_content` | tipo, momento |
+| snapshot de contexto | idem | `entries` → `{}` | contagens |
+| estado de pipeline | idem | `error_context` | trajetória (ids de passo) |
+| avaliações | evaluation-api · `/v1/evaluation/data-subject/evaluations{,/erase}` | a CITAÇÃO (`excerpt`, `production_text`, `replay_text`) em qualquer nível | scores, decisões, texto do avaliador e do atendente (decisão do dono) |
+| wrap-up (`segments`) | analytics-api (ClickHouse) | `wrapup_summary`, `wrapup_next_steps` → `[erased]` | o segmento |
+
+O export do replayer **nunca devolve o desmascarado** (`payload - 'original_content'`). Sem sessão
+encontrada, replayer e avaliações saem como falha, nunca como "ok, 0".
+
 **Retenção — `AUD-07` e `AUD-08` (feitas).** Política por classe, por tenant, no namespace
 `retention`; cada chave tem o seu expurgo:
 
 | chave | default | expurgo | sai | fica |
 |---|---|---|---|---|
 | `original_content_days` | 90 | session-replayer, 1 h | `original_content` dentro do `payload` | o conteúdo mascarado |
-| `conversation_content_days` | 365 | session-replayer, 1 h · analytics-api, 1 dia | `payload` do stream durável; `messages.content`, `contact_insights.value`, `session_timeline.payload` | a linha e as métricas |
+| `conversation_content_days` | 365 | session-replayer, 1 h · analytics-api, 1 dia | `payload` do stream durável; `messages.content`, `contact_insights.value`, `session_timeline.payload`, wrap-up de `segments` (AUD-09) | a linha e as métricas |
 | `survey_free_text_days` | 365 | evaluation-api, 1 dia | texto livre, verbatims, refs de áudio/transcrição | a nota |
 
 Fora do namespace, com prazo na config dona: gravação (`storage.call_recording_retention_days`) e

@@ -71,7 +71,10 @@
       "insights": "Insights de contato",
       "attachments": "Anexos e gravações (metadado)",
       "outbound": "Outbound (mailing, entregas, contatos)",
-      "surveys": "Pesquisas"
+      "surveys": "Pesquisas",
+      "wrapups": "Resumos de encerramento",
+      "session_record": "Registro da sessão (stream, contexto, fluxo)",
+      "evaluations": "Avaliações"
     },
     "notCovered": "Lojas que este dossiê ainda NÃO percorre:"
   },
@@ -93,14 +96,19 @@
       "insights": "Insights",
       "attachments": "Anexos e gravações",
       "outbound": "Outbound (entradas / log de contato)",
-      "surveys": "Pesquisas"
+      "surveys": "Pesquisas",
+      "wrapups": "Resumos de encerramento",
+      "session_record": "Registro da sessão (eventos / contexto / fluxo)",
+      "evaluations": "Avaliações"
     },
     "results": {
       "clickhouse": "Sessões, mensagens, insights, linha do tempo",
       "identity": "Cadastro de identidade",
       "attachments": "Anexos e gravações",
       "outbound": "Outbound",
-      "surveys": "Pesquisas"
+      "surveys": "Pesquisas",
+      "session_record": "Registro da sessão",
+      "evaluations": "Avaliações (citações)"
     }
   }
 }

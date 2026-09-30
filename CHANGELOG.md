@@ -1,5 +1,53 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (11) — AUD-09: o dossiê e a eliminação do titular alcançam o registro durável da sessão, as avaliações e o wrap-up
+
+**O que a ficha registrava:** a AUD-06 fixou que dossiê e eliminação percorrem as MESMAS lojas, e
+`NOT_COVERED` listava o que ficava de fora: o stream durável, o estado de pipeline e o snapshot de
+contexto (Postgres do session-replayer) e as avaliações.
+
+**O dono das três tabelas não tinha porta.** O session-replayer é só consumidor de Kafka, e a
+analytics-api, que monta o dossiê, não tem Postgres. Ler as tabelas de outro serviço seria o
+defeito de sempre (duas casas escrevendo a mesma loja). Ele ganhou uma porta mínima, **3880, só
+na rede interna e só de serviço** (`SESSION_REPLAYER_SERVICE_TOKEN`; vazio ⇒ 503, dito no log),
+com FastAPI+uvicorn no MESMO laço do consumidor:
+
+| rota | faz | nunca |
+|---|---|---|
+| `POST /v1/data-subject/sessions/export` | stream (sem `original_content`, que mora DENTRO do `payload`), contexto, trajetória | devolve o desmascarado (a AUD-01 tem portão próprio) |
+| `POST /v1/data-subject/sessions/erase` | `payload` → `{"erased": marcador}`, autor CLIENTE → marcador, contexto → `{}`, `error_context` → nulo | apaga linha; tipo, momento e trajetória ficam |
+
+**Avaliações: sai a citação, fica o julgamento** (decisão do dono, 2026-09-30). A avaliação é
+registro do atendimento e base da contestação do atendente; o que nela é dado do cliente é a
+evidência, trecho literal da conversa. `evaluation-api` ganhou `…/data-subject/evaluations` e
+`…/evaluations/erase`, só de serviço. A troca é recursiva e por CHAVE (`excerpt`,
+`production_text`, `replay_text`) em `criterion_responses.evidence`,
+`contestation_threads.evidence_entries`, `curation_result_blinds` e `results.comparison_report`;
+scores, `evaluator_notes`, texto da contestação e decisões ficam. Repetir conta zero.
+
+**A medição achou uma loja que a ficha não listava:** `segments.wrapup_summary` e
+`wrapup_next_steps`, texto livre que o atendente escreve no fim (230 linhas no demo), que nem o
+dossiê, nem a eliminação da AUD-06, nem a retenção da AUD-08 viam. Entrou nos três: seção
+`wrapups` no dossiê, `[erased]` na eliminação e alvo do `conversation_content_days`.
+
+**Sem sessão encontrada, as lojas por sessão saem como FALHA, nunca como "ok, 0".** Com o
+ClickHouse fora não há lista de sessões para pedir ao replayer nem às avaliações; responder zero
+afirmaria uma eliminação que não aconteceu.
+
+`NOT_COVERED` ficou com Redis e Kafka, que expiram sozinhos; um teste impede loja `postgres`
+de voltar para a lista. A tela `/audit` mostra as três seções novas no dossiê, na prévia e no
+resultado.
+
+**Testes:** session-replayer 71 · evaluation 265 · analytics 886, na imagem. Contraprova, cada
+uma com vermelho: export devolvendo o `payload` cru, erase sem o filtro de idempotência, troca de
+citação não recursiva, regravar linha sem citação, "ok" sem sessões com ClickHouse fora, wrap-up
+sem filtro na eliminação e fora da retenção. **Uma contraprova ficou verde e é limite do
+instrumento:** anular o filtro de wrap-up na LEITURA do dossiê, porque o ClickHouse falso não
+interpreta SQL — coberto pela prova ao vivo. Ao vivo (tenant `aud09_probe`): dossiê com as três
+seções e sem o texto desmascarado; eliminação completa; segunda execução com zero; porta do
+replayer 401 para anônimo. Varredura de rotas mede as três rotas novas (e o `session-replayer`
+entrou na lista de serviços dela).
+
 ## 2026-09-30 (10) — AUD-08: o conteúdo de conversa, o texto livre de pesquisa e a entrada de mailing vencida deixam de ficar para sempre
 
 **O que a ficha registrava:** a AUD-07 deu a política por classe (namespace `retention`) e expurgou

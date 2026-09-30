@@ -883,6 +883,148 @@ async def survey_subject_erase(
             "instances_matched": len(ids)}
 
 
+# ─── AUD-09 — avaliações das sessões do titular ──────────────────────────────
+#
+# A avaliação é registro sobre o ATENDIMENTO (e sobre o atendente, que a contesta), mas
+# cita a conversa: a evidência de cada critério é trecho literal da transcrição. Decisão
+# do dono (2026-09-30): na eliminação saem as CITAÇÕES; ficam scores, decisões e o texto
+# do avaliador, do revisor e do atendente — apagá-lo tiraria a base de uma contestação.
+#
+# As citações moram em quatro colunas JSON, sempre sob as mesmas chaves: `excerpt`
+# (EvidenceRef/EvidenceEntry — em `criterion_responses.evidence`,
+# `contestation_threads.evidence_entries` e, aninhado, `curation_result_blinds.
+# blind_criterion_responses`) e `production_text`/`replay_text` (divergências do
+# `results.comparison_report`). A troca é recursiva e por CHAVE, não por posição: um
+# formato novo que guarde a citação sob outra chave NÃO é alcançado — e o teste que
+# enumera as chaves é o lugar para acrescentá-la.
+
+QUOTE_KEYS = frozenset({"excerpt", "production_text", "replay_text"})
+
+
+def strip_quotes(obj: Any, marker: str) -> tuple[Any, int]:
+    """Troca o VALOR de toda chave de citação por `marker`, em qualquer nível. Devolve o
+    objeto novo e quantas citações trocou (0 = nada a fazer; já trocada não conta)."""
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        n = 0
+        for k, v in obj.items():
+            if k in QUOTE_KEYS and isinstance(v, str):
+                out[k] = marker
+                n += int(v != marker)
+            else:
+                out[k], m = strip_quotes(v, marker)
+                n += m
+        return out, n
+    if isinstance(obj, list):
+        items, n = [], 0
+        for v in obj:
+            nv, m = strip_quotes(v, marker)
+            items.append(nv)
+            n += m
+        return items, n
+    return obj, 0
+
+
+def _json(v: Any) -> Any:
+    return json.loads(v) if isinstance(v, str) else v
+
+
+async def evaluation_subject_export(
+    pool: asyncpg.Pool, *, tenant_id: str, session_ids: list[str],
+) -> list[dict[str, Any]]:
+    """AUD-09 — as avaliações das sessões do titular: resultado, respostas por critério
+    (com a evidência) e a linha de contestação. Chaveada por SESSÃO — a avaliação não
+    carrega o cliente."""
+    sids = [s for s in session_ids if s]
+    if not sids:
+        return []
+    async with pool.acquire() as conn:
+        results = _rows(await conn.fetch(
+            """SELECT id, instance_id, session_id, campaign_id, form_id, overall_score,
+                      normalized_score, passed, eval_status, evaluator_notes, reviewer_notes,
+                      contestation_reason, comparison_report, submitted_at
+                 FROM evaluation.results
+                WHERE tenant_id = $1 AND session_id = ANY($2::text[])
+                ORDER BY submitted_at""",
+            tenant_id, sids,
+        ))
+        if not results:
+            return []
+        rids = [r["id"] for r in results]
+        iids = [r["instance_id"] for r in results]
+        crit = _rows(await conn.fetch(
+            """SELECT result_id, criterion_id, criterion_name, score, notes, text_value, evidence
+                 FROM evaluation.criterion_responses
+                WHERE tenant_id = $1 AND result_id = ANY($2::text[])
+                ORDER BY result_id, criterion_id""",
+            tenant_id, rids,
+        ))
+        threads = _rows(await conn.fetch(
+            """SELECT evaluation_instance_id, dimension_id, round, author_type, text,
+                      decision, evidence_entries, created_at
+                 FROM evaluation.contestation_threads
+                WHERE tenant_id = $1 AND evaluation_instance_id = ANY($2::text[])
+                ORDER BY evaluation_instance_id, round, created_at""",
+            tenant_id, iids,
+        ))
+    for r in results:
+        r["criteria"] = [c for c in crit if c["result_id"] == r["id"]]
+        r["contestation"] = [t for t in threads if t["evaluation_instance_id"] == r["instance_id"]]
+    return results
+
+
+async def evaluation_subject_erase(
+    pool: asyncpg.Pool, *, tenant_id: str, session_ids: list[str], marker: str,
+) -> dict[str, int]:
+    """AUD-09 — tira as CITAÇÕES da conversa das avaliações das sessões do titular.
+
+    Só as linhas que ainda têm citação são regravadas, e a contagem é de CITAÇÕES
+    trocadas: repetir o pedido responde zero, não finge que apagou de novo."""
+    sids = [s for s in session_ids if s]
+    counts = {"results": 0, "criterion_responses": 0, "contestation_threads": 0,
+              "curation_blinds": 0, "quotes_erased": 0}
+    if not sids:
+        return counts
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            res = await conn.fetch(
+                "SELECT id, instance_id, comparison_report FROM evaluation.results "
+                "WHERE tenant_id = $1 AND session_id = ANY($2::text[])",
+                tenant_id, sids,
+            )
+            if not res:
+                return counts
+            rids = [r["id"] for r in res]
+            iids = [r["instance_id"] for r in res]
+
+            async def _sweep(table: str, key: str, col: str, rows: list) -> None:
+                for row in rows:
+                    new, n = strip_quotes(_json(row[col]), marker)
+                    if not n:
+                        continue
+                    await conn.execute(
+                        f"UPDATE evaluation.{table} SET {col} = $2::jsonb WHERE {key} = $1",
+                        row[key], json.dumps(new),
+                    )
+                    counts[table if table != "curation_result_blinds" else "curation_blinds"] += 1
+                    counts["quotes_erased"] += n
+
+            await _sweep("results", "id", "comparison_report",
+                         [r for r in res if r["comparison_report"] is not None])
+            await _sweep("criterion_responses", "id", "evidence", await conn.fetch(
+                "SELECT id, evidence FROM evaluation.criterion_responses "
+                "WHERE tenant_id = $1 AND result_id = ANY($2::text[])", tenant_id, rids))
+            await _sweep("contestation_threads", "id", "evidence_entries", await conn.fetch(
+                "SELECT id, evidence_entries FROM evaluation.contestation_threads "
+                "WHERE tenant_id = $1 AND evaluation_instance_id = ANY($2::text[])",
+                tenant_id, iids))
+            await _sweep("curation_result_blinds", "id", "blind_criterion_responses", await conn.fetch(
+                "SELECT id, blind_criterion_responses FROM evaluation.curation_result_blinds "
+                "WHERE tenant_id = $1 AND evaluation_instance_id = ANY($2::text[])",
+                tenant_id, iids))
+    return counts
+
+
 async def list_survey_responses(
     pool: asyncpg.Pool,
     *,

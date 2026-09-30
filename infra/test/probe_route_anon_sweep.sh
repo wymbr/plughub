@@ -43,7 +43,7 @@ channel-gateway=http://channel-gateway:8010 config-api=http://config-api:3600 di
 evaluation-api=http://evaluation-api:3400 mailing-api=http://mailing-api:3660 pricing-api=http://pricing-api:3900
 quality-export=http://quality-export:3852 quality-ingest=http://quality-ingest:3850 rules-engine=http://rules-engine:3201
 usage-aggregator=http://usage-aggregator:3950 scheduler-api=http://scheduler-api:3650
-analytics-api=http://analytics-api:3500"
+analytics-api=http://analytics-api:3500 session-replayer=http://session-replayer:3880"
 
 echo "== probe_route_anon_sweep =="
 command -v docker >/dev/null || { echo "⏭️  INCONCLUSIVO: docker ausente"; exit 3; }

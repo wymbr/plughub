@@ -81,10 +81,10 @@ class _CH:
 
 
 def test_expire_tenant_is_scoped_and_only_mutates_tables_with_rows():
-    ch = _CH({"messages": 4, "contact_insights": 0, "session_timeline": 2})
+    ch = _CH({"messages": 4, "contact_insights": 0, "session_timeline": 2, "segments": 1})
     out = rj.expire_tenant(ch, "db", "t'1", datetime(2025, 9, 30, 12, 0))
-    assert out == {"messages": 4, "contact_insights": 0, "session_timeline": 2}
-    assert len(ch.commands) == 2, "tabela sem linha vencida não ganha mutação"
+    assert out == {"messages": 4, "contact_insights": 0, "session_timeline": 2, "segments": 1}
+    assert len(ch.commands) == 3, "tabela sem linha vencida não ganha mutação"
     msg = next(c for c in ch.commands if ".messages UPDATE" in c)
     assert "content = '[expired]'" in msg
     assert "tenant_id = 't\\'1'" in msg, "tenant com aspa vai escapado"
@@ -92,6 +92,11 @@ def test_expire_tenant_is_scoped_and_only_mutates_tables_with_rows():
     assert "content != '[expired]'" in msg, "sem isto, reescreve o já expirado todo dia"
     tl = next(c for c in ch.commands if ".session_timeline UPDATE" in c)
     assert "payload = '{}'" in tl
+    seg = next(c for c in ch.commands if ".segments UPDATE" in c)
+    assert "started_at < '2025-09-30 12:00:00'" in seg
+    assert "wrapup_summary = if(coalesce(wrapup_summary, '') = '', wrapup_summary, '[expired]')" in seg, \
+        "resumo vazio fica vazio; NULL não vira texto"
+    assert "NOT IN ('', '[expired]')" in seg, "sem isto, reescreve o já expirado todo dia"
 
 
 def test_expire_once_skips_the_tenant_it_cannot_read_and_expires_the_other():
@@ -99,7 +104,8 @@ def test_expire_once_skips_the_tenant_it_cannot_read_and_expires_the_other():
         _database = "db"
 
         def __init__(self):
-            self.ch = _CH({"messages": 1, "contact_insights": 1, "session_timeline": 1})
+            self.ch = _CH({"messages": 1, "contact_insights": 1, "session_timeline": 1,
+                           "segments": 1})
 
         def new_client(self):
             return self.ch

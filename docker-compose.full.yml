@@ -436,6 +436,8 @@ services:
       DATABASE_URL:       postgresql://plughub:plughub@postgres:5432/plughub
       EVALUATOR_POOL:     avaliador_qualidade
       REPLAY_SPEED_FACTOR: "10.0"
+      # AUD-09 — porta de titular (3880). Vazio = a porta recusa tudo (503), dito no log.
+      SESSION_REPLAYER_SERVICE_TOKEN: ${SESSION_REPLAYER_SERVICE_TOKEN:-}
     depends_on:
       kafka:
         condition: service_healthy

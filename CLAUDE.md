@@ -437,7 +437,7 @@ plughub/
 
     analytics-api/               ← relatórios + leitor ClickHouse + audit LGPD — port 3500
     evaluation-api/              ← Quality evaluation platform (Arc 6) — port 3400
-    session-replayer/            ← Hydrator + Replayer + ReplayContext + StreamPersister
+    session-replayer/            ← Hydrator + Replayer + ReplayContext + StreamPersister; porta de titular só serviço — 3880
     quality-ingest/              ← Pluggable contact-history reader (R13a) — port 3850
     quality-export/              ← Internal history → re-evaluation (R13d) — port 3852
 
@@ -1347,16 +1347,19 @@ mecanismo; cada um entra com a sua feature.
 - **Dossiê de acesso do titular** (AUD-03): `POST /v1/audit/data-requests/access` monta, loja por
   loja, o que a plataforma guarda de UMA pessoa. O pivô é a SESSÃO (quase toda loja é chaveada por
   ela), e as lojas donas respondem só a serviço. **Identificador da pessoa vai no corpo e nunca na
-  trilha**; loja fora do ar sai `unavailable`, nunca vazia; `not_covered` diz o que não foi olhado.
+  trilha**; loja fora do ar sai `unavailable`, nunca vazia; `not_covered` diz o que não foi olhado
+  — desde a AUD-09 só Redis e Kafka, que expiram sozinhos. O registro durável da sessão é lido no
+  DONO (session-replayer, porta 3880, só serviço), e o desmascarado nunca sai por ali.
 
 - **Eliminação do titular** (AUD-06): `POST /v1/audit/data-requests/erasure`, prévia
   (`confirm=false`) e execução, para `data_requests` em **`read_write`**. Anonimiza e mantém a
-  linha de métrica, percorrendo as MESMAS lojas do dossiê (o que ele não cobre, ela não alcança:
-  `AUD-09`). **O veto de contato sobrevive** como lápide no cadastro. Loja que falha sai nomeada
-  (207, `partial` na trilha), e o cadastro de identidade é o último a sair.
+  linha de métrica, percorrendo as MESMAS lojas do dossiê. **O veto de contato sobrevive** como
+  lápide no cadastro; **na avaliação sai só a citação da conversa** e fica o julgamento (AUD-09).
+  Loja que falha sai nomeada (207, `partial` na trilha), e o cadastro de identidade é o último a sair.
 - **Retenção é POR CLASSE de dado, por tenant, no namespace `retention` do config-api** (AUD-07).
   Três classes (AUD-08): `original_content_days` (90) · `conversation_content_days` (365, stream
-  durável + `messages`/`contact_insights`/`session_timeline`) · `survey_free_text_days` (365). O
+  durável + `messages`/`contact_insights`/`session_timeline` + wrap-up de `segments`) ·
+  `survey_free_text_days` (365). O
   conteúdo sai, a linha de métrica fica; o texto desmascarado mora DENTRO de `payload`, nunca na
   coluna homônima. Classe nova entra na chave JUNTO com o expurgo dela; na dúvida sobre o prazo, o
   expurgo PULA o tenant, nunca adivinha. Prazos com casa própria: gravação
@@ -1364,7 +1367,7 @@ mecanismo; cada um entra com a sua feature.
   perde contatos).
 
 **Deferred:** `original_content` desmascarado (`AUD-01`) · logs `user_access` (`AUD-02`) ·
-`config_snapshot` (`AUD-04`) · lojas fora do dossiê e da eliminação (`AUD-09`).
+`config_snapshot` (`AUD-04`).
 
 → See [`docs/arcos/audit-lgpd.md`](docs/arcos/audit-lgpd.md)
 

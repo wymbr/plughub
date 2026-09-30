@@ -147,6 +147,8 @@ class _Cfg:
     mailing_service_token = ""
     evaluation_api_url = ""
     evaluation_service_token = ""
+    session_replayer_url = ""
+    session_replayer_service_token = ""
 
 
 class _CH:
@@ -166,6 +168,8 @@ class _CH:
             r.result_rows = self._sessions
         elif ".messages" in sql:
             r.result_rows = [("s1", "m1", "customer", "text", "all", '{"text":"oi"}', None)]
+        elif ".segments" in sql:
+            r.result_rows = [("s1", "seg1", "primary", "cliente mudou de endereco", None, None)]
         else:
             r.result_rows = []
         return r
@@ -187,9 +191,13 @@ def test_lojas_sem_configuracao_saem_NOMEADAS_nunca_vazias_em_silencio(monkeypat
                                             customer_id="cus_1", anchors=[]))
     assert d["sessions"]["count"] == 1 and d["messages"]["items"][0]["content"] == "oi"
     for secao in (d["identity"]["status"], d["attachments"]["status"],
-                  d["outbound"]["status"], d["surveys"]["status"]):
+                  d["outbound"]["status"], d["surveys"]["status"],
+                  d["session_record"]["status"], d["evaluations"]["status"]):
         assert secao.startswith("unavailable:"), secao
     assert d["not_covered"], "o dossiê precisa dizer o que NÃO olhou"
+    assert d["wrapups"]["items"] == [{"session_id": "s1", "segment_id": "seg1", "role": "primary",
+                                      "summary": "cliente mudou de endereco", "next_steps": None,
+                                      "started_at": None}]
 
 
 def test_telefone_sem_resolvedor_nao_inventa_cliente_mas_acha_a_chamada(monkeypatch):
@@ -232,3 +240,41 @@ def test_fusao_os_ids_fundidos_entram_na_busca_de_sessoes(monkeypatch):
                                             customer_id="cus_velho", anchors=[]))
     assert set(captured["ids"]) == {"cus_velho", "cus_novo"}
     assert d["identity"]["status"] == "ok"
+
+
+def test_aud09_o_que_sobra_fora_do_dossie_e_so_o_que_expira_sozinho():
+    """Loja DURÁVEL nova entra no percurso, nunca na lista do que não foi olhado."""
+    stores = " ".join(n["store"] for n in ds.NOT_COVERED)
+    assert "postgres" not in stores, stores
+    assert {n["store"].split()[0] for n in ds.NOT_COVERED} == {"redis", "kafka"}
+
+
+def test_aud09_registro_duravel_e_avaliacoes_vao_pelas_sessoes_achadas(monkeypatch):
+    seen = {}
+
+    async def _rep(settings, tenant_id, session_ids):
+        seen["rep"] = session_ids
+        return {"status": "ok", "stream_events": [{"event_id": "e1"}], "context_snapshots": [],
+                "pipeline_states": []}
+
+    async def _ev(settings, tenant_id, session_ids):
+        seen["ev"] = session_ids
+        return {"status": "ok", "evaluations": [{"id": "r1"}]}
+
+    monkeypatch.setattr(ds, "replayer_export", _rep)
+    monkeypatch.setattr(ds, "evaluations_export", _ev)
+    ch = _CH([("s1", "webchat", "p", "cus_1", None, None, None, None, "", None, "s1")])
+    d = asyncio.run(ds.build_access_dossier(_Cfg(), _Store2(ch), "t1", customer_id="cus_1", anchors=[]))
+    assert seen == {"rep": ["s1"], "ev": ["s1"]}
+    assert d["session_record"]["stream_events"] == [{"event_id": "e1"}]
+    assert d["evaluations"]["items"] == [{"id": "r1"}]
+
+
+def test_aud09_sem_sessao_nao_pergunta_ao_replayer(monkeypatch):
+    async def _boom(*a, **k):
+        raise AssertionError("sem sessão não há o que pedir")
+
+    monkeypatch.setattr(ds, "replayer_export", _boom)
+    monkeypatch.setattr(ds, "evaluations_export", _boom)
+    d = asyncio.run(ds.build_access_dossier(_Cfg(), _Store2(_CH([])), "t1", customer_id="cus_1", anchors=[]))
+    assert d["session_record"]["status"] == "ok" and d["session_record"]["stream_events"] == []

@@ -213,3 +213,29 @@ async def test_aud06_data_subject_surveys_erase_is_service_only(app):
     assert r.status_code == 200, r.text
     assert db.await_args.kwargs["marker"] == "erased:abc"
     assert db.await_args.kwargs["session_ids"] == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_aud09_data_subject_evaluations_is_service_only(app):
+    """AUD-09: as avaliações das sessões de UMA pessoa (com a citação da conversa) saem e
+    são apagadas só pela analytics-api. Usuário, mesmo com todo campo de evaluation: não."""
+    body = {"tenant_id": "t1", "session_ids": ["s1"]}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        for path in ("/v1/evaluation/data-subject/evaluations",
+                     "/v1/evaluation/data-subject/evaluations/erase"):
+            r = await c.post(path, json={**body, "marker": "erased:x"},
+                             headers=_tok(report="read_write", formularios="read_write"))
+            assert r.status_code == 401, (path, r.text)
+        with patch("plughub_evaluation_api.db.evaluation_subject_export",
+                   new=AsyncMock(return_value=[{"id": "r1"}])):
+            r = await c.post("/v1/evaluation/data-subject/evaluations", json=body,
+                             headers={"X-Service-Token": _SVC})
+        assert r.json() == {"evaluations": [{"id": "r1"}]}
+        with patch("plughub_evaluation_api.db.evaluation_subject_erase",
+                   new=AsyncMock(return_value={"quotes_erased": 2})) as db:
+            bad = await c.post("/v1/evaluation/data-subject/evaluations/erase",
+                               json={**body, "marker": "x"}, headers={"X-Service-Token": _SVC})
+            r = await c.post("/v1/evaluation/data-subject/evaluations/erase",
+                             json={**body, "marker": "erased:x"}, headers={"X-Service-Token": _SVC})
+    assert bad.status_code == 422
+    assert r.status_code == 200 and db.await_args.kwargs["session_ids"] == ["s1"]

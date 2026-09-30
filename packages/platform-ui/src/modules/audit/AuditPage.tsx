@@ -263,8 +263,12 @@ function McpCallsTab({ tenantId, getToken }: { tenantId: string; getToken: () =>
 // URL), e o dossiê é baixado como JSON — é ele que se entrega ao titular. Cada loja
 // mostra o seu status: loja indisponível aparece como tal, nunca como "nada".
 
-type SectionKey = 'identity' | 'sessions' | 'messages' | 'insights' | 'attachments' | 'outbound' | 'surveys'
-const SECTIONS: SectionKey[] = ['identity', 'sessions', 'messages', 'insights', 'attachments', 'outbound', 'surveys']
+type SectionKey = 'identity' | 'sessions' | 'messages' | 'insights' | 'wrapups' | 'session_record'
+  | 'evaluations' | 'attachments' | 'outbound' | 'surveys'
+const SECTIONS: SectionKey[] = ['identity', 'sessions', 'messages', 'insights', 'wrapups', 'session_record',
+  'evaluations', 'attachments', 'outbound', 'surveys']
+// AUD-09 — o registro durável da sessão vem em três listas do session-replayer.
+const SESSION_RECORD_LISTS = ['stream_events', 'context_snapshots', 'pipeline_states']
 
 interface Dossier {
   resolution:   { status: string; by: string[] }
@@ -277,6 +281,10 @@ function sectionCount(d: Dossier, key: SectionKey): number {
   const sec = d[key] as Record<string, unknown> | undefined
   if (!sec) return 0
   if (key === 'identity') return sec.record ? 1 : 0
+  if (key === 'session_record') {
+    return SESSION_RECORD_LISTS
+      .reduce((n, k) => n + (Array.isArray(sec[k]) ? (sec[k] as unknown[]).length : 0), 0)
+  }
   if (key === 'outbound') {
     return ['entries', 'deliveries', 'contact_log']
       .reduce((n, k) => n + (Array.isArray(sec[k]) ? (sec[k] as unknown[]).length : 0), 0)
@@ -289,16 +297,23 @@ function sectionCount(d: Dossier, key: SectionKey): number {
 // novo, a tela só não oferece o que ele recusaria. Dois passos na MESMA rota: a PRÉVIA
 // (contagens por loja, `confirm=false`) e a execução (`confirm=true`).
 
-type ErasureStoreKey = 'identity' | 'sessions' | 'messages' | 'insights' | 'attachments' | 'outbound' | 'surveys'
+type ErasureStoreKey = 'identity' | 'sessions' | 'messages' | 'insights' | 'wrapups' | 'session_record'
+  | 'evaluations' | 'attachments' | 'outbound' | 'surveys'
 const ERASURE_PREVIEW_KEYS: ErasureStoreKey[] =
-  ['identity', 'sessions', 'messages', 'insights', 'attachments', 'outbound', 'surveys']
-type ErasureResultKey = 'clickhouse' | 'identity' | 'attachments' | 'outbound' | 'surveys'
-const ERASURE_RESULT_KEYS: ErasureResultKey[] = ['clickhouse', 'identity', 'attachments', 'outbound', 'surveys']
+  ['identity', 'sessions', 'messages', 'insights', 'wrapups', 'session_record', 'evaluations',
+    'attachments', 'outbound', 'surveys']
+type ErasureResultKey = 'clickhouse' | 'session_record' | 'evaluations' | 'identity' | 'attachments'
+  | 'outbound' | 'surveys'
+const ERASURE_RESULT_KEYS: ErasureResultKey[] =
+  ['clickhouse', 'session_record', 'evaluations', 'identity', 'attachments', 'outbound', 'surveys']
 
 function previewCount(sec: Record<string, unknown> | undefined): string {
   if (!sec) return '—'
   if (typeof sec.count === 'number') return String(sec.count)
   if ('entries' in sec) return `${sec.entries ?? 0} / ${sec.contact_log ?? 0}`
+  if ('stream_events' in sec) {
+    return SESSION_RECORD_LISTS.map(k => String(sec[k] ?? 0)).join(' / ')
+  }
   if ('found' in sec) return sec.found ? '1' : '0'
   return '—'
 }

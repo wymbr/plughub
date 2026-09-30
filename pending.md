@@ -474,7 +474,6 @@ produto, e por isso não caducam com ela.
 | AUD-01 | `original_content` desmascarado na trilha — exige endpoint batch em Core | `aberto` | `CLAUDE.md` § Pending, movido em 2026-09-05 |
 | AUD-02 | Logs `user_access` — campo ABAC já declarado, sem produtor | `aberto` | idem |
 | AUD-04 | `config_snapshot` para o DPO | `aberto` | idem |
-| AUD-09 | **Lojas com dado do titular que nem o dossiê nem a eliminação alcançam.** A AUD-06 fixou que as duas percorrem as MESMAS lojas, e a lista `NOT_COVERED` de `data_subject.py` é o que fica de fora: `session_stream_events` (Postgres do session-replayer: conteúdo mascarado para sempre e `original_content` por 90 dias — sem rota; a analytics-api não tem Postgres), `session_pipeline_state` e `session_context_snapshot` (idem), avaliações (`evaluation_results`, com trechos citados como evidência). Redis e Kafka expiram sozinhos. Estender é dar ao session-replayer (ou a quem for dono) um export e um erase só de serviço, e tirar a linha do `NOT_COVERED` — nas duas operações juntas | `aberto` | `CHANGELOG.md` § 2026-09-30 (8); `analytics-api/data_subject.py` |
 
 ---
 

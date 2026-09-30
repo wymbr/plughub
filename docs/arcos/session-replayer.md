@@ -111,6 +111,18 @@ This is the authoritative persistence step — the Redis stream TTL can expire a
 
 ---
 
+## Porta de titular (AUD-09)
+
+O serviço é consumidor de Kafka, mas é o DONO de `session_stream_events`,
+`session_context_snapshot` e `session_pipeline_state`. Para o dossiê e a eliminação do titular
+(montados pela analytics-api), sobe no mesmo laço uma porta mínima — `data_subject_api.py`,
+**3880**, só rede interna — com duas rotas **só de serviço** (`SESSION_REPLAYER_SERVICE_TOKEN`;
+vazio ⇒ 503): `POST /v1/data-subject/sessions/export` (nunca devolve o `original_content`) e
+`POST /v1/data-subject/sessions/erase` (anonimiza, mantém a linha, repetir conta zero). Nenhuma
+outra rota entra aqui: leitura de conteúdo por sessão é do Replayer, via `ReplayContext`.
+
+---
+
 ## Hydrator
 
 Called when `evaluation.requested` event is received and Redis cache for the session has expired.

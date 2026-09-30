@@ -71,7 +71,10 @@
       "insights": "Contact insights",
       "attachments": "Attachments and recordings (metadata)",
       "outbound": "Outbound (mailing, deliveries, contacts)",
-      "surveys": "Surveys"
+      "surveys": "Surveys",
+      "wrapups": "Wrap-up summaries",
+      "session_record": "Session record (stream, context, flow)",
+      "evaluations": "Evaluations"
     },
     "notCovered": "Stores this dossier does NOT cover yet:"
   },
@@ -93,14 +96,19 @@
       "insights": "Insights",
       "attachments": "Attachments and recordings",
       "outbound": "Outbound (entries / contact log)",
-      "surveys": "Surveys"
+      "surveys": "Surveys",
+      "wrapups": "Wrap-up summaries",
+      "session_record": "Session record (events / context / flow)",
+      "evaluations": "Evaluations"
     },
     "results": {
       "clickhouse": "Sessions, messages, insights, timeline",
       "identity": "Identity record",
       "attachments": "Attachments and recordings",
       "outbound": "Outbound",
-      "surveys": "Surveys"
+      "surveys": "Surveys",
+      "session_record": "Session record",
+      "evaluations": "Evaluations (quotes)"
     }
   }
 }

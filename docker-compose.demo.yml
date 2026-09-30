@@ -918,6 +918,9 @@ services:
       # sempre — aqui não ficou mudo só porque o `except` nomeia o motivo.
       MCP_SERVER_URL:             http://mcp-server-plughub:3100
       MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo
+      # AUD-09 — porta de titular (3880, só na rede interna), SÓ serviço: a analytics-api
+      # monta o dossiê e a eliminação. == PLUGHUB_SESSION_REPLAYER_SERVICE_TOKEN dela.
+      SESSION_REPLAYER_SERVICE_TOKEN: changeme_session_replayer_service_token_demo
     depends_on:
       kafka:
         condition: service_healthy
@@ -1078,6 +1081,8 @@ services:
       PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo   # == o do gateway
       PLUGHUB_MAILING_API_URL:               http://mailing-api:3660
       PLUGHUB_MAILING_SERVICE_TOKEN:         changeme_mailing_service_token_demo   # == PLUGHUB_MAILING_SERVICE_TOKEN
+      PLUGHUB_SESSION_REPLAYER_URL:          http://session-replayer:3880   # AUD-09 — registro durável da sessão
+      PLUGHUB_SESSION_REPLAYER_SERVICE_TOKEN: changeme_session_replayer_service_token_demo
     depends_on:
       redis:
         condition: service_healthy
