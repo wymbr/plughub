@@ -9,12 +9,14 @@ Evaluates only declarative expressions on observable parameters.
 
 from __future__ import annotations
 from datetime import datetime, timezone
-import statistics
+import logging
 
 from .models import (
     Rule, EvaluationContext, EvaluationResult,
     Condition, ConditionResult,
 )
+
+logger = logging.getLogger("plughub.rules")
 
 
 class RuleEvaluator:
@@ -67,9 +69,14 @@ class RuleEvaluator:
     ) -> float | str | None:
         match cond.parameter:
             case "sentiment_score":
-                if cond.window_turns and len(context.sentiment_history) >= cond.window_turns:
-                    window = context.sentiment_history[-cond.window_turns:]
-                    return statistics.mean(window)
+                if cond.window_turns:
+                    # Regra antiga, gravada antes da RUL-04. Avaliar o valor atual no lugar
+                    # da média mudaria o que ela diz; não casar é a leitura honesta.
+                    logger.warning(
+                        "condição de sentimento com window_turns=%s não é avaliada (RUL-04: não há "
+                        "série de sentimento medido) — edite a regra para o valor atual",
+                        cond.window_turns)
+                    return None
                 return context.sentiment_score
 
             case "intent_confidence":

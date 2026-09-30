@@ -43,7 +43,7 @@
   },
   "cond": {
     "flagIs": "sinalização {{flag}} levantada",
-    "window": "(média de {{n}} turnos)"
+    "window": "(média de {{n}} turnos — não avaliada; edite a regra)"
   },
   "card": {
     "noPool": "sem pool — nunca age",
@@ -70,12 +70,10 @@
     "idTaken": "Já existe uma regra com este id.",
     "name": "Nome",
     "conditions": "Condições",
-    "conditionsHint": "O sentimento é o que a IA declara no passo de raciocínio; sentimento não medido nunca casa.",
+    "conditionsHint": "O sentimento é o MEDIDO, a partir da fala do cliente nos fluxos que a nomeiam (customer_utterance); a regra reavalia quando a medição chega. Sentimento não medido nunca casa.",
     "addCondition": "condição",
     "logicAnd": "todas as condições (E)",
     "logicOr": "qualquer condição (OU)",
-    "window": "média turnos",
-    "windowHint": "Compara a média dos últimos N turnos em vez do turno atual",
     "targetPool": "Escalar para o pool",
     "targetPoolHint": "Sem pool a regra é avaliada, mas nunca age.",
     "noPool": "— sem pool —",

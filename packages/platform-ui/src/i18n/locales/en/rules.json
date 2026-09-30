@@ -43,7 +43,7 @@
   },
   "cond": {
     "flagIs": "flag {{flag}} raised",
-    "window": "(average of {{n}} turns)"
+    "window": "(average of {{n}} turns — not evaluated; edit the rule)"
   },
   "card": {
     "noPool": "no pool — never acts",
@@ -70,12 +70,10 @@
     "idTaken": "There is already a rule with this id.",
     "name": "Name",
     "conditions": "Conditions",
-    "conditionsHint": "Sentiment is the one the AI declares in its reasoning step; unmeasured sentiment never matches.",
+    "conditionsHint": "Sentiment is the MEASURED one, from the customer's message in flows that name it (customer_utterance); the rule re-evaluates when the measurement arrives. Unmeasured sentiment never matches.",
     "addCondition": "condition",
     "logicAnd": "all conditions (AND)",
     "logicOr": "any condition (OR)",
-    "window": "avg. turns",
-    "windowHint": "Compare the average of the last N turns instead of the current one",
     "targetPool": "Escalate to pool",
     "targetPoolHint": "Without a pool the rule is evaluated but never acts.",
     "noPool": "— no pool —",

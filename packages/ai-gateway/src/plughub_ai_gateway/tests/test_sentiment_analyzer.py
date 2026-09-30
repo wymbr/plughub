@@ -239,3 +239,119 @@ class TestSentimentProvider:
             llm_providers = {"anthropic": sentinel, "anthropic:abc123": object()}
 
         assert sentiment_provider(State()) is sentinel
+
+
+# ── RUL-04 — a medição avisa a regra, e o histórico não inventa zero ─────────
+
+import json as _json
+
+LAST = {"session_id": SESSION, "tenant_id": TENANT, "intent_confidence": 0.7,
+        "flags": [], "turn_count": 3, "elapsed_ms": 9000}
+
+
+def _redis_with_turn(last=LAST):
+    r = make_redis()
+    state = {"consolidated_turns": [], "current_turn": {}, "last_rules_update": last}
+
+    async def _get(key, *_a, **_kw):
+        return _json.dumps(state) if key == f"session:{SESSION}:ai" else None
+    r.get = AsyncMock(side_effect=_get)
+    r.publish = AsyncMock()
+    return r
+
+
+class TestRulesNotification:
+    @pytest.mark.asyncio
+    async def test_measurement_republishes_the_turn_for_the_rules(self):
+        redis = _redis_with_turn()
+        await analyze_and_emit_sentiment(
+            redis=redis, provider=make_provider('{"sentiment_score": -0.7}'),
+            producer=None, tenant_id=TENANT, session_id=SESSION,
+            customer_utterance="Quero cancelar agora!", model_id="haiku",
+        )
+        redis.publish.assert_awaited_once()
+        channel, body = redis.publish.call_args.args
+        assert channel == f"session:updates:{SESSION}"
+        sent = _json.loads(body)
+        assert sent == {**LAST, "trigger": "sentiment_measured"}
+        assert "sentiment_score" not in sent, "a regra lê o ContextStore — o payload não é casa"
+
+    @pytest.mark.asyncio
+    async def test_the_notice_follows_the_ctx_write(self):
+        """A regra vai ler o ContextStore: o aviso depois da gravação, nunca antes."""
+        redis = _redis_with_turn()
+        order: list[str] = []
+        redis.hset = AsyncMock(side_effect=lambda *a, **k: order.append("hset"))
+        redis.publish = AsyncMock(side_effect=lambda *a, **k: order.append("publish"))
+        await analyze_and_emit_sentiment(
+            redis=redis, provider=make_provider('{"sentiment_score": -0.2}'),
+            producer=None, tenant_id=TENANT, session_id=SESSION,
+            customer_utterance="hum", model_id="haiku",
+        )
+        assert order and order[-1] == "publish" and "hset" in order[:-1]
+
+    @pytest.mark.asyncio
+    async def test_no_notice_when_the_ctx_write_failed(self):
+        redis = _redis_with_turn()
+        redis.hset = AsyncMock(side_effect=ConnectionError("down"))
+        await analyze_and_emit_sentiment(
+            redis=redis, provider=make_provider('{"sentiment_score": -0.9}'),
+            producer=None, tenant_id=TENANT, session_id=SESSION,
+            customer_utterance="péssimo", model_id="haiku",
+        )
+        redis.publish.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_notice_without_a_published_turn(self):
+        redis = _redis_with_turn(last=None)
+        await analyze_and_emit_sentiment(
+            redis=redis, provider=make_provider('{"sentiment_score": -0.9}'),
+            producer=None, tenant_id=TENANT, session_id=SESSION,
+            customer_utterance="péssimo", model_id="haiku",
+        )
+        redis.publish.assert_not_awaited()
+
+
+class _StateRedis:
+    def __init__(self):
+        self.kv: dict = {}
+        self.published: list = []
+
+    async def get(self, k):
+        return self.kv.get(k)
+
+    async def set(self, k, v, *a, **kw):
+        self.kv[k] = v
+
+    async def publish(self, ch, body):
+        self.published.append((ch, body))
+
+
+class TestSessionHistory:
+    @pytest.mark.asyncio
+    async def test_turn_without_sentiment_is_none_and_measured_zero_is_kept(self):
+        from ..session import SessionManager
+        r = _StateRedis()
+        mgr = SessionManager(r, kafka_producer=None)
+        # sentimento None e 0.0 LEGÍTIMO; a próxima chamada consolida cada turno.
+        for s in (None, 0.0, None):
+            await mgr.update_partial_params(session_id=SESSION, tenant_id=TENANT, elapsed_ms=10,
+                                            intent="x", confidence=0.5, sentiment_score=s, flags=[])
+        state = _json.loads(r.kv[f"session:{SESSION}:ai"])
+        got = [t["sentiment_score"] for t in state["consolidated_turns"]]
+        assert got == [None, 0.0], f"turno sem medida virou {got}"
+
+    @pytest.mark.asyncio
+    async def test_rules_payload_is_the_saved_turn_without_sentiment(self):
+        from ..session import SessionManager
+        r = _StateRedis()
+        mgr = SessionManager(r, kafka_producer=None)
+        await mgr.update_partial_params(session_id=SESSION, tenant_id=TENANT, elapsed_ms=4200,
+                                        intent="x", confidence=0.9, sentiment_score=-0.5,
+                                        flags=["churn"])
+        rules = [b for ch, b in r.published if ch == f"session:updates:{SESSION}"]
+        assert len(rules) == 1
+        sent = _json.loads(rules[0])
+        assert "sentiment_score" not in sent and sent["elapsed_ms"] == 4200
+        saved = _json.loads(r.kv[f"session:{SESSION}:ai"])["last_rules_update"]
+        assert saved == sent, "a medição republica o que foi salvo — tem de ser o mesmo turno"

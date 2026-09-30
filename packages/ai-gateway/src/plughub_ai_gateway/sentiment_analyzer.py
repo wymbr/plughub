@@ -44,6 +44,7 @@ from typing import Any
 from .usage_emitter import schedule_llm_tokens
 from .sentiment_emitter import (
     emit_sentiment_updated,
+    notify_rules_measurement,
     resolve_session_pool_id,
     update_sentiment_live,
     write_context_store_sentiment,
@@ -237,11 +238,14 @@ async def analyze_and_emit_sentiment(
         redis=redis, tenant_id=tenant_id, pool_id=pool_id,
         score=score, session_id=session_id,
     )
-    await write_context_store_sentiment(
+    written = await write_context_store_sentiment(
         redis=redis, tenant_id=tenant_id, session_id=session_id, score=score,
     )
+    # RUL-04: só avisa a regra se a medida está onde ela vai ler.
+    rules = await notify_rules_measurement(redis, session_id) if written else "not_written"
     logger.info(
-        "sentiment: medido session=%s pool=%s score=%+.2f", session_id, pool_id, score,
+        "sentiment: medido session=%s pool=%s score=%+.2f rules=%s",
+        session_id, pool_id, score, rules,
     )
 
     # Teto explícito no emissor. Sem ele a task de background segura um slot do

@@ -254,8 +254,7 @@ function RuleForm({ rule, pools, poolsError, taken, onClose, onSave }: {
 
   function setParameter(i: number, p: Parameter) {
     if (p === 'flag') patch(i, { parameter: p, operator: 'eq', flag_name: FLAGS[0], value: FLAGS[0], window_turns: null })
-    else patch(i, { parameter: p, operator: 'lt', flag_name: null, value: 0,
-                    window_turns: p === 'sentiment_score' ? conds[i].window_turns ?? null : null })
+    else patch(i, { parameter: p, operator: 'lt', flag_name: null, value: 0, window_turns: null })
   }
 
   async function submit(e: React.FormEvent) {
@@ -268,7 +267,8 @@ function RuleForm({ rule, pools, poolsError, taken, onClose, onSave }: {
         conditions: conds.map(c => c.parameter === 'flag'
           ? { parameter: 'flag', operator: 'eq', flag_name: c.flag_name, value: c.flag_name ?? '' }
           : { parameter: c.parameter, operator: c.operator, value: Number(c.value),
-              window_turns: c.window_turns || null }),
+              // RUL-04: média de janela é recusada; editar regra antiga a remove.
+              window_turns: null }),
         logic,
         target_pool: pool || null,
         priority,
@@ -321,11 +321,6 @@ function RuleForm({ rule, pools, poolsError, taken, onClose, onSave }: {
                       </select>
                       <input type="number" step="any" required value={String(c.value)}
                         onChange={e => patch(i, { value: e.target.value })} className={`${inputCls} w-28`} />
-                      {c.parameter === 'sentiment_score' && (
-                        <input type="number" min={1} placeholder={t('form.window')} value={c.window_turns ?? ''}
-                          onChange={e => patch(i, { window_turns: e.target.value ? Number(e.target.value) : null })}
-                          className={`${inputCls} w-32`} title={t('form.windowHint')} />
-                      )}
                     </>
                   )}
                   <button type="button" disabled={conds.length === 1}

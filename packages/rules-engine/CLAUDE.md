@@ -10,8 +10,10 @@ conversation and no LLM dependency.
 
 1. Listens for Redis pub/sub `session:updates:{session_id}` (published by ai-gateway on every `reason`/turn)
 2. Loads active rules for the tenant
-3. Evaluates each rule against the current turn's parameters — `sentiment_score: null` means
-   NOT MEASURED and never matches a sentiment condition (it crashed every evaluation until 2026-09-30)
+3. Evaluates each rule against the current turn's parameters — the sentiment is the MEASURED one,
+   read from the ContextStore (`core.sentiment.current`), never the pub/sub field (RUL-04); the
+   ai-gateway republishes the turn with `trigger: sentiment_measured` when a measurement lands.
+   Unmeasured means `None` and never matches a sentiment condition
 4. If a rule fires AND has target_pool → publishes `rules.escalation.events` (active) or
    `rules.shadow.events` (shadow), keyed by `session_id`
 5. It never stops an agent nor routes: the orchestrator-bridge consumes the active event and the
@@ -19,7 +21,7 @@ conversation and no LLM dependency.
 
 ## Observable parameters (spec 3.2)
 
-- sentiment_score — per turn and moving average
+- sentiment_score — the latest MEASUREMENT (no moving average: `window_turns` is refused, RUL-04)
 - intent_confidence — per turn
 - turn_count — number of turns without resolution
 - elapsed_ms — total time vs sla_target_ms

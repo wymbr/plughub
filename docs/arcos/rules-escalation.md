@@ -58,8 +58,16 @@ ai-gateway ──pub/sub session:updates:{sid}──▶ rules-engine
 - **Corrida com a escalação do próprio fluxo.** Se o fluxo chega ao seu `escalate` antes da marca,
   ele decide; a marca sobra sem efeito (TTL 24 h) — ou o bridge já recusa com `no_ai_conductor`.
 - **Regra não tem filtro por pool.** Vale para o tenant inteiro.
-- **Regra de sentimento vê só o sentimento AUTO-DECLARADO pelo `reason`** (`RUL-04`); não há
-  dry-run histórico (`RUL-05`, recusa 501).
+- Não há dry-run histórico (`RUL-05`, recusa 501).
+
+## Qual sentimento a regra vê (RUL-04)
+
+O **medido**: `core.sentiment.current` em `{t}:ctx:{sid}`, lido por `read_measured_sentiment`
+(`session_reader.py`) — a casa onde a medição fora do turno e o valor declarado por um `reason` gravam.
+O `sentiment_score` do pub/sub não é lido. A medição chega depois do turno, então o ai-gateway
+republica o último turno (`last_rules_update` em `session:{sid}:ai`) com `trigger: sentiment_measured`
+logo após gravar a medida. `window_turns` é recusado na escrita (422) e, em regra antiga, não casa:
+não há série de sentimento medido por sessão.
 
 ## A tela e o que se muda (RUL-03)
 

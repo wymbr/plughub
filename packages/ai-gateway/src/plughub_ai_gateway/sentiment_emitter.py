@@ -27,6 +27,8 @@ import json
 import logging
 
 from plughub_contextstore.writer import write_context_tags
+
+from .config import get_settings
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -180,9 +182,9 @@ async def write_context_store_sentiment(
     tenant_id:  str,
     session_id: str,
     score:      float,
-) -> None:
+) -> bool:
     """
-    Escreve o sentimento atual no ContextStore da sessão.
+    Escreve o sentimento atual no ContextStore da sessão. Devolve se gravou.
     Chave: {tenant_id}:ctx:{session_id}  (hash Redis)
     Tag:
       core.sentiment.current → score numérico (-1.0 a 1.0)
@@ -216,7 +218,7 @@ async def write_context_store_sentiment(
     computação fora do `try`.
     """
     if redis is None:
-        return
+        return False
     now = datetime.now(timezone.utc).isoformat()
 
     try:
@@ -229,8 +231,33 @@ async def write_context_store_sentiment(
             source="ai_inferred:sentiment_emitter", confidence=0.80,
             updated_at=now, ttl_s=_CTX_SESSION_TTL,
         )
+        return True
     except Exception as exc:
         logger.warning(
             "Failed to write context_store sentiment tenant=%s session=%s: %s",
             tenant_id, session_id, exc,
         )
+        return False
+
+
+async def notify_rules_measurement(redis: Any, session_id: str) -> str:
+    """RUL-04 — a medição chega DEPOIS do turno que o rules-engine já avaliou. Republica a
+    última atualização do turno (a de `session:{sid}:ai`) com `trigger: sentiment_measured`,
+    e a regra reavalia lendo o sentimento no ContextStore, onde ele acabou de ser gravado.
+
+    Devolve o desfecho, sempre logado: `published` · `no_turn` (a sessão ainda não publicou
+    turno — não há fatos de turno para reavaliar) · `failed`. Nunca levanta."""
+    try:
+        raw = await redis.get(f"session:{session_id}:ai")
+        last = (json.loads(raw) or {}).get("last_rules_update") if raw else None
+        if not last:
+            logger.info("sentiment: medição de session=%s sem turno publicado ao rules-engine — "
+                        "regras avaliam no próximo turno", session_id)
+            return "no_turn"
+        channel = f"{get_settings().redis_session_channel}:{session_id}"
+        await redis.publish(channel, json.dumps({**last, "trigger": "sentiment_measured"}))
+        return "published"
+    except Exception as exc:
+        logger.warning("sentiment: aviso de medição ao rules-engine falhou session=%s — %s; "
+                       "a regra só vê esta medida no próximo turno", session_id, exc)
+        return "failed"

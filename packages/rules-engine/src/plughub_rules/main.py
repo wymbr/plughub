@@ -24,6 +24,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from .config import get_settings
 from .models import EvaluationContext, ContactClosedEvent, PoolEvaluationConfig
+from .session_reader import read_measured_sentiment
 from .evaluator import RuleEvaluator
 from .escalator import Escalator
 from .kafka_publisher import KafkaPublisher
@@ -133,23 +134,21 @@ async def _build_context(
     session_key = f"session:{session_id}:ai"
     raw         = await redis.get(session_key)
 
-    sentiment_history: list[float] = []
     turn_count        = data.get("turn_count", 0)
     elapsed_ms        = data.get("elapsed_ms", 0)
-    sentiment_score   = data.get("sentiment_score")   # None = não medido; nunca 0.0 inventado
     intent_confidence = data.get("intent_confidence", 0.0)
     flags             = data.get("flags", [])
+    # RUL-04: o sentimento vem da casa única (ContextStore), nunca do pub/sub — e o evento
+    # `sentiment_measured` do ai-gateway existe para reavaliar quando a medição chega, que é
+    # DEPOIS do turno. `None` = não medido; nunca 0.0 inventado.
+    sentiment_score   = await read_measured_sentiment(redis, tenant_id, session_id)
 
-    if raw:
+    if raw and not turn_count:
         try:
-            session_data      = json.loads(raw)
-            turns             = session_data.get("consolidated_turns", [])
-            sentiment_history = [t.get("sentiment_score", 0.0) for t in turns]
-            if not turn_count:
-                turn_count    = len(turns)
+            turn_count = len(json.loads(raw).get("consolidated_turns", []))
         except Exception as exc:
-            logger.warning("session %s: %s ilegível (%s) — regras avaliam sem o histórico de "
-                           "sentimento", session_id, session_key, exc)
+            logger.warning("session %s: %s ilegível (%s) — regras avaliam com turn_count=0",
+                           session_id, session_key, exc)
 
     return EvaluationContext(
         session_id=        session_id,
@@ -159,7 +158,6 @@ async def _build_context(
         sentiment_score=   sentiment_score,
         intent_confidence= intent_confidence,
         flags=             flags,
-        sentiment_history= sentiment_history,
     )
 
 

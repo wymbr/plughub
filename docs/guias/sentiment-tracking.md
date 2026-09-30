@@ -128,6 +128,12 @@ Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → fr
 > `{tenant}:ctx:{sid}` (valor corrente, sobrescrito), `{tenant}:pool:{p}:sentiment_live` (agregado por
 > pool) e o tópico `sentiment.updated`. Consequência viva: **não existe histórico por sessão**, logo
 > trajetória e tendência são ausentes por decisão, não fabricadas. Ver `TODO.md`.
+>
+> **Quarto leitor desde a RUL-04 (2026-09-30):** o rules-engine lê `core.sentiment.current` do
+> ContextStore, e a medição, logo depois de gravá-lo, republica o último turno em
+> `session:updates:{sid}` (`trigger: sentiment_measured`) para a regra reavaliar. Pela mesma falta
+> de série, a média de janela das regras (`window_turns`) foi recusada, e o turno consolidado em
+> `session:{sid}:ai` grava `null`, não `0.0`, quando não houve medida.
 
 ---
 

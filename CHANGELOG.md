@@ -1,5 +1,69 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (17) — RUL-04: a regra de sentimento vê o sentimento MEDIDO, e reage quando a medição chega
+
+**O que a ficha registrava:** a regra lia o `sentiment_score` do pub/sub `session:updates:*`, que é o
+que o `reason` AUTO-DECLARA no `output_schema`. A medição de verdade (`sentiment_analyzer`) ia para o
+ContextStore e não chegava à regra. E a média de janela lia turnos com `0.0` inventado.
+
+**Medido antes:**
+- **Nenhuma das 58 skills vivas declara `sentiment_score`** no `output_schema`. O valor do pub/sub era
+  sempre `null`, e **regra de sentimento nunca casava**, em regime nenhum.
+- A medição existe em 2 skills (`skill_fila_v1`, `skill_navegacao_llm_v1`, via `customer_utterance`).
+- A casa única **já existia**: os dois produtores (a medição e o auto-declarado) gravam
+  `core.sentiment.current` em `{t}:ctx:{sid}`.
+- A medição roda em segundo plano **depois** do pub/sub do turno. Ler só o ContextStore no evento de
+  turno faria a regra reagir com uma fala de atraso.
+
+**Decisões do dono (2026-09-30):**
+1. **Reavaliar quando a medição chega.** O ai-gateway guarda em `session:{sid}:ai` o último turno
+   publicado ao rules-engine (`last_rules_update`). Assim que grava a medida no ContextStore, ele o
+   republica com `trigger: sentiment_measured`.
+   - Só republica se a gravação deu certo, porque a regra vai ler lá.
+   - Sem turno publicado ainda, não republica e loga.
+2. **Recusar `window_turns`.** Não há série de sentimento medido por sessão.
+   - Criar ou editar regra com janela dá 422 nomeando a RUL-04.
+   - Regra antiga gravada com janela é lida mas **não casa**, com WARNING no log. Avaliar o valor atual
+     no lugar da média mudaria o que ela diz.
+
+**O que mudou:**
+- **rules-engine:** um leitor só, `read_measured_sentiment`, usado pelo laço do pub/sub e pelo
+  `/evaluate`, que também inventava `0.0`. O `sentiment_score` do payload deixou de ser lido.
+  - Tag ausente: `None`.
+  - Valor malformado ou Redis fora: `None`, com log, nunca neutro.
+  - `sentiment_history` saiu do `EvaluationContext`.
+- **ai-gateway:**
+  - o turno consolidado grava `sentiment_score: null` quando não houve medida (era `0.0`);
+  - um `0.0` medido, que antes era **descartado** pela condição `(x or 0.0) != 0.0`, agora é mantido;
+  - o `partial_params` inicial deixou de nascer com `0.0`;
+  - o payload ao rules-engine não carrega mais `sentiment_score`.
+- **Tela de regras:** sai o campo de janela. Regra antiga com janela aparece marcada *"não avaliada;
+  edite a regra"*, e salvar a remove.
+
+**Ao vivo, com Redis, rules-engine, Kafka e bridge reais** (só o LLM trocado por stub, dentro do
+container do ai-gateway, em tenant de prova):
+- regra ativa `sentiment_score < −0.5`, e um turno sem sentimento declarado, como o de toda skill viva;
+- **medida −0,8:** a regra disparou (`[ACTIVE] Rule probe_rul04 escalates`), e o bridge consumiu o
+  evento (*"sessão já encerrada"*, porque a sessão de prova não existe);
+- **medida +0,5:** a regra não disparou;
+- regra com janela: 422;
+- regra, chaves de prova e script removidos.
+
+**Testes e verificação:**
+- **Testes:** rules-engine 69, ai-gateway 188.
+- **Contraprovas**, cada uma com vermelho:
+  - avisar a regra mesmo sem a gravação;
+  - voltar o `0.0` inventado no histórico;
+  - devolver o `sentiment_score` ao payload;
+  - rules-engine lendo o payload (4 vermelhos);
+  - janela avaliada como valor atual;
+  - janela aceita na escrita.
+- **Gates verdes:** produtor de sentimento, suítes Python pela imagem, varredura anônima e i18n
+  duplicado.
+- **Gates INCONCLUSIVOS, sem relação com esta mudança:**
+  - `gate_sentiment_engine_half` pede contato real aberto à mão;
+  - `gate_console_sentiment_source` recebeu 403 no endpoint do Console, que não mudou.
+
 ## 2026-09-30 (16) — RUL-03: as regras têm tela, e regra se edita e se apaga enquanto não age nem mede
 
 **O que faltava:** regra de escalação só existia pela API do rules-engine, e a API só sabia criar e

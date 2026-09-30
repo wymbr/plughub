@@ -47,7 +47,8 @@ async def get_redis() -> aioredis.Redis:
 class CurrentTurn:
     llm_calls:      list[dict[str, Any]] = field(default_factory=list)
     partial_params: dict[str, Any]       = field(default_factory=lambda: {
-        "intent": None, "confidence": 0.0, "sentiment_score": 0.0,
+        # RUL-04: `None` = não medido. Era 0.0, que é "cliente neutro".
+        "intent": None, "confidence": 0.0, "sentiment_score": None,
     })
     detected_flags: list[str]            = field(default_factory=list)
 
@@ -57,7 +58,9 @@ class ConsolidatedTurn:
     turn_number:     int
     intent:          str | None
     confidence:      float
-    sentiment_score: float
+    # RUL-04: `None` = não medido. Era gravado 0.0, e a média de janela da regra misturava
+    # neutro inventado com medida.
+    sentiment_score: float | None
     flags:           list[str]
 
 
@@ -65,6 +68,9 @@ class ConsolidatedTurn:
 class SessionAIState:
     consolidated_turns: list[ConsolidatedTurn] = field(default_factory=list)
     current_turn:       CurrentTurn            = field(default_factory=CurrentTurn)
+    # RUL-04: a última atualização publicada ao rules-engine. A medição de sentimento chega
+    # DEPOIS do turno e a republica, para a regra reavaliar com os mesmos fatos do turno.
+    last_rules_update:  dict[str, Any] | None  = None
 
 
 class SessionManager:
@@ -86,6 +92,7 @@ class SessionManager:
                 ConsolidatedTurn(**t) for t in data.get("consolidated_turns", [])
             ],
             current_turn=CurrentTurn(**data.get("current_turn", {})),
+            last_rules_update=data.get("last_rules_update"),
         )
         return state
 
@@ -127,12 +134,14 @@ class SessionManager:
         # `or 0.0` porque `sentiment_score` agora pode ser None, e `None != 0.0` é
         # True — sem isto, todo turno sem sentimento seria consolidado como se
         # tivesse dado, inflando `consolidated_turns`.
-        if prev.get("intent") is not None or (prev.get("sentiment_score") or 0.0) != 0.0:
+        prev_sentiment = prev.get("sentiment_score")
+        measured = isinstance(prev_sentiment, (int, float)) and not isinstance(prev_sentiment, bool)
+        if prev.get("intent") is not None or measured:
             state.consolidated_turns.append(ConsolidatedTurn(
                 turn_number     = len(state.consolidated_turns) + 1,
                 intent          = prev.get("intent"),
                 confidence      = float(prev.get("confidence", 0.0)),
-                sentiment_score = float(prev.get("sentiment_score") or 0.0),
+                sentiment_score = float(prev_sentiment) if measured else None,
                 flags           = list(state.current_turn.detected_flags),
             ))
 
@@ -143,6 +152,16 @@ class SessionManager:
             "sentiment_score": sentiment_score,
         }
         state.current_turn.detected_flags = flags
+        # Sem `sentiment_score` (RUL-04): o que a regra vê é o do ContextStore, a casa única
+        # onde este turno (se declarou) e a medição fora do turno gravam.
+        state.last_rules_update = {
+            "session_id":        session_id,
+            "tenant_id":         tenant_id,
+            "intent_confidence": confidence,
+            "flags":             flags,
+            "turn_count":        len(state.consolidated_turns),
+            "elapsed_ms":        elapsed_ms,
+        }
         await self.save(session_id, state)
 
         turn_count = len(state.consolidated_turns)
@@ -195,15 +214,7 @@ class SessionManager:
         # Publish to Rules Engine pub/sub channel (fire-and-forget).
         # A Rules Engine outage must never block the AI Gateway response path.
         rules_channel = f"{self._settings.redis_session_channel}:{session_id}"
-        rules_payload = json.dumps({
-            "session_id":        session_id,
-            "tenant_id":         tenant_id,
-            "sentiment_score":   sentiment_score,
-            "intent_confidence": confidence,
-            "flags":             flags,
-            "turn_count":        turn_count,
-            "elapsed_ms":        elapsed_ms,
-        })
+        rules_payload = json.dumps(state.last_rules_update)
         try:
             await self._redis.publish(rules_channel, rules_payload)
         except Exception as exc:

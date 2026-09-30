@@ -383,6 +383,8 @@ async def test_pubsub_publish_triggers_escalation():
             "detected_flags": ["churn_signal"],
         },
     })
+    # RUL-04: o sentimento que a regra vê é o do ContextStore, não o do payload.
+    redis.hget.return_value = json.dumps({"value": -0.6, "confidence": 0.8})
 
     rule_store = AsyncMock(spec=RuleStore)
     rule_store.get_active_rules.return_value = [rule]
@@ -432,16 +434,20 @@ async def test_pubsub_publish_triggers_escalation():
 # exigindo float, TODA avaliação quebrava na validação (medido ao vivo na RUL-02), e o teste
 # acima seguia verde. Este usa o payload de verdade.
 
-def _payload(sentiment):
+def _payload(declared=None):
+    # `sentiment_score` no payload é o AUTO-DECLARADO; desde a RUL-04 a regra o ignora.
     return {"type": "pmessage", "channel": "session:updates:s-null",
-            "data": json.dumps({"session_id": "s-null", "tenant_id": "t", "sentiment_score": sentiment,
+            "data": json.dumps({"session_id": "s-null", "tenant_id": "t", "sentiment_score": declared,
                                 "intent_confidence": 0.0, "flags": [], "turn_count": 0,
                                 "elapsed_ms": 900})}
 
 
-async def _fire(rule, sentiment):
+async def _fire(rule, sentiment, declared=None):
+    """`sentiment` = o MEDIDO, em `{t}:ctx:{sid}` › core.sentiment.current (None = sem a tag)."""
     redis = AsyncMock()
     redis.get.return_value = None
+    redis.hget.return_value = (None if sentiment is None
+                               else json.dumps({"value": sentiment, "confidence": 0.8}))
     store = AsyncMock(spec=RuleStore)
     store.get_active_rules.return_value = [rule]
     got: list = []
@@ -450,7 +456,7 @@ async def _fire(rule, sentiment):
         async def trigger(self, result):
             got.append(result)
 
-    await _process_update(message=_payload(sentiment), rule_store=store,
+    await _process_update(message=_payload(declared), rule_store=store,
                           evaluator=RuleEvaluator(), escalator=Esc(), redis=redis)
     return got
 
@@ -475,3 +481,56 @@ async def test_unmeasured_sentiment_never_matches_a_sentiment_condition():
                 target_pool="p", created_at=now, updated_at=now)
     assert await _fire(rule, None) == [], "null tratado como neutro dispararia aqui"
     assert len(await _fire(rule, 0.1)) == 1, "com medida, casa"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test 8 — RUL-04: a regra lê a MEDIÇÃO (ContextStore), e só ela
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sentiment_rule():
+    now = datetime.now(timezone.utc).isoformat()
+    return Rule(rule_id="r_m", tenant_id="t", name="humor", status="active",
+                conditions=[Condition(parameter="sentiment_score", operator="lt", value=-0.3)],
+                target_pool="p", created_at=now, updated_at=now)
+
+
+@pytest.mark.asyncio
+async def test_measured_sentiment_fires_even_when_the_payload_declares_none():
+    got = await _fire(_sentiment_rule(), -0.8, declared=None)
+    assert len(got) == 1 and got[0].context.sentiment_score == -0.8
+
+
+@pytest.mark.asyncio
+async def test_declared_payload_value_is_not_a_second_house():
+    """O payload diz -0.9, o ContextStore não tem medida: não casa."""
+    assert await _fire(_sentiment_rule(), None, declared=-0.9) == []
+    assert await _fire(_sentiment_rule(), 0.4, declared=-0.9) == []
+
+
+@pytest.mark.asyncio
+async def test_the_measurement_trigger_without_turn_fields_still_reads_the_ctx():
+    from plughub_rules.main import _build_context
+    redis = AsyncMock()
+    redis.get.return_value = json.dumps({"consolidated_turns": [{}, {}]})
+    redis.hget.return_value = json.dumps({"value": -0.5})
+    ctx = await _build_context(redis, "s1", "t", {"session_id": "s1", "tenant_id": "t",
+                                                   "trigger": "sentiment_measured"})
+    assert ctx.sentiment_score == -0.5 and ctx.turn_count == 2
+    redis.hget.assert_awaited_with("t:ctx:s1", "core.sentiment.current")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["nao-json", json.dumps({"value": "alto"}), json.dumps({"value": True})])
+async def test_malformed_measurement_is_unmeasured_never_neutral(raw):
+    from plughub_rules.session_reader import read_measured_sentiment
+    redis = AsyncMock()
+    redis.hget.return_value = raw
+    assert await read_measured_sentiment(redis, "t", "s") is None
+
+
+@pytest.mark.asyncio
+async def test_unreadable_store_is_unmeasured():
+    from plughub_rules.session_reader import read_measured_sentiment
+    redis = AsyncMock()
+    redis.hget.side_effect = ConnectionError("down")
+    assert await read_measured_sentiment(redis, "t", "s") is None

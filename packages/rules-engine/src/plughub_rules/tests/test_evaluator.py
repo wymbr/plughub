@@ -34,7 +34,6 @@ def make_ctx(**kwargs) -> EvaluationContext:
         "sentiment_score":  -0.20,
         "intent_confidence": 0.75,
         "flags":            [],
-        "sentiment_history": [-0.10, -0.20, -0.30, -0.40, -0.50],
     }
     defaults.update(kwargs)
     return EvaluationContext(**defaults)
@@ -109,28 +108,30 @@ class TestRuleEvaluator:
         ctx = make_ctx(flags=["churn_signal"])
         assert self.evaluator.evaluate(rule, ctx).triggered is False
 
-    # ── Turn window (moving average) ────────
+    # ── Turn window — RUL-04: não há série medida, então não casa ──
 
-    def test_moving_average_last_3_turns(self):
+    def test_stored_window_condition_never_matches(self):
+        """Regra antiga gravada com window_turns: avaliar o valor atual mudaria o que ela diz."""
         rule = make_rule([{
             "parameter": "sentiment_score", "operator": "lt",
-            "value": -0.4, "window_turns": 3,
+            "value": 0.0, "window_turns": 3,
         }])
-        # Last 3: -0.3, -0.4, -0.5 → average = -0.4 → lt -0.4 = False
-        ctx = make_ctx(sentiment_history=[-0.10, -0.20, -0.30, -0.40, -0.50])
-        result = self.evaluator.evaluate(rule, ctx)
-        # average of last 3 = (-0.3 + -0.4 + -0.5) / 3 = -0.4 — not lt -0.4
-        assert result.triggered is False
+        assert self.evaluator.evaluate(rule, make_ctx(sentiment_score=-0.9)).triggered is False
 
-    def test_moving_average_fires_when_below_threshold(self):
-        rule = make_rule([{
-            "parameter": "sentiment_score", "operator": "lt",
-            "value": -0.3, "window_turns": 3,
-        }])
-        ctx = make_ctx(sentiment_history=[-0.10, -0.20, -0.40, -0.50, -0.60])
-        result = self.evaluator.evaluate(rule, ctx)
-        # average of last 3 = (-0.4 + -0.5 + -0.6) / 3 ≈ -0.5 → lt -0.3 = True
-        assert result.triggered is True
+    def test_same_condition_without_window_matches_control(self):
+        rule = make_rule([{"parameter": "sentiment_score", "operator": "lt", "value": 0.0}])
+        assert self.evaluator.evaluate(rule, make_ctx(sentiment_score=-0.9)).triggered is True
+
+    def test_window_is_refused_on_create_and_update(self):
+        import pytest
+        from pydantic import ValidationError
+        from plughub_rules.models import RuleCreateRequest, RuleUpdateRequest
+        cond = [{"parameter": "sentiment_score", "operator": "lt", "value": 0, "window_turns": 3}]
+        with pytest.raises(ValidationError, match="RUL-04"):
+            RuleCreateRequest(rule_id="r", tenant_id="t", name="n", conditions=cond)
+        with pytest.raises(ValidationError, match="RUL-04"):
+            RuleUpdateRequest(name="n", conditions=cond)
+        RuleUpdateRequest(name="n", conditions=[{**cond[0], "window_turns": None}])
 
     # ── No target_pool ──────────────────────
 

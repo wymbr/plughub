@@ -6,7 +6,7 @@ Spec: PlugHub v24.0 section 3.2
 
 from __future__ import annotations
 from typing import Literal, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─────────────────────────────────────────────
@@ -32,8 +32,23 @@ class Condition(BaseModel):
     parameter:    ObservableParameter
     operator:     Operator
     value:        float | str
-    window_turns: int | None = None    # moving average over N turns
+    # RUL-04: média de janela RECUSADA na escrita (decisão do dono, 2026-09-30) — não existe
+    # série de sentimento MEDIDO por sessão, e a que havia inventava 0.0 para turno sem medida.
+    # O campo fica no modelo só para ler regra antiga gravada com ele; o avaliador não a casa.
+    window_turns: int | None = None
     flag_name:    str | None = None    # when parameter == "flag"
+
+
+WINDOW_REFUSED = (
+    "window_turns (média de janela) não é aceito: não há série de sentimento MEDIDO por sessão "
+    "de onde tirar a média (RUL-04). Use o valor atual — o da última medição."
+)
+
+
+def _refuse_window(conditions: list["Condition"]) -> list["Condition"]:
+    if any(c.window_turns for c in conditions):
+        raise ValueError(WINDOW_REFUSED)
+    return conditions
 
 
 class Rule(BaseModel):
@@ -68,7 +83,6 @@ class EvaluationContext(BaseModel):
     sentiment_score:  float | None = Field(default=None, ge=-1.0, le=1.0)
     intent_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     flags:            list[str] = Field(default_factory=list)
-    sentiment_history: list[float] = Field(default_factory=list)
 
 
 # ─────────────────────────────────────────────
@@ -207,6 +221,11 @@ class RuleCreateRequest(BaseModel):
     description:  str             = ""
     customer_notice: str | None   = Field(default=None, max_length=500)   # RUL-02
 
+    @field_validator("conditions")
+    @classmethod
+    def _no_window(cls, v: list[Condition]) -> list[Condition]:
+        return _refuse_window(v)
+
 
 class RuleUpdateRequest(BaseModel):
     """RUL-03 — substitui o que a regra DECIDE; id, tenant e status não mudam por aqui."""
@@ -216,6 +235,11 @@ class RuleUpdateRequest(BaseModel):
     target_pool:  str | None      = None
     priority:     int             = Field(default=1, ge=1, le=10)
     customer_notice: str | None   = Field(default=None, max_length=500)
+
+    @field_validator("conditions")
+    @classmethod
+    def _no_window(cls, v: list[Condition]) -> list[Condition]:
+        return _refuse_window(v)
 
 
 class RuleStatusPatch(BaseModel):
