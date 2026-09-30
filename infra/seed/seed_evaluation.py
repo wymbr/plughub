@@ -14,7 +14,6 @@ Recursos criados:
   Campanha "Demo SAC — Avaliação Contínua"
     - Pool: sac (todos os agentes IA do pool de SAC)
     - Amostragem: 30% das sessões resolvidas
-    - Skill de revisão: skill_revisao_simples_v1
     - Política de contestação habilitada (1 round, 48h deadline)
 
 Uso:
@@ -195,7 +194,6 @@ def upsert_campaign(form_id: str) -> str | None:
         "pool_id":                  "sac_ia",
         "evaluation_pool_id":       "sac_ia",
         "evaluator_pool_id":        "avaliacao_ia",
-        "review_workflow_skill_id": "skill_revisao_simples_v1",
         "sampling_rules": {
             "mode":           "percentage",
             "rate":           0.30,

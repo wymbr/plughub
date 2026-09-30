@@ -1251,7 +1251,7 @@ services:
 
   # Cria formulário e campanha de avaliação demo.
   # Formulário "SAC Padrão" com 4 critérios.
-  # Campanha "Demo SAC — Avaliação Contínua" com skill_revisao_simples_v1.
+  # Campanha "Demo SAC — Avaliação Contínua".
   eval-seed:
     image: python:3.11-slim
     volumes:

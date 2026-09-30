@@ -1506,104 +1506,11 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
     }
   )
 
-  // ── evaluation_review_submit (Arc 13 Fase D) ─────────────────────────────
-  // Submete a decisão do revisor pós-contestação (agente_revisor_v1 ou revisor humano).
-  // Para cada dimensão contestada: upheld mantém a nota; revised propõe score_override.
-  const EvidenceEntryReviewSchema = z.object({
-    stream_entry_id: z.string().min(1),
-    excerpt:         z.string().max(500),
-    relevance_note:  z.string().max(500),
-  })
-
-  const DimensionDecisionSchema = z.object({
-    /** ID da dimensão contestada — deve ter round=2 na instância */
-    dimension_id:     z.string().min(1),
-    /** upheld: mantém nota do avaliador; revised: altera com score_override */
-    decision:         z.enum(["upheld", "revised"]),
-    /** Obrigatório quando decision=revised */
-    score_override:   z.number().min(0).optional(),
-    /** Obrigatório quando decision=revised — evidências que suportam a alteração */
-    evidence_entries: z.array(EvidenceEntryReviewSchema).optional(),
-    /** Justificativa — obrigatória em todos os casos */
-    justification:    z.string().min(10),
-  })
-
-  const EvaluationReviewSubmitInputSchema = z.object({
-    session_token:       z.string().min(1),
-    instance_id:         z.string().min(1),
-    /** Decisão por dimensão — apenas dimensões contestadas (round=2) */
-    dimension_decisions: z.array(DimensionDecisionSchema).min(1),
-    /** ID do revisor (user_id para humano, agent_type_id para AI) */
-    reviewer_id:         z.string().optional(),
-  })
-
-  server.tool(
-    "evaluation_review_submit",
-    "Submete a decisão do revisor pós-contestação por dimensão contestada. " +
-    "Usado pelo agente_revisor_v1 (reviewer_type=ai) e pelo workflow de revisão humana. " +
-    "decision=upheld mantém a nota original do avaliador. " +
-    "decision=revised exige score_override + evidence_entries[] obrigatórios. " +
-    "Justificativa obrigatória em todos os casos — mesmo quando upheld. " +
-    "Endpoint: POST /v1/evaluation/instances/{id}/review na evaluation-api. " +
-    "Arc 13 Fase D.",
-    EvaluationReviewSubmitInputSchema.shape as any,
-    async (input: Record<string, unknown>) => {
-      try {
-        const parsed = EvaluationReviewSubmitInputSchema.parse(input)
-        const { session_token, instance_id, dimension_decisions, reviewer_id } = parsed
-
-        const { tenant_id } = verifySessionToken(session_token)
-        const apiBase = evaluationApiUrl ?? "http://localhost:3400"
-
-        // Extrai reviewer_id do token se não fornecido
-        let resolvedReviewerId = reviewer_id
-        if (!resolvedReviewerId) {
-          try {
-            const payload = JSON.parse(
-              Buffer.from(session_token.split(".")[1] ?? "", "base64url").toString("utf8")
-            ) as Record<string, unknown>
-            if (typeof payload["sub"] === "string")              resolvedReviewerId = payload["sub"]
-            else if (typeof payload["agent_type_id"] === "string") resolvedReviewerId = payload["agent_type_id"]
-          } catch { /* non-fatal */ }
-        }
-
-        const body: Record<string, unknown> = {
-          dimension_decisions,
-          reviewer_id: resolvedReviewerId,
-        }
-
-        const resp = await fetch(
-          `${apiBase}/v1/evaluation/instances/${encodeURIComponent(instance_id)}/review`,
-          {
-            method:  "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Tenant-ID":  tenant_id,
-            },
-            body: JSON.stringify(body),
-          }
-        )
-
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => "")
-          return mcpError("review_failed", `evaluation-api returned ${resp.status}: ${text}`)
-        }
-
-        const data = await resp.json() as Record<string, unknown>
-        return ok({
-          submitted:           true,
-          instance_id,
-          contestation_state:  data["contestation_state"],
-          current_round:       data["current_round"],
-          finalized:           data["finalized"] ?? false,
-          dimensions_upheld:   dimension_decisions.filter(d => d.decision === "upheld").length,
-          dimensions_revised:  dimension_decisions.filter(d => d.decision === "revised").length,
-        })
-      } catch (e) {
-        return handleCaughtError(e)
-      }
-    }
-  )
+  // ── evaluation_review_submit — REMOVIDA em 2026-09-30 (REV-02) ────────────
+  // Recebia 401 em toda chamada desde a AUT-59: fazia POST .../review só com X-Tenant-ID,
+  // e essa rota é a decisão de revisor HUMANO (Bearer + ABAC da rodada). Os consumidores
+  // eram `agente_revisor_v1` e o motor legado `skill_revisao_treplica_v1`, removidos juntos.
+  // A revisão IA do Arc 13 mora nas rotas `ai-review`/`pre-review` da evaluation-api.
 
   // ── evaluation_lock (Arc 6 v2) ────────────────────────────────────────────
   // Called by the `congelar_resultado` step in review workflow YAMLs.
@@ -1611,7 +1518,7 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
   server.tool(
     "evaluation_lock",
     "Congela permanentemente um EvaluationResult. " +
-    "Chamado pelo step congelar_resultado nos workflows de revisão (skill_revisao_*.yaml). " +
+    "Uso de serviço: nenhum fluxo do repositório a chama desde a REV-02. " +
     "Após lock, eval_status='locked' é irreversível — ações de revisão ou contestação retornam 409. " +
     "Arc 6 v2.",
     EvaluationLockInputSchema.shape as any,

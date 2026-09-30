@@ -1,5 +1,43 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (4) — REV-02: o motor de revisão por workflow sai, com a tool que ninguém conseguia chamar
+
+**O defeito da ficha:** a tool `evaluation_review_submit` fazia `POST /v1/evaluation/instances/{id}/review`
+só com `X-Tenant-ID`. Desde a AUT-59 essa rota exige Bearer de revisor HUMANO (ABAC da rodada e
+revisor diferente do avaliado), então **toda chamada recebia 401**. Os consumidores eram
+`agente_revisor_v1` e `skill_revisao_treplica_v1`, o motor de revisão por workflow que o CLAUDE.md já
+declarava inerte desde 2026-06-25: nada no backend o disparava.
+
+**Decisão do dono (2026-09-30): aposentar junto do motor legado.** Dar `X-Service-Token` à rota seria
+abrir a porta de uma decisão que é humana por definição, não consertar a chamada.
+
+**O que saiu:**
+- os YAMLs `skill_revisao_treplica_v1.yaml` e `agente_revisor_v1.yaml` (id `skill_revisao_v1`);
+- a tool `evaluation_review_submit` e a linha dela no censo do guard;
+- na evaluation-api: o consumer reativo de `workflow.events`, o `_resume_workflow` com as duas
+  chamadas, as escritas de `core.workflow.review_decision`/`round_echoed` (as entradas continuam no
+  cadastro, pelo histórico mascarado), `update_result_workflow_state` e as settings
+  `workflow_events_topic`/`workflow_api_url`;
+- a coluna `evaluation.campaigns.review_workflow_skill_id`, com `DROP COLUMN IF EXISTS` no DDL
+  idempotente;
+- no config-api: as chaves `evaluation.default_review_skill_id` e `auto_lock_on_workflow_complete`,
+  que só o motor lia. O seed é if-absent: linhas já gravadas ficam no banco, sem leitor;
+- na UI: o seletor de skill de revisão, a caixa do detalhe e 10 chaves i18n por língua.
+
+**O que a tela ganhou:** tipo de revisor, modelo, pré-revisão e regras de curadoria só apareciam
+quando a skill escolhida era `skill_revisao_treplica_v1`. Um motor inerte decidia o que o caminho vivo
+mostrava. Agora esses campos seguem o bloco de contestação, e o painel de curadoria aparece em toda
+campanha.
+
+**Estado vivo:** as duas skills continuavam no agent-registry (skill é seed-if-absent e o syncer não
+poda). Foram apagadas pela API (`DELETE /v1/skills/:id`, 204 nas duas; nenhum slot de pool as
+usava), e a coluna foi medida ausente no `plughub_demo` depois do boot. Suítes: evaluation 256,
+config 61. Gates verdes: censo do guard MCP, cadastro do ContextStore, escrita com leitor, chaves
+i18n duplicadas, varredura anônima, ledger e perfil de skill.
+
+**Resíduo nomeado:** a tool `evaluation_lock` e a rota `/lock` ficam, como capacidade de serviço, mas
+o único fluxo que as chamava era o step `congelar_resultado` do motor removido. Hoje não têm chamador.
+
 ## 2026-09-30 (3) — CAL-03: o prazo em horas úteis da avaliação existe, e o motor soma horas em calendário sempre aberto
 
 **O defeito da ficha:** `sampling.compute_expires_at` (expiração da instância) e

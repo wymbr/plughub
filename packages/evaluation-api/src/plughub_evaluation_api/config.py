@@ -17,7 +17,6 @@ class Settings(BaseSettings):
 
     # Kafka topics
     evaluation_topic: str = "evaluation.events"
-    workflow_events_topic: str = "workflow.events"
 
     # Calendar API (for business-hours deadline calculation)
     calendar_api_url: str = "http://localhost:3700"
@@ -41,11 +40,6 @@ class Settings(BaseSettings):
     backfill_page_size: int    = 200    # paginação do /reports/segments
     backfill_max_segments: int = 5000   # teto de segurança por job de backfill
 
-    # Workflow API (Arc 4 — review/contestation state machine)
-    # ⚠️ LEGADO em burn-down (arco de workflow, Fase 4). O resume deixou de passar por
-    # aqui na 4a — vai direto ao channel-gateway. Só permanece porque o consumer de
-    # `workflow.events` (motor de review reactive-only) ainda existe.
-    workflow_api_url: str = "http://localhost:3800"
 
     # Channel Gateway — porta INTERNA de resume (`/v1/channels/webhook/resume/{token}`).
     # Fase 4a: a evaluation-api retoma a workflow suspensa direto, sem o salto pela

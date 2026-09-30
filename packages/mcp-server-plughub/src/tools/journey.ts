@@ -69,7 +69,7 @@ const JourneyMergeInputSchema = z.object({
   /**
    * JWT from agent_login — resolves tenant_id + actor. This is the path for callers that
    * already HAVE a minted JWT (Console operators, evaluator/reviewer agents explicitly
-   * bootstrapped with one — see agente_revisor_v1.yaml header). Optional now: one of
+   * bootstrapped with one). Optional now: one of
    * `session_token` / `tenant_id` is required, checked manually in the handler below.
    */
   session_token:  z.string().min(1).optional(),
@@ -78,7 +78,7 @@ const JourneyMergeInputSchema = z.object({
    * every ORDINARY native-agent skill-flow invoke step (customer-facing pools like
    * skill_limite_entrada_v1: channel-gateway → routing-engine → orchestrator-bridge →
    * skill-flow-service `/execute` never mints or forwards a JWT into the pipeline
-   * context — only workflows that explicitly inject one, like skill_revisao_treplica_v1,
+   * context — only workflows that explicitly inject one, (the removed skill_revisao_treplica_v1 was one),
    * do). Same calling convention as every OTHER tool this kind of skill already uses
    * (customer_resolve, pending_workflow_get, context_set, workflow_trigger all take
    * `tenant_id` as plain data). Authorization for these callers is already enforced

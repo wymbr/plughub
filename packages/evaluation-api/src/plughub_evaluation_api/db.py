@@ -234,10 +234,14 @@ CREATE INDEX IF NOT EXISTS idx_evcontest_tenant_status
 
 -- ── Arc 6 v2 migrations (idempotent ALTER TABLE) ──────────────────────────────
 
--- evaluation.campaigns: workflow skill reference + contestation policy
+-- evaluation.campaigns: contestation policy
 ALTER TABLE evaluation.campaigns
-    ADD COLUMN IF NOT EXISTS review_workflow_skill_id TEXT,
     ADD COLUMN IF NOT EXISTS contestation_policy JSONB NOT NULL DEFAULT '{}';
+
+-- REV-02 (2026-09-30): a skill do motor de revisão por workflow sai com o motor.
+-- Nada a lia no backend (só a UI a mostrava); o motor era inerte desde 2026-06-25.
+ALTER TABLE evaluation.campaigns
+    DROP COLUMN IF EXISTS review_workflow_skill_id;
 
 -- evaluation.campaigns: evaluation pool + calendar + gateway configs (Task #74/#75)
 ALTER TABLE evaluation.campaigns
@@ -1444,8 +1448,7 @@ async def update_campaign(
     **fields: Any,
 ) -> dict[str, Any] | None:
     allowed = {"name", "description", "status", "sampling_rules", "reviewer_rules", "schedule",
-               "total_instances", "completed_instances", "avg_score",
-               "review_workflow_skill_id", "contestation_policy",
+               "total_instances", "completed_instances", "avg_score", "contestation_policy",
                "evaluation_pool_id", "evaluation_calendar_id", "gateway_config_ids",
                "evaluator_pool", "period_start", "period_end"}
     updates = {k: v for k, v in fields.items() if k in allowed}
@@ -2089,62 +2092,6 @@ async def list_contestations(
 
 # ─── Workflow state helpers ────────────────────────────────────────────────────
 
-async def update_result_workflow_state(
-    pool: asyncpg.Pool,
-    result_id: str,
-    *,
-    action_required: str | None,
-    current_round: int | None = None,
-    deadline_at: datetime | None = None,
-    resume_token: str | None = None,
-    workflow_instance_id: str | None = None,
-    locked: bool = False,
-    lock_reason: str | None = None,
-) -> dict[str, Any] | None:
-    """
-    Called by the workflow.events Kafka consumer to sync result workflow state.
-    - workflow.suspended → action_required set, current_round/deadline_at/resume_token updated
-    - workflow.completed → locked=True, action_required=None, resume_token=None
-    """
-    set_parts = ["action_required=$1", "updated_at=now()"]
-    args: list[Any] = [action_required]
-    idx = 2
-
-    if current_round is not None:
-        set_parts.append(f"current_round=${idx}")
-        args.append(current_round)
-        idx += 1
-    if deadline_at is not None:
-        set_parts.append(f"deadline_at=${idx}")
-        args.append(deadline_at)
-        idx += 1
-    if resume_token is not None:
-        set_parts.append(f"resume_token=${idx}")
-        args.append(resume_token)
-        idx += 1
-    if workflow_instance_id is not None:
-        set_parts.append(f"workflow_instance_id=${idx}")
-        args.append(workflow_instance_id)
-        idx += 1
-    if locked:
-        set_parts.append("eval_status='locked'")
-        set_parts.append("locked_at=now()")
-        set_parts.append("resume_token=NULL")
-        if lock_reason:
-            set_parts.append(f"lock_reason=${idx}")
-            args.append(lock_reason)
-            idx += 1
-
-    args.append(result_id)
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"UPDATE evaluation.results SET {', '.join(set_parts)} "
-            f"WHERE id=${idx} RETURNING *",
-            *args,
-        )
-    return _row(row)
-
-
 async def lock_result(
     pool: asyncpg.Pool,
     result_id: str,
@@ -2154,7 +2101,8 @@ async def lock_result(
 ) -> dict[str, Any] | None:
     """
     Permanently lock a result. Called by:
-    - evaluation_lock MCP tool (from congelar_resultado workflow step)
+    - evaluation_lock MCP tool (sem chamador desde a REV-02: o step congelar_resultado
+      morava no motor de revisão por workflow, removido)
     - workflow.events consumer on workflow.completed with lock_reason
     Once locked, eval_status='locked' is irreversible — any further write returns None.
     """

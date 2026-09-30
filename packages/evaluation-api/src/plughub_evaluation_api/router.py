@@ -406,37 +406,6 @@ async def _write_ctx(redis_client: Any, tenant_id: str, session_id: str, fields:
         logger.warning("ContextStore write failed (non-fatal): %s", exc)
 
 
-async def _resume_workflow(resume_token: str, tenant_id: str) -> None:
-    """
-    Retoma a workflow suspensa, direto no channel-gateway (fire-and-forget).
-
-    Fase 4a do arco de workflow (2026-08-11). Antes esta função batia em
-    `POST /v1/workflow/resume` da **workflow-api**, que era um **proxy** para esta
-    mesma rota — sempre com `tenant_id`, logo sempre pelo ramo proxy, sem tocar o
-    PostgreSQL legado. Um salto de rede e um serviço a mais no caminho, sem nada
-    acontecendo no meio.
-
-    ⚠️ Usa a porta **INTERNA** (`/v1/channels/webhook/resume/...`), não a externa
-    (`/channel/webhook/resume/...`) criada na Fase 1: a evaluation-api é componente
-    interno da plataforma. A porta externa existe para TERCEIROS e paga por isso —
-    lá o `source` é descartado e reescrito como `external`, o que apagaria a
-    procedência desta chamada.
-
-    Este era o ÚNICO chamador de produção de `/v1/workflow/resume`; com o repointe,
-    a rota fica só com e2e e pode sair na 4d.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{settings.channel_gateway_url}/v1/channels/webhook/resume/{resume_token}",
-                json={"tenant_id": tenant_id, "payload": {"decision": "input"}},
-            )
-            if resp.status_code >= 400:
-                logger.warning("workflow resume returned %s: %s", resp.status_code, resp.text)
-    except Exception as exc:
-        logger.warning("workflow resume HTTP call failed (non-fatal): %s", exc)
-
-
 # T10 — round → campo ABAC (§15.4/§17.2). R=1→base; R=2→réplica; R=3→tréplica.
 _CONTEST_FIELD_BY_ROUND = {1: "contestar", 2: "contestar_replica", 3: "contestar_treplica"}
 _REVIEW_FIELD_BY_ROUND  = {1: "revisar",   2: "revisar_replica",   3: "revisar_treplica"}
@@ -927,8 +896,6 @@ class CampaignCreate(BaseModel):
     sampling_rules:             dict = Field(default_factory=dict)
     reviewer_rules:             dict = Field(default_factory=dict)
     schedule:                   dict = Field(default_factory=dict)
-    # Arc 6 v2 — workflow motor for contestation/review cycle
-    review_workflow_skill_id:   str | None = None   # e.g. "skill_revisao_treplica_v1"
     contestation_policy:        dict = Field(default_factory=dict)
     created_by:                 str = "operator"
     # Task #74/#75 — evaluation scope + infra
@@ -959,7 +926,6 @@ class CampaignUpdate(BaseModel):
     sampling_rules:             dict | None = None
     reviewer_rules:             dict | None = None
     schedule:                   dict | None = None
-    review_workflow_skill_id:   str | None = None
     contestation_policy:        dict | None = None
     # Task #74/#75
     evaluation_pool_id:         str | None = None
@@ -1109,8 +1075,6 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
     )
     # Patch v2 scalar fields not handled by create (jsonb fields via update)
     v2_updates: dict[str, Any] = {}
-    if data.get("review_workflow_skill_id"):
-        v2_updates["review_workflow_skill_id"] = data["review_workflow_skill_id"]
     if data.get("contestation_policy"):
         v2_updates["contestation_policy"] = data["contestation_policy"]
     if v2_updates:
@@ -2531,30 +2495,9 @@ async def review_result(result_id: str, tenant_id: str, body: ReviewBody, reques
     if not row:
         raise HTTPException(404, detail="result not found")
 
-    # Write to ContextStore so the suspended workflow YAML choice step can branch on it
-    if result.get("session_id"):
-        await _write_ctx(redis_client, tenant_id, result["session_id"], {
-            "core.workflow.review_decision": body.decision,
-            # ⚠️ `core.workflow.reviewer_id` SAIU em 2026-09-03 (ALW-11). Era escrita
-            # nas duas rotas e **não tinha leitor nenhum** — nem YAML, nem código; as
-            # duas irmãs deste mesmo dicionário são declaradas e uma delas (o
-            # `review_decision`) é de fato consumida por `skill_revisao_treplica_v1`.
-            # Ou seja: alguém acrescentou um campo ao lado de dois registrados e não o
-            # registrou, e nenhum portão alcançava isso (o gate de publish lê YAML de
-            # skill, não código Python). Foi o censo do ContextStore que achou.
-            #
-            # Removida em vez de declarada, por três razões somadas: `core.*` é o
-            # namespace FECHADO da plataforma, onde cada nome precisa ser merecido; o
-            # valor identifica uma PESSOA; e `write_context_tags` grava `agents_only`,
-            # então sem `tipo` no cadastro não há máscara por papel nem classe LGPD —
-            # o id do revisor ficava legível a todo agente da sessão. Declarar um campo
-            # sem consumidor teria custado a mesma linha e mantido a exposição.
-            "core.workflow.round_echoed":    body.round,
-        })
-
-    # Resume workflow (fire-and-forget)
-    if result.get("resume_token"):
-        await _resume_workflow(result["resume_token"], tenant_id)
+    # REV-02 (2026-09-30): saíram daqui as escritas de `core.workflow.review_decision` e
+    # `round_echoed`. O único leitor era `skill_revisao_treplica_v1` (motor legado,
+    # removido); as entradas continuam declaradas no cadastro, pelo histórico mascarado.
 
     return row
 
@@ -2562,8 +2505,9 @@ async def review_result(result_id: str, tenant_id: str, body: ReviewBody, reques
 @router.post("/v1/evaluation/results/{result_id}/lock")
 async def lock_result_endpoint(result_id: str, body: LockBody, request: Request) -> dict:
     """
-    Permanently lock a result. Called by the evaluation_lock MCP tool (congelar_resultado
-    workflow step), with X-Service-Token. (Dizia também "Admin operators (X-Admin-Token)":
+    Permanently lock a result. Called by the evaluation_lock MCP tool, with X-Service-Token.
+    (O único fluxo que a chamava — step congelar_resultado de `skill_revisao_treplica_v1` —
+    saiu na REV-02; a tool fica como capacidade de serviço.) (Dizia também "Admin operators (X-Admin-Token)":
     nenhum código conferia esse token aqui.)
     Returns 409 if result is already locked (idempotent for workflow retries).
     """
@@ -2667,16 +2611,6 @@ async def create_contestation(body: ContestationCreate, request: Request) -> dic
         contestation_reason=body.contestation_reason,
     )
 
-    # Write to ContextStore so workflow choice step can see "contested"
-    if result.get("session_id"):
-        await _write_ctx(redis_client, body.tenant_id, result["session_id"], {
-            "core.workflow.review_decision": "contested",
-            "core.workflow.round_echoed":    body.round,
-        })
-
-    # Resume workflow (fire-and-forget)
-    if result.get("resume_token"):
-        await _resume_workflow(result["resume_token"], body.tenant_id)
 
     await _kafka.emit_contestation_opened(
         producer, settings.evaluation_topic,

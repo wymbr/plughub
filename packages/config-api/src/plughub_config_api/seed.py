@@ -1018,35 +1018,19 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Source: evaluation-api/config.py"
     ),
     (
-        "evaluation", "default_review_skill_id",
-        "skill_revisao_simples_v1",
-        "Default review workflow skill used when a campaign does not specify "
-        "review_workflow_skill_id. Options: skill_revisao_simples_v1 (1 round), "
-        "skill_revisao_treplica_v1 (up to 3 rounds). "
-        "Source: evaluation-api/router.py"
-    ),
-    (
         "evaluation", "review_deadline_hours",
         48,
         "Default SLA in business hours for each review round. "
-        "Maps to timeout_hours in the suspend step of the review workflow skill. "
-        "Source: evaluation-api/config.py, skill_revisao_*.yaml"
+        "Source: evaluation-api/config.py"
     ),
     (
         "evaluation", "contestation_deadline_hours",
         72,
         "Default SLA in business hours for each contestation window. "
-        "Maps to timeout_hours in the aguardar_contestacao step of the treplica workflow. "
-        "Source: skill_revisao_treplica_v1.yaml"
+        "Source: evaluation-api/config.py"
     ),
-    (
-        "evaluation", "auto_lock_on_workflow_complete",
-        True,
-        "When True, a workflow.completed event triggers automatic locking of the "
-        "evaluation result (lock_reason=completed). Set to False to require explicit "
-        "POST /v1/evaluation/results/{id}/lock by an operator. "
-        "Source: evaluation-api/main.py"
-    ),
+    # REV-02 (2026-09-30): saíram `default_review_skill_id` e `auto_lock_on_workflow_complete`,
+    # que só o motor de revisão por workflow (removido) lia.
     # config-consolidation item 7b: moved from env EVALUATOR_POOL / REPLAY_SPEED_FACTOR
     # (session-replayer). Consumed by session-replayer at startup via GET /config/evaluation.
     (

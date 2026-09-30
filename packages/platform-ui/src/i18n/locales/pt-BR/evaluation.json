@@ -143,8 +143,6 @@
       "nameExample": "Ex: Avaliação SAC — Abril 2026",
       "formLabel": "Formulário *",
       "selectForm": "Selecione um formulário",
-      "reviewSkillLabel": "Skill de revisão",
-      "noWorkflow": "Nenhuma (sem workflow)",
       "descriptionLabel": "Descrição",
       "samplingRules": "Regras de Sampling",
       "samplingMode": {
@@ -175,10 +173,8 @@
       "preReviewPool": "Pool de pré-revisão",
       "curationRules": "Regras de curadoria",
       "curationRulesHint": "— quais avaliações entram em curadoria humana",
-      "noSkillSelected": "(nenhuma skill selecionada)",
       "authority": "Alçada",
       "autoLockTimeout": "Bloquear resultado automaticamente ao expirar prazo",
-      "skillInfo": "Skill: {{skill}} — define o número real de rounds e timeouts. Os valores acima são usados como fallback e exibição na UI.",
       "evaluationPoolLabel": "Pool avaliado",
       "selectPool": "Todos os pools",
       "evaluationCalendarLabel": "Calendário de SLA",
@@ -203,8 +199,6 @@
       "reviewerIA": "Reviewer IA",
       "autoReview": "Auto-revisão: {{enabled|Sim|Não}}",
       "threshold": "Threshold: {{threshold}}",
-      "skillReview": "Skill de revisão",
-      "noWorkflow": "Sem workflow configurado",
       "contestationPolicy": "Política de Contestação",
       "maxRounds": "Máx. rounds: {{rounds}}",
       "reviewDeadline": "Prazo por round: {{hours}}h",
@@ -255,10 +249,6 @@
       "statSigma":  "±{{n}}σ",
       "statNaPct":  "N/A > {{pct}}%",
       "statRate":   "{{pct}}%"
-    },
-    "workflowSkills": {
-      "skill_revisao_simples_v1":  "Revisão simples (1 round, 48h)",
-      "skill_revisao_treplica_v1": "Tréplica (até 3 rounds, 48h/72h) — Arc 13"
     },
     "reviewerTypes": {
       "human":        "Humano — revisor humano sempre",

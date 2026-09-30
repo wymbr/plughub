@@ -33,7 +33,7 @@ O Config API armazena configurações em PostgreSQL com cache Redis (TTL 60 s). 
 | `pricing` | unit_prices por recurso, reserve_markup_pct, billing_cycle_day, currency | pricing-api |
 | `ai_gateway` | Rotação multi-conta, throttle TTL, evaluation_model, fallback OpenAI | ai-gateway |
 | `agent_activity` | pause_reasons (motivos de pausa de agentes humanos) | platform-ui, mcp-server-plughub |
-| `evaluation` | workflow_context_ttl_s, default_review_skill_id, prazos de revisão/contestação | evaluation-api |
+| `evaluation` | workflow_context_ttl_s, prazos de revisão/contestação | evaluation-api |
 | `dashboards` | default_template_id, allow_user_customization, max_cards_per_dashboard | platform-ui |
 
 ## NamespaceEditor

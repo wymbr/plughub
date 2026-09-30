@@ -150,7 +150,6 @@ evaluation_context_resolve|nenhuma|divida|divida de defesa-em-profundidade, deci
 evaluation_lock|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
 evaluation_pre_review_submit|token|ok|verifica session_token assinado
 evaluation_publish|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)
-evaluation_review_submit|token|ok|verifica session_token assinado
 evaluation_submit|token|ok|verifica session_token assinado
 evaluation_threads_get|token|ok|verifica session_token assinado
 form_get|nenhuma|divida|divida de defesa-em-profundidade, decidida na CAP-10 (2026-09-12)

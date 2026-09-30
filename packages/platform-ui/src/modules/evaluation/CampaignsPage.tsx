@@ -161,11 +161,6 @@ interface CreateModalProps {
   editing?: EvaluationCampaign | null   // null/undefined = criar; objeto = editar (PUT)
 }
 
-const WORKFLOW_SKILL_VALUES = [
-  'skill_revisao_simples_v1',
-  'skill_revisao_treplica_v1',
-] as const
-
 const AUTHORITY_OPTIONS = [
   { value: 'supervisor', label: 'Supervisor' },
   { value: 'manager',    label: 'Gerente' },
@@ -358,7 +353,6 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
     pre_review_enabled?: boolean; pre_review_agent_pool?: string | null
     reviewer_model_profile?: string | null
   }
-  const [workflowSkillId, setWorkflowSkillId] = useState(editing?.review_workflow_skill_id ?? 'skill_revisao_simples_v1')
   const [enableContestation, setEnableContestation] = useState(!!editing?.contestation_policy)
   const [maxRounds, setMaxRounds] = useState(String(_cp.max_rounds ?? '3'))
   const [contestDeadlineHours, setContestDeadlineHours] = useState(String(_cp.contest_deadline_hours ?? '72'))
@@ -381,8 +375,10 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // When choosing Arc 13 workflow, auto-enable contestation defaults
-  const isArc13Skill = workflowSkillId === 'skill_revisao_treplica_v1'
+  // REV-02 (2026-09-30): os campos do Arc 13 (tipo e modelo de revisor, pré-revisão e regras
+  // de curadoria) eram ligados pela escolha da skill LEGADA `skill_revisao_treplica_v1` — um
+  // motor inerte decidindo o que a tela do caminho vivo mostrava. O seletor saiu com o motor;
+  // os campos seguem o bloco de contestação, onde já moravam, e a curadoria vale sempre.
 
   const submit = async () => {
     if (!name || !formId) { setError(t('campaigns.modal.errorRequired')); return }
@@ -394,7 +390,6 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
         await updateCampaign(editing.campaign_id, TENANT, {
           name,
           description,
-          review_workflow_skill_id: workflowSkillId || undefined,
           evaluation_pool_id:     evaluationPoolId     || undefined,
           evaluator_pool:         evaluatorPool,   // '' limpa (volta ao default global)
           evaluation_calendar_id: evaluationCalendarId || undefined,
@@ -417,7 +412,7 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
             contest_deadline_hours: parseInt(contestDeadlineHours),
             review_deadline_hours:  parseInt(reviewDeadlineHours),
             auto_lock_on_timeout:   autoLockOnTimeout,
-            reviewer_type:          isArc13Skill ? reviewerType : undefined,
+            reviewer_type:          reviewerType,
             use_business_hours:     useBusinessHours || undefined,
             pre_review_enabled:     preReviewEnabled || undefined,
             pre_review_agent_pool:  preReviewEnabled ? preReviewPool || null : undefined,
@@ -434,7 +429,6 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
         name,
         description,
         status: 'draft',
-        review_workflow_skill_id: workflowSkillId || undefined,
         evaluation_pool_id:     evaluationPoolId     || undefined,
         evaluator_pool:         evaluatorPool,   // '' limpa (volta ao default global)
         evaluation_calendar_id: evaluationCalendarId || undefined,
@@ -457,7 +451,7 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
           contest_deadline_hours: parseInt(contestDeadlineHours),
           review_deadline_hours:  parseInt(reviewDeadlineHours),
           auto_lock_on_timeout:   autoLockOnTimeout,
-          reviewer_type:          isArc13Skill ? reviewerType : undefined,
+          reviewer_type:          reviewerType,
           use_business_hours:     useBusinessHours || undefined,
           pre_review_enabled:     preReviewEnabled || undefined,
           pre_review_agent_pool:  preReviewEnabled ? preReviewPool || null : undefined,
@@ -465,7 +459,7 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
       }, accessToken)
 
       // Save curation sampling rules if Arc 13 and enabled
-      if (isArc13Skill && showCurationRules && campaign?.campaign_id) {
+      if (showCurationRules && campaign?.campaign_id) {
         await saveCurationSamplingRules(campaign.campaign_id, curationRules, accessToken).catch(() => {})
       }
 
@@ -508,20 +502,6 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
                 <option value="">{t('campaigns.modal.selectForm')}</option>
                 {forms.filter(f => f.status === 'active').map(f => (
                   <option key={f.form_id} value={f.form_id}>{f.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-muted mb-1">{t('campaigns.modal.reviewSkillLabel')}</label>
-              <select
-                className="w-full border border-border-strong rounded px-3 py-1.5 text-sm"
-                value={workflowSkillId}
-                onChange={e => setWorkflowSkillId(e.target.value)}
-              >
-                <option value="">{t('campaigns.modal.noWorkflow')}</option>
-                {WORKFLOW_SKILL_VALUES.map(v => (
-                  <option key={v} value={v}>{t(`campaigns.workflowSkills.${v}`, v)}</option>
                 ))}
               </select>
             </div>
@@ -710,7 +690,7 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
               <div className="bg-primary-light border border-primary/20 rounded p-3 space-y-3 mt-2">
 
                 {/* Arc 13 — reviewer_type */}
-                {isArc13Skill && (
+                {(
                   <div>
                     <label className="block text-xs font-semibold text-muted mb-1">
                       {t('campaigns.modal.reviewerType')}
@@ -728,7 +708,7 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
                 )}
 
                 {/* R8d — reviewer model profile (≠ avaliador, descorrelaciona viés de modelo) */}
-                {isArc13Skill && (
+                {(
                   <div>
                     <label className="block text-xs font-semibold text-muted mb-1">
                       {t('campaigns.modal.reviewerModelProfile')}
@@ -748,7 +728,7 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
                 )}
 
                 {/* Deadlines grid */}
-                <div className={`grid gap-3 ${isArc13Skill ? 'grid-cols-3' : 'grid-cols-3'}`}>
+                <div className={`grid gap-3 grid-cols-3`}>
                   <div>
                     <label className="block text-xs text-muted mb-1">{t('campaigns.modal.maxRounds')}</label>
                     <input
@@ -811,7 +791,7 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
                 </div>
 
                 {/* Arc 13 — pre-review */}
-                {isArc13Skill && (
+                {(
                   <div className="border-t border-primary/30 pt-3">
                     <label className="flex items-center gap-2 text-sm font-medium text-dark mb-2">
                       <input
@@ -844,15 +824,12 @@ function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalPr
                   </div>
                 )}
 
-                <p className="text-xs text-primary">
-                  {t('campaigns.modal.skillInfo', { skill: workflowSkillId || t('campaigns.modal.noSkillSelected') })}
-                </p>
               </div>
             )}
           </div>
 
           {/* Arc 13 — Curation sampling rules (only for Arc 13 workflow) */}
-          {isArc13Skill && (
+          {(
             <div className="border-t pt-3">
               <label className="flex items-center gap-2 text-sm font-semibold text-muted mb-2">
                 <input
@@ -1246,25 +1223,6 @@ export default function CampaignsPage() {
                 </div>
               </div>
 
-              {/* Workflow skill */}
-              <div className="bg-white border rounded p-3">
-                <div className="text-xs font-semibold text-muted mb-2">{t('campaigns.detail.skillReview')}</div>
-                {selected.review_workflow_skill_id ? (
-                  <div className="text-dark space-y-1">
-                    <div className="font-mono text-xs bg-surface-muted border rounded px-2 py-1 break-all">
-                      {selected.review_workflow_skill_id}
-                    </div>
-                    {WORKFLOW_SKILL_VALUES.includes(selected.review_workflow_skill_id as any) && (
-                      <div className="text-xs text-muted">
-                        {t(`campaigns.workflowSkills.${selected.review_workflow_skill_id}`, selected.review_workflow_skill_id)}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-xs text-muted-light italic">{t('campaigns.detail.noWorkflow')}</div>
-                )}
-              </div>
-
               {/* Evaluation pool */}
               <div className="bg-white border rounded p-3">
                 <div className="text-xs font-semibold text-muted mb-2">{t('campaigns.detail.evaluationPool')}</div>
@@ -1358,13 +1316,11 @@ export default function CampaignsPage() {
               </div>
             </div>
 
-            {/* Arc 13 — Curation sampling rules panel */}
-            {selected.review_workflow_skill_id === 'skill_revisao_treplica_v1' && (
-              <CurationSamplingRulesDetailPanel
-                campaignId={selected.campaign_id}
-                accessToken={accessToken}
-              />
-            )}
+            {/* Arc 13 — Curation sampling rules panel (REV-02: toda campanha) */}
+            <CurationSamplingRulesDetailPanel
+              campaignId={selected.campaign_id}
+              accessToken={accessToken}
+            />
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-muted-light gap-3">

@@ -143,8 +143,6 @@
       "nameExample": "Ex: SAC Evaluation — April 2026",
       "formLabel": "Form *",
       "selectForm": "Select a form",
-      "reviewSkillLabel": "Review Skill",
-      "noWorkflow": "None (no workflow)",
       "descriptionLabel": "Description",
       "samplingRules": "Sampling Rules",
       "samplingMode": {
@@ -175,10 +173,8 @@
       "preReviewPool": "Pre-review pool",
       "curationRules": "Curation sampling rules",
       "curationRulesHint": "— which evaluations enter human curation",
-      "noSkillSelected": "(no skill selected)",
       "authority": "Authority",
       "autoLockTimeout": "Lock result automatically on timeout",
-      "skillInfo": "Skill: {{skill}} — defines actual number of rounds and timeouts. The values above are used as fallback and UI display.",
       "evaluationPoolLabel": "Evaluation Pool",
       "selectPool": "All pools",
       "evaluationCalendarLabel": "SLA Calendar",
@@ -203,8 +199,6 @@
       "reviewerIA": "Reviewer IA",
       "autoReview": "Auto-review: {{enabled|Yes|No}}",
       "threshold": "Threshold: {{threshold}}",
-      "skillReview": "Review Skill",
-      "noWorkflow": "No workflow configured",
       "contestationPolicy": "Contestation Policy",
       "maxRounds": "Max. rounds: {{rounds}}",
       "reviewDeadline": "Review deadline: {{hours}}h",
@@ -255,10 +249,6 @@
       "statSigma":  "±{{n}}σ",
       "statNaPct":  "N/A > {{pct}}%",
       "statRate":   "{{pct}}%"
-    },
-    "workflowSkills": {
-      "skill_revisao_simples_v1":  "Simple review (1 round, 48h)",
-      "skill_revisao_treplica_v1": "Tréplica (up to 3 rounds, 48h/72h) — Arc 13"
     },
     "reviewerTypes": {
       "human":        "Human — human reviewer always",
