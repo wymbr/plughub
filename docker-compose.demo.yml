@@ -68,7 +68,6 @@
 #       (inclui POST /from-instance/{id}); Kafka topic journey.events.
 #     mcp-server-plughub: tools journey_start, journey_link_session, journey_merge.
 #     skill-flow-worker: flag creates_journey:true no YAML auto-cria Journey.
-#     collect step: propaga journey_id para sessões filhas via collect.events.
 #     analytics-api: consumer journey.events → journey_events ClickHouse;
 #       GET /reports/journeys (KPI strip por skill_id);
 #       4 display endpoints: journey-active-count, journey-resolution-rate,
@@ -521,7 +520,6 @@ services:
           usage.cycle_reset
           sentiment.updated
           calendar.events
-          collect.events
           journey.merges
           agent.events
           session.signals

@@ -14,8 +14,8 @@ O que NÃO é sessão SIP não tem destino e é DITO, nunca entregue a um palpit
   * texto, menu e digitação → WARNING nomeando a sessão (conteúdo perdido);
   * `session_closed` → INFO: é o caso normal de a chamada já ter desligado antes do aviso chegar.
 
-Não há `handle_collect_event`: ligação ativa pela perna SIP é a VOZ-33, e o consumidor de
-`collect.events` recusa `voice` nomeando.
+Coleta ativa pela perna SIP (ligação SAINTE) é a VOZ-33. O consumidor de `collect.events`,
+que recusava `voice` nomeando, saiu com o tópico na WFL-02 (2026-09-30).
 """
 from __future__ import annotations
 

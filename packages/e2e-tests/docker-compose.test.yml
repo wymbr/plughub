@@ -101,7 +101,6 @@ services:
           agent.lifecycle agent.registry.events \
           registry.changed config.changed \
           usage.events sentiment.updated \
-          collect.events \
           mcp.audit; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \
             --topic $$topic --partitions 3 --replication-factor 1

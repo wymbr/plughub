@@ -176,7 +176,6 @@ services:
           usage.events
           sentiment.updated
           calendar.events
-          collect.events
         "
         for topic in $$TOPICS; do
           $$KAFKA --bootstrap-server $$BROKER --create --if-not-exists \

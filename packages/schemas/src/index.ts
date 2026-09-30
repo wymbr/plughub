@@ -572,12 +572,6 @@ export {
   WorkflowFailedSchema,
   WorkflowCancelledSchema,
   WorkflowEventSchema,
-  CollectStatusSchema,
-  CollectRequestedSchema,
-  CollectSentSchema,
-  CollectRespondedSchema,
-  CollectTimedOutSchema,
-  CollectEventSchema,
 } from "./workflow"
 
 export type {
@@ -598,12 +592,6 @@ export type {
   WorkflowFailed,
   WorkflowCancelled,
   WorkflowEvent,
-  CollectStatus,
-  CollectRequested,
-  CollectSent,
-  CollectResponded,
-  CollectTimedOut,
-  CollectEvent,
 } from "./workflow"
 
 // ── Agent Registry ───────────────────────────

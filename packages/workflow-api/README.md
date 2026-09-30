@@ -33,10 +33,10 @@ e não servia nada.
 ## O que ficou de pé, de propósito
 
 - As tabelas do schema `workflow` (vazio não custa; apagar schema é outra decisão).
-- O código deste pacote, que dois gates ainda leem como evidência estática
-  (`probe_collect_masked_requirement.sh` lê `kafka_emitter.py` e `router.py`).
-- O tópico `collect.events` e os consumidores dele (channel-gateway e analytics-api):
-  o único produtor era `kafka_emitter.emit_collect_requested` deste pacote, com zero
-  chamadores já antes da aposentadoria. A cadeia é a `WFL-02` no `pending.md`.
+- O código deste pacote.
+- *(Até a WFL-02, também o tópico `collect.events` e os consumidores dele no
+  channel-gateway e na analytics-api: o único produtor era
+  `kafka_emitter.emit_collect_requested` deste pacote, com zero chamadores. A cadeia
+  inteira saiu em 2026-09-30, por decisão do dono.)*
 
 Ver `CHANGELOG.md` § 2026-09-30 (5).

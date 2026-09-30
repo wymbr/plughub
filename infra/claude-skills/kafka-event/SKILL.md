@@ -405,7 +405,6 @@ export async function emitApprovalCompleted(
 | `sentiment.updated` | ai-gateway | analytics-api | Arc 3 |
 | `conversations.participants` | orchestrator-bridge | analytics-api | Arc 3 |
 | `workflow.events` | workflow-api | skill-flow-worker | Arc 4 |
-| `collect.events` | workflow-api | analytics-api | Arc 4 |
 | `config.changed` | config-api | orchestrator-bridge, routing-engine | Arc 4 |
 
 ## Padrão de Zod — tipos compostos

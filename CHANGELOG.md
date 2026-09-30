@@ -1,5 +1,52 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (9) — WFL-02: a cadeia `collect.events` sai inteira — ela nunca transportou um evento
+
+**O que a ficha registrava:** depois da WFL-01, o tópico `collect.events` tinha dois consumidores e
+nenhum produtor. A medição de hoje foi mais longe: ele **nunca** teve evento.
+- o único produtor, `workflow_api.kafka_emitter.emit_collect_requested`, tinha zero chamadores já
+  antes da aposentadoria;
+- `collect_events` no ClickHouse: 0 linhas;
+- no Redis: nenhuma chave `channel:*:pending_collect`.
+
+**Decisão do dono (2026-09-30): remover a cadeia inteira.** Dar-lhe produtor criaria um segundo
+mecanismo de coleta ativa ao lado do vivo (`WebhookAdapter.handle_collect`, que cria a sessão-filha
+e cuja eleição de canal já pergunta a capacidade desde a NIV-02).
+
+**O que saiu:**
+- channel-gateway: o consumidor `_collect_events_consumer` e a task dele, `_dispatch_collect_event`,
+  `select_channel`, o `handle_collect_event` de WhatsApp, SMS e e-mail, e a leitura de
+  `pending_collect` no inbound dos três — uma chave que ninguém escrevia, lida a cada mensagem.
+  `channel_satisfies` fica, porque a eleição viva o usa;
+- analytics-api: a assinatura do tópico, `parse_collect_event`, o insert e o formatador de linha,
+  `GET /reports/campaigns` (sem tela chamando; a de Avaliação chama a rota homônima da
+  evaluation-api) e a linha dela no `_SCOPE_DEBT`. A tabela `collect_events` fica, vazia;
+- `@plughub/schemas`: `CollectEventSchema` e os quatro eventos e o status dele. A platform-ui
+  perdeu duas interfaces que ninguém importava;
+- o tópico no `kafka-init` dos compose `demo` e `full` e no `docker-compose.test.yml` do e2e, e a
+  linha na tabela do skill `kafka-event`.
+
+**O gate mudou de pergunta.** `probe_collect_masked_requirement.sh` (NIV-02) vigiava o ramo morto
+ganhar produtor (E) e contava duas casas de eleição de canal, uma delas morta (D). Agora D exige
+UMA casa (a viva), e E reprova a volta de qualquer peça: um `handle_collect_event` num adaptador ou
+o `main.py` assinando o tópico. Contraprova no tree, cada uma desfeita em seguida:
+- recriar `select_channel` → D vermelho;
+- recriar um `handle_collect_event` → E vermelho;
+- recolocar o nome do tópico no `main.py` → E vermelho.
+
+**Achado de passagem** (registrado como tarefa à parte, não corrigido aqui): na varredura anônima, a
+rota pública de anexo (`serve_attachment`) responde **500** para `file_id` que não é UUID; o certo é
+404.
+
+**Estado vivo:** os tópicos `workflow.events` e `collect.events` continuam existindo no broker do
+demo, criados antes, e ficam sem produtor nem consumidor. Instalação nova não os cria mais.
+
+**Instrumentos:**
+- suítes: channel-gateway 1461, analytics-api 873;
+- typecheck de `@plughub/schemas` e da platform-ui limpo;
+- gates verdes: o da NIV-02 (reescrito), varredura anônima (com a linha de `/reports/campaigns`
+  removida da base), supervisão de task, ledger e cobertura do manifesto.
+
 ## 2026-09-30 (8) — AUD-06: a eliminação do titular — anonimiza em todas as lojas do dossiê e mantém a métrica
 
 **O que faltava:** o titular podia pedir o dossiê de acesso (AUD-03), mas não a eliminação (LGPD

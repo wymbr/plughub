@@ -47,9 +47,6 @@ from .attachment_store import (
 )
 from .attachment_expiry import run_attachment_expiry
 from .sip_trunk_watch import run_sip_trunk_watch
-from .channel_capability_registry import (
-    select_channel,
-)
 from . import speech_catalog
 from .config import get_settings, Settings
 # Verificador canônico (passo 3 da consolidação, 2026-08-28). O import vem DIRETO do
@@ -387,135 +384,10 @@ async def lifespan(app: FastAPI):
                 "ver RET-12.", sessao, tenant,
             )
 
-    async def _collect_events_consumer() -> None:
-        """
-        Kafka consumer for collect.events — all channels (Arc 16 Phase D).
-
-        Routes collect.requested events to the correct adapter:
-          - Explicit channel: dispatched directly to the matching adapter.
-          - No channel (capability-based): calls select_channel() with the
-            event's `requires[]` list against all registered adapter channels,
-            then dispatches to the selected adapter.
-
-        The adapter's handle_collect_event() sends the collect prompt as a message via the
-        channel's native API. `voice` has none: the outbound call was the retired Twilio leg,
-        and the SIP one does not exist yet (VOZ-33).
-
-        Note: Only collect.requested events require dispatch; collect.sent /
-        collect.responded / collect.timed_out are purely for analytics and are
-        handled by analytics-api.
-
-        Arc 19 Fase F: Journey entity eliminated — capability selection no longer
-        reads journey ContextStore.
-        """
-        from aiokafka import AIOKafkaConsumer
-        import json as _json
-
-        _adapters_with_collect = {
-            k: v for k, v in _channel_adapters.items()
-            if hasattr(v, "handle_collect_event")
-        }
-
-        consumer = AIOKafkaConsumer(
-            "collect.events",
-            bootstrap_servers = settings.kafka_brokers,
-            group_id          = f"{settings.kafka_group_id}-collect",
-            auto_offset_reset = "latest",
-        )
-        await consumer.start()
-        try:
-            async for msg in consumer:
-                try:
-                    event = _json.loads(msg.value)
-                    # Only process collect.requested — other subtypes are for analytics
-                    if event.get("event_type") != "collect.requested":
-                        continue
-                    await _dispatch_collect_event(event, _adapters_with_collect)
-                except Exception as exc:
-                    logger.warning("collect.events consumer error: %s", exc)
-        finally:
-            await consumer.stop()
-
-    async def _dispatch_collect_event(
-        event:    dict,
-        adapters: dict,
-    ) -> None:
-        """
-        Dispatch a single collect.requested event to the correct channel adapter.
-
-        Channel resolution order:
-          1. event["channel"] is set → use it directly.
-          2. event["channel"] is absent/empty + event["requires"] is non-empty →
-             call select_channel() against all registered adapter channels and
-             dispatch to the best matching one.
-          3. Fallback: warn and drop.
-
-        Arc 19 Fase F: Journey entity eliminated — capability-based selection
-        no longer reads journey ContextStore; it operates directly on the set of
-        registered adapters.
-        """
-        channel  = (event.get("channel") or "").strip()
-        requires = event.get("requires") or []   # list[str] from CollectStep
-
-        # ── Step 1: explicit channel ───────────────────────────────────────────
-        if channel:
-            adapter = adapters.get(channel)
-            if adapter is None:
-                # Nunca em silêncio: quem pediu a coleta fica suspenso até o timeout do `collect`,
-                # e este log é o único lugar que diz por quê (ex.: `voice` desde a VOZ-03 —
-                # ligação ativa é a VOZ-33).
-                logger.error(
-                    "collect.requested: canal %s NÃO faz coleta ativa — nenhum adapter com "
-                    "handle_collect_event; a instância %s só sai pelo timeout do collect",
-                    channel, event.get("instance_id"),
-                )
-                return
-            logger.info(
-                "collect.requested: explicit channel=%s instance=%s",
-                channel, event.get("instance_id"),
-            )
-            await adapter.handle_collect_event(event)
-            return
-
-        # ── Step 2: capability-based selection ────────────────────────────────
-        if not requires:
-            logger.warning(
-                "collect.requested: no channel and no requires list — cannot route "
-                "(instance=%s)", event.get("instance_id"),
-            )
-            return
-
-        # Use all registered adapter channels as the available set.
-        all_channels = list(adapters.keys())
-
-        chosen = select_channel(
-            available_channels = all_channels,
-            requires           = requires,
-            preferred_channel  = None,
-        )
-        if chosen is None:
-            logger.warning(
-                "collect.requested: no channel satisfies requires=%s "
-                "from registered=%s (instance=%s)",
-                requires, all_channels, event.get("instance_id"),
-            )
-            return
-
-        adapter = adapters.get(chosen)
-        if adapter is None:
-            logger.debug(
-                "collect.requested: selected channel=%s has no handle_collect_event "
-                "— skipping", chosen,
-            )
-            return
-
-        enriched = {**event, "channel": chosen}
-        logger.info(
-            "collect.requested: capability-selected channel=%s (requires=%s) "
-            "instance=%s",
-            chosen, requires, event.get("instance_id"),
-        )
-        await adapter.handle_collect_event(enriched)
+    # WFL-02 (2026-09-30): o consumidor de `collect.events` e o `_dispatch_collect_event`
+    # SAÍRAM. O tópico nunca teve evento — o único produtor, na workflow-api (fóssil),
+    # tinha zero chamadores. A coleta ATIVA viva é `WebhookAdapter.handle_collect`
+    # (sessão-filha), cuja eleição de canal já pergunta a capacidade (NIV-02).
 
     # config-http-propagation arc: load the webchat config namespace from the
     # Config API (HTTP) at startup, then keep it fresh via config.changed events.
@@ -574,7 +446,6 @@ async def lifespan(app: FastAPI):
     pubsub_task     = supervisionar("registry-pubsub", asyncio.create_task(_registry.start_pubsub_listener()))
     call_relay_task = supervisionar("call-relay",      asyncio.create_task(_call_relay.listen()))
     outbound_task   = supervisionar("outbound",        asyncio.create_task(outbound.run()))
-    collect_task    = supervisionar("collect-events",  asyncio.create_task(_collect_events_consumer()))
     parking_task    = supervisionar("session-parking", asyncio.create_task(_session_parking_consumer()))
     config_task     = supervisionar("config-changed",  asyncio.create_task(_config_changed_consumer()))
     # Invalidação do cache de endereço por `registry.changed`. Sem isto, revogar ou
@@ -625,7 +496,6 @@ async def lifespan(app: FastAPI):
     pubsub_task.cancel()
     call_relay_task.cancel()
     outbound_task.cancel()
-    collect_task.cancel()
     parking_task.cancel()
     config_task.cancel()
     invalidation_task.cancel()

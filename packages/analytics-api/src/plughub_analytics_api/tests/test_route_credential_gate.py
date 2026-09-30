@@ -46,7 +46,6 @@ from plughub_analytics_api.sessions import router as sessions_router
 ROTAS_REPORTS = [
     "/reports/usage?tenant_id=t",
     "/reports/workflows?tenant_id=t",
-    "/reports/campaigns?tenant_id=t",
     "/reports/evaluations?tenant_id=t",
     "/reports/evaluations/summary?tenant_id=t",
     "/reports/evaluations/quality?tenant_id=t",

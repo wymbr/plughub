@@ -5,6 +5,10 @@ NIV-02 (ADR `adr-agent-flow-single-authored-level.md` § F2).
 
 POR QUE ESTE MÓDULO EXISTE
 ==========================
+*(Nota de 2026-09-30, WFL-02: o ramo morto descrito no item 1 — `_dispatch_collect`,
+`select_channel` e o tópico `collect.events` — foi REMOVIDO. O raciocínio abaixo fica
+como registro de por que a exigência mora no caminho vivo.)*
+
 `select_channel()` existe, é pura, é testada e **nunca recebeu uma exigência
 real**: nenhum YAML do repositório declara `requires:`. A leitura óbvia disso é
 *"falta o insumo"* — e ela está pela metade. Medido em 2026-09-03, antes de

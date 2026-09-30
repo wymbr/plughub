@@ -694,7 +694,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `evaluation.events` | evaluation-api (requested), session-replayer (requested), mcp-server-plughub (completed) | session-replayer + routing-engine (requested→avaliador); evaluation-api (completed→ingest, persiste result+instance); analytics-api → ClickHouse |
 | ~~`workflow.events`~~ | **REMOVIDO 2026-09-30 (WFL-01)** — produtor (workflow-api) e consumidores (skill-flow-worker, evaluation-api) aposentados; `analytics.workflow_events` fica, vazia | — |
 | `menu.wake` | mcp-server-plughub (`menu_submit`, resposta de hook) · routing-engine (agente de fila) | orchestrator-bridge — acorda o `menu` estacionado (DUR-01 F3); publicado DEPOIS do `LPUSH`, chave `session_id` |
-| `collect.events` | **nenhum** — o único produtor era a workflow-api (fóssil), e já sem chamador; ver `WFL-02` | channel-gateway, analytics-api |
+| ~~`collect.events`~~ | **REMOVIDO 2026-09-30 (WFL-02)** — nunca carregou um evento; consumidores, `select_channel` e schema saíram. A coleta ativa viva é `WebhookAdapter.handle_collect` (sessão-filha) | — |
 | `session.signals` | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse |
 | `journey.merges` | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` (Journey J3) |
 | `speech.metrics` | Channel Gateway (bot leg WebRTC) · `speech-check` (verificação ativa, VOZ-23) | analytics-api → ClickHouse `speech_stream_summaries` / `speech_collect_outcomes` / `speech_checks` — só números, nunca texto (VOZ-22) |
@@ -716,7 +716,6 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 | `queue.position_updated` | `QueuePositionUpdatedEventSchema` | `platform-events.ts` |
 | `conversations.routed/queued` | `ConversationRoutedEventSchema` | `platform-events.ts` |
 | `agent.lifecycle` | `AgentLifecycleEventSchema` | `platform-events.ts` |
-| `collect.events` | `CollectEventSchema` | `workflow.ts` |
 | `usage.events` | `UsageEventSchema` | `usage.ts` |
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` |

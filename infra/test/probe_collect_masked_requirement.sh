@@ -34,11 +34,13 @@
 #   C  o ramo do `channel:` FIXO deixar de conferir capacidade          → VERMELHO
 #      (é o bypass: um portão que o autor desliga escrevendo uma linha)
 #   D  uma TERCEIRA casa de eleição de canal aparecer                   → VERMELHO
-#   E  o ramo morto GANHAR produtor sem que alguém decida sobre ele     → VERMELHO
-#      Não é defeito hoje; é o gatilho. Enquanto `emit_collect_requested`
-#      tiver zero chamadores, `select_channel` é inalcançável e a única
-#      eleição que decide é a do webhook. Ganhando produtor, passam a existir
-#      duas outra vez — e aí a escolha tem de ser feita, não herdada.
+#   E  o ramo morto VOLTAR (consumidor de `collect.events` no gateway ou
+#      `handle_collect_event` num adaptador)                           → VERMELHO
+#      Até 2026-09-30 este ramo vigiava o ramo morto ganhar produtor. A WFL-02
+#      o REMOVEU (decisão do dono): consumidor, `_dispatch_collect`,
+#      `select_channel`, os três `handle_collect_event` e o tópico. Voltar
+#      qualquer peça recria a segunda eleição de canal que a NIV-02 existe para
+#      não ter.
 #
 # ⚠️ **A** roda contra a IMAGEM, nunca contra o container: `docker exec` responde
 # sobre a instância, que pode ter estado posto à mão. Imagem sem o módulo ⇒
@@ -81,8 +83,8 @@ SAIDA="$(cd "$RAIZ" && python3 - <<'PY'
 import ast, io, re
 
 W  = "packages/channel-gateway/src/plughub_channel_gateway/adapters/webhook.py"
-KE = "packages/workflow-api/src/plughub_workflow_api/kafka_emitter.py"
-RT = "packages/workflow-api/src/plughub_workflow_api/router.py"
+MAIN = "packages/channel-gateway/src/plughub_channel_gateway/main.py"
+ADAPT = "packages/channel-gateway/src/plughub_channel_gateway/adapters"
 
 wsrc = io.open(W, encoding="utf-8").read()
 warv = ast.parse(wsrc)
@@ -126,11 +128,10 @@ else:
           "`channel: sms` no YAML volta a contornar a exigencia inteira")
 
 # ── D — quantas casas ELEGEM canal ───────────────────────────────────────────
-# Eleger = decidir qual canal recebe o contato. Duas hoje, e e conhecido:
-# `_negotiate_channel` (viva) e `select_channel` (ramo morto). Uma TERCEIRA e
-# reprovacao — a NIV-01 acabou de pagar o preco de duas casas no inventario.
+# Eleger = decidir qual canal recebe o contato. UMA casa desde a WFL-02
+# (2026-09-30), que removeu `select_channel` com o ramo morto. Uma SEGUNDA e
+# reprovacao — a NIV-01 pagou o preco de duas casas no inventario.
 CASAS = {
-    "channel_capability_registry.select_channel": "morta (sem produtor de evento)",
     "adapters.webhook._negotiate_channel":        "VIVA",
 }
 achadas = []
@@ -151,23 +152,23 @@ if extra or sumiu:
     print("ERRO|D|casas de eleicao mudaram: novas=%s sumidas=%s (declare no probe "
           "e diga QUAL decide)" % (extra or "-", sumiu or "-"))
 else:
-    print("OK|D|2 casas de eleicao, ambas declaradas (1 viva, 1 em ramo morto)")
+    print("OK|D|1 casa de eleicao de canal, a viva")
 
-# ── E — o ramo morto continua sem produtor ───────────────────────────────────
-chamadas = 0
-for cam in (KE, RT):
-    a = ast.parse(io.open(cam, encoding="utf-8").read())
-    chamadas += sum(1 for n in ast.walk(a)
-                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                    and n.func.id == "emit_collect_requested")
-if chamadas == 0:
-    print("OK|E|emit_collect_requested segue com ZERO chamadores — select_channel "
-          "inalcancavel, uma unica eleicao decide")
+# ── E — o ramo morto nao volta ─────────────────────────────────────────────────
+import os
+voltou = []
+if '"collect.events"' in io.open(MAIN, encoding="utf-8").read():
+    voltou.append("main.py assina collect.events")
+for nome in sorted(os.listdir(ADAPT)):
+    if nome.endswith(".py"):
+        arv = ast.parse(io.open(os.path.join(ADAPT, nome), encoding="utf-8").read())
+        if func(arv, "handle_collect_event") is not None:
+            voltou.append("adapters/%s define handle_collect_event" % nome)
+if not voltou:
+    print("OK|E|o ramo morto de collect.events segue removido (WFL-02)")
 else:
-    print("ERRO|E|emit_collect_requested ganhou %d chamador(es): `collect.requested` "
-          "volta a fluir e passam a existir DUAS eleicoes de canal decidindo. "
-          "Escolha uma (a viva ja consulta capacidade; a outra usa `requires[]` "
-          "declarado e nao derivado) antes de religar o produtor" % chamadas)
+    print("ERRO|E|o ramo de collect.events VOLTOU: %s — sao duas eleicoes de canal "
+          "outra vez; a viva ja consulta capacidade (NIV-02)" % "; ".join(voltou))
 PY
 )"
 

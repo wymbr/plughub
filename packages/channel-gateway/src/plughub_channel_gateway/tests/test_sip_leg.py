@@ -202,7 +202,7 @@ class TestSaida:
             await r.deliver_text({"session_id": "sessao-sem-sala"})
         assert ad.deliver_text.await_count == 1
         assert "NAO entregue" in caplog.text and "sessao-sem-sala" in caplog.text
-        # `voice` não faz coleta ativa: o consumidor de collect.events o recusa nomeando (VOZ-33)
+        # `voice` não faz coleta ativa (VOZ-33); o consumidor de collect.events saiu na WFL-02
         assert not hasattr(r, "handle_collect_event")
 
     async def test_session_closed_depois_da_chamada_nao_e_alarme(self, monkeypatch, caplog):

@@ -41,7 +41,6 @@ from .reports_query import (
     _to_csv,
     query_agent_performance_daily,
     query_agent_performance_report,
-    query_campaigns_report,
     query_contact_insights_report,
     query_agents_compare,
     query_agents_cross,
@@ -112,7 +111,7 @@ router = APIRouter(prefix="/reports")
 # credencial, e o eixo tem censo próprio: `probe_route_credential_coverage.sh`.
 #
 # O que NÃO mudou: nenhuma delas RECORTA LINHA. As `query_*` que servem estas doze
-# (`query_usage_report`, `query_workflows_report`, `query_campaigns_report`,
+# (`query_usage_report`, `query_workflows_report`,
 # `query_evaluations_*`, `query_customer_360`, `query_agent_events_*`,
 # `query_evaluator_calibration`) **não aceitam `accessible_pools`** — não é um
 # argumento que alguém esqueceu de passar, é filtro que não existe. Fabricá-lo aqui
@@ -200,14 +199,6 @@ _SCOPE_EXEMPT: dict[str, str] = {
 # degradacao proprio, por duas tabelas sem produtor. Nao se paga isso agora. O que
 # torna a recusa viavel depois e o claim `unrestricted` chegar ao admin (AUT-15).
 _SCOPE_DEBT: dict[str, str] = {
-    "/campaigns":
-        "`collect_events` nao tem `session_id` nem `pool_id` (so `collect_token` e "
-        "`instance_id`). Ha um caminho concebivel — `instance_id` -> "
-        "`workflow_events.pool_id` — e ele NAO foi construido: as duas tabelas estao "
-        "VAZIAS aqui, entao o join entraria sem nunca ter sido visto funcionar, que e "
-        "como nasceu o filtro de canal da F2 (o que filtrava esvaziando, 683 testes "
-        "verdes). GATILHO: quando `collect_events` tiver produtor, o join vira "
-        "exercivel e o recorte e obrigatorio.",
     "/evaluator-calibration":
         "`calibration_events` so carrega `evaluator_id`; o eixo do relatorio e o "
         "AVALIADOR. Pode ser que a resposta certa seja isencao DECIDIDA (como "
@@ -631,53 +622,8 @@ async def report_workflows(
     return _respond(data, format, f"workflows_{_today_label()}.csv")
 
 
-# ─── GET /reports/campaigns ───────────────────────────────────────────────────
-
-@router.get("/campaigns")
-async def report_campaigns(
-    request:     Request,
-    tenant_id:   str           = Query(...,    description="Tenant identifier"),
-    from_dt:     Optional[str] = Query(None,   description="ISO8601 start (default: 7d ago)"),
-    to_dt:       Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
-    campaign_id: Optional[str] = Query(None,   description="Filter by campaign_id"),
-    channel:     Optional[str] = Query(None,   description="Filter by channel"),
-    status:      Optional[str] = Query(None,   description="Filter by collect status"),
-    page:        int           = Query(1,       ge=1),
-    page_size:   int           = Query(100,     ge=1),
-    format:      str           = Query("json",  pattern="^(json|csv)$"),
-    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
-) -> Response:
-    """
-    Campaign collect event list + per-campaign aggregate summary.
-
-    status filter: requested | sent | responded | timed_out
-
-    Response includes:
-      data    — individual collect_event rows
-      summary — per-campaign aggregate (total, responded, timed_out, response_rate_pct, avg_elapsed_ms)
-      meta    — page / total / date range
-
-    Columns: collect_token, tenant_id, instance_id, flow_id, campaign_id,
-             step_id, target_type, channel, interaction, status,
-             send_at, responded_at, elapsed_ms, timestamp
-    """
-    ps = _clamp_page_size(page_size, format == "csv")
-    data = await query_campaigns_report(
-        client    = request.app.state.store.new_client(),
-        database  = request.app.state.store._database,
-        tenant_id = tenant_id,
-        from_dt   = from_dt,
-        to_dt     = to_dt,
-        campaign_id = campaign_id,
-        channel     = channel,
-        status      = status,
-        page      = page,
-        page_size = ps,
-    )
-    # For CSV export, flatten summary into data
-    if format == "csv":
-        return _respond({"data": data.get("data", [])}, format, f"campaigns_{_today_label()}.csv")
-    return _respond(data, format, f"campaigns_{_today_label()}.csv")
+# ─── GET /reports/campaigns — REMOVIDA em 2026-09-30 (WFL-02) ─────────────────
+# Lia `collect_events`, que nunca teve linha; nenhuma tela a chamava.
 
 
 # ─── GET /reports/resources/tokens ────────────────────────────────────────────

@@ -7,9 +7,10 @@ Arc 19 Fase F — Journey entity eliminated; capability selection now operates
                 directly on registered adapters (no journey ContextStore I/O).
 
 The registry maps each channel name to the set of ChannelCapability values it
-supports.  When a collect step omits an explicit channel and supplies a
-`requires[]` list instead, the Channel Gateway calls select_channel() against
-the full list of registered adapter channels.
+supports. `channel_satisfies` is the only reader: the live collect election
+(`WebhookAdapter._negotiate_channel`, NIV-02) asks it whether each candidate channel
+can do what the interaction collects. (`select_channel`, fed by the `collect.events`
+topic that never carried an event, was removed in WFL-02 on 2026-09-30.)
 
 Spec: docs/arcos/arc19-unified-session-model.md
 """
@@ -159,46 +160,9 @@ def channel_satisfies(channel: str, requires: list[str]) -> bool:
     return all(req in caps for req in requires)
 
 
-def select_channel(
-    available_channels: list[str],
-    requires:           list[str],
-    preferred_channel:  str | None,
-) -> str | None:
-    """
-    Select the best outbound channel for a collect step.
-
-    Algorithm:
-      1. If *preferred_channel* is in *available_channels* and satisfies
-         all *requires*, return it immediately.
-      2. Otherwise sort *available_channels* by _CHANNEL_PRIORITY and return
-         the first that satisfies *requires*.
-      3. Return None if no channel satisfies the requirements.
-
-    Args:
-        available_channels: Channels the customer has been reached on in this journey
-                            (read from journey.available_channels in ContextStore).
-        requires:           Capability strings from the collect step's `requires[]` field.
-        preferred_channel:  journey.canal_preferido — the most recently active channel.
-    """
-    if not available_channels:
-        return None
-
-    # Step 1 — honour preference when it works
-    if preferred_channel and preferred_channel in available_channels:
-        if channel_satisfies(preferred_channel, requires):
-            return preferred_channel
-
-    # Step 2 — pick highest-priority qualifying channel
-    priority = {ch: i for i, ch in enumerate(_CHANNEL_PRIORITY)}
-    ordered  = sorted(
-        available_channels,
-        key=lambda ch: priority.get(ch, len(_CHANNEL_PRIORITY)),
-    )
-    for ch in ordered:
-        if channel_satisfies(ch, requires):
-            return ch
-
-    return None
+# `select_channel` SAIU em 2026-09-30 (WFL-02): o único chamador era o consumidor de
+# `collect.events`, que nunca recebeu evento. A eleição viva é
+# `WebhookAdapter._negotiate_channel`, que usa `channel_satisfies` acima.
 
 
 # REMOVED (Arc 19 Fase F) — Journey entity eliminated

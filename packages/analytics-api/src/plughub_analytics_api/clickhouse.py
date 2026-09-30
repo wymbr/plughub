@@ -1882,19 +1882,6 @@ class AnalyticsStore:
             self._insert, "sentiment_events", [_sentiment_row(row)], self._SENTIMENT_COLS
         )
 
-    # collect_events
-
-    _COLLECT_EVENT_COLS = [
-        "collect_token", "tenant_id", "instance_id", "flow_id", "campaign_id",
-        "step_id", "target_type", "channel", "interaction", "status",
-        "send_at", "responded_at", "elapsed_ms", "timestamp", "date",
-    ]
-
-    async def insert_collect_event(self, row: dict) -> None:
-        await asyncio.to_thread(
-            self._insert, "collect_events", [_collect_event_row(row)], self._COLLECT_EVENT_COLS
-        )
-
     # participation_intervals
 
     _PARTICIPATION_COLS = [
@@ -2583,26 +2570,6 @@ def _sentiment_row(d: dict) -> list:
         _today_utc(ts),
     ]
 
-
-def _collect_event_row(d: dict) -> list:
-    ts = d.get("timestamp")
-    return [
-        d.get("collect_token", ""),
-        d.get("tenant_id", ""),
-        d.get("instance_id", ""),
-        d.get("flow_id", ""),
-        d.get("campaign_id"),
-        d.get("step_id", ""),
-        d.get("target_type", ""),
-        d.get("channel", ""),
-        d.get("interaction", ""),
-        d.get("status", ""),
-        _parse_dt(d.get("send_at")),
-        _parse_dt(d.get("responded_at")),
-        d.get("elapsed_ms"),
-        _parse_dt(ts) or datetime.utcnow(),
-        _today_utc(ts),
-    ]
 
 
 def _participation_row(d: dict) -> list:

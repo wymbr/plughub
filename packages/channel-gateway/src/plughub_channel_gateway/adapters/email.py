@@ -203,26 +203,7 @@ class EmailAdapter(ChannelAdapter):
                 attachments = parsed.attachments,
             )
 
-            # ── Arc 16 Phase D: capability-based pending collect ─────────────
-            pending_collect_key = f"channel:email:{parsed.from_address}:pending_collect"
-            pending_raw = await self._redis.get(pending_collect_key)
-            if pending_raw:
-                pending = json.loads(pending_raw)
-                await self._redis.delete(pending_collect_key)
-                payload = NormalizedInboundEvent(
-                    message_id       = str(uuid.uuid4()),
-                    contact_id       = parsed.from_address,
-                    session_id       = session_id,
-                    channel          = "email",
-                    content_type     = "text",
-                    author           = MessageAuthor(type="customer"),
-                    content          = MessageContent(type="text", text=new_text),
-                    context_snapshot = ContextSnapshot(),
-                ).model_dump()
-                payload["collect_token"] = pending.get("collect_token")
-                payload["response_text"] = new_text
-                await self._publish_inbound(payload)
-            elif (form_raw := await self._redis.get(f"channel:email:{session_id}:menu_collect")):
+            if (form_raw := await self._redis.get(f"channel:email:{session_id}:menu_collect")):
                 # NIV-15: resposta a um campo do formulário em curso — era gravado e NINGUÉM lia
                 await self._advance_form(session_id, parsed.from_address, json.loads(form_raw), new_text)
             elif (escolha := await self._pending.answer(
@@ -582,58 +563,6 @@ class EmailAdapter(ChannelAdapter):
         if session_id:
             await self._redis.delete(f"channel:email:{session_id}:menu_collect")
             await self._pending.forget(session_id)
-
-    # ── Collect event — outbound capability-based (Arc 16 Phase D) ───────────
-
-    async def handle_collect_event(self, event: dict) -> None:
-        """
-        Send a collect prompt to the customer via email and store a pending_collect
-        key so the inbound handler can correlate the customer's reply.
-
-        Called by _collect_events_consumer() when collect.requested arrives with
-        channel="email" (explicit or capability-selected).
-
-        Redis key: channel:email:{contact_id}:pending_collect
-          → {collect_token, journey_id, pool_id}  TTL = 30 min
-        """
-        contact_id    = event.get("target", "")
-        collect_token = event.get("collect_token", "")
-        journey_id    = event.get("journey_id")
-        prompt        = event.get("prompt", "")
-        tenant_id     = event.get("tenant_id", self._settings.tenant_id)
-        pool_id       = event.get("pool_id", "")
-
-        if not contact_id or not prompt:
-            logger.warning(
-                "email handle_collect_event: missing target or prompt "
-                "(collect_token=%s)", collect_token,
-            )
-            return
-
-        # Reuse deliver_text with a minimal payload
-        await self.deliver_text({
-            "contact_id": contact_id,
-            "session_id": "",   # no session yet for capability-based collect
-            "tenant_id":  tenant_id,
-            "content":    {"text": prompt},
-            "metadata":   {"subject": "Mensagem do atendimento"},
-        })
-
-        pending = {
-            "collect_token": collect_token,
-            "journey_id":    journey_id,
-            "pool_id":       pool_id,
-        }
-        await self._redis.setex(
-            f"channel:email:{contact_id}:pending_collect",
-            1_800,  # 30 min
-            json.dumps(pending),
-        )
-
-        logger.info(
-            "email collect sent: contact=%s collect_token=%s journey=%s",
-            contact_id, collect_token, journey_id,
-        )
 
     # ── MCP tool support ──────────────────────────────────────────────────────
 

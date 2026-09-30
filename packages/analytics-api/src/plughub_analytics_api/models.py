@@ -14,7 +14,6 @@ Topics consumed:
   usage.events               → usage_events (passthrough)
   sentiment.updated          → sentiment_events (+ segment_id enrichment via SegmentEnricher)
   queue.position_updated     → queue_events (position update)
-  collect.events             → collect_events (lifecycle)
   conversations.participants → participation_intervals (participant joined / left)
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
   mcp.audit                  → session_timeline (+ segment_id enrichment via SegmentEnricher)
@@ -971,43 +970,9 @@ def parse_queue_position(payload: dict[str, Any]) -> dict | None:
 # foi medida VAZIA no demo; o ramo que a lê em `/reports/events` ficou sem fonte.
 
 
-# ─── collect.events ───────────────────────────────────────────────────────────
-
-# Maps collect event_type → status
-_COLLECT_STATUS_MAP = {
-    "collect.requested": "requested",
-    "collect.sent":      "sent",
-    "collect.responded": "responded",
-    "collect.timed_out": "timed_out",
-}
-
-
-def parse_collect_event(payload: dict[str, Any]) -> dict | None:
-    """Maps collect.* events → collect_events table."""
-    event_type    = payload.get("event_type")
-    tenant_id     = payload.get("tenant_id")
-    instance_id   = payload.get("instance_id")
-    collect_token = payload.get("collect_token")
-    if not event_type or not tenant_id or not instance_id or not collect_token:
-        return None
-
-    return {
-        "table":         "collect_events",
-        "collect_token": collect_token,
-        "tenant_id":     tenant_id,
-        "instance_id":   instance_id,
-        "flow_id":       payload.get("flow_id", ""),
-        "campaign_id":   payload.get("campaign_id"),
-        "step_id":       payload.get("step_id", ""),
-        "target_type":   payload.get("target_type", ""),
-        "channel":       payload.get("channel", ""),
-        "interaction":   payload.get("interaction", ""),
-        "status":        _COLLECT_STATUS_MAP.get(event_type, event_type),
-        "send_at":       payload.get("send_at"),
-        "responded_at":  payload.get("timestamp") if event_type == "collect.responded" else None,
-        "elapsed_ms":    payload.get("elapsed_ms"),
-        "timestamp":     payload.get("timestamp") or _now(),
-    }
+# ─── collect.events — REMOVIDO em 2026-09-30 (WFL-02) ─────────────────────────
+# O tópico nunca carregou um evento (o único produtor, na workflow-api, tinha zero
+# chamadores). `collect_events` (ClickHouse) fica de pé, vazia.
 
 
 # ─── conversations.participants ───────────────────────────────────────────────

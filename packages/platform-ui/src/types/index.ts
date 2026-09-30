@@ -541,36 +541,6 @@ export interface InstallationResource {
   updated_at:      string
 }
 
-// ── Campaigns / Collect ────────────────────────────────────────────────────────
-
-export interface CampaignSummary {
-  campaign_id:       string
-  total:             number
-  responded:         number
-  timed_out:         number
-  sent:              number
-  requested:         number
-  response_rate_pct: number
-  avg_elapsed_ms:    number
-}
-
-export interface CollectEvent {
-  collect_token: string
-  tenant_id:     string
-  instance_id:   string | null
-  flow_id:       string
-  campaign_id:   string | null
-  step_id:       string
-  target_type:   string
-  channel:       string
-  interaction:   string
-  status:        string
-  send_at:       string | null
-  responded_at:  string | null
-  elapsed_ms:    number | null
-  timestamp:     string
-}
-
 // ── Evaluation (Arc 6) ─────────────────────────────────────────────────────────
 
 export interface EvaluationCriterion {
