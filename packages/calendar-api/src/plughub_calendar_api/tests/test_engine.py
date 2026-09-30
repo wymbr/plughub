@@ -519,3 +519,34 @@ class TestRecurringHolidays:
         assert nxt is not None
         local = nxt.astimezone(pytz.timezone(SAO_PAULO))
         assert local.strftime("%A %H:%M") == "Tuesday 08:00"
+
+
+# ── CAL-03: calendário SEMPRE ABERTO (`slots is None` = dia inteiro) ──────────
+
+class TestAlwaysOpenDurations:
+    """O engine lia o dia inteiro aberto como "sem janela": `add_business_duration` girava
+    até o teto de iterações e devolvia `from_dt` (prazo imediato), e `business_duration`
+    contava zero. Achado ao testar a rota por `calendar_id` da CAL-03."""
+
+    def _cal(self):
+        c = make_cal()
+        c["always_open"] = True
+        return [c], {}
+
+    def test_soma_horas_corridas(self):
+        assocs, hols = self._cal()
+        assert add_business_duration(assocs, hols, dt(2026, 9, 30, 10), 5) == dt(2026, 9, 30, 15)
+
+    def test_atravessa_a_meia_noite_e_o_fim_de_semana(self):
+        assocs, hols = self._cal()
+        # sexta 20:00 + 30 h = domingo 02:00 — sempre aberto não pula fim de semana
+        assert add_business_duration(assocs, hols, dt(2026, 10, 2, 20), 30) == dt(2026, 10, 4, 2)
+
+    def test_business_duration_conta_as_horas(self):
+        assocs, hols = self._cal()
+        assert business_duration(assocs, hols, dt(2026, 9, 30, 10), dt(2026, 9, 30, 15)) == 5.0
+
+    def test_controle_calendario_comercial_continua_pulando_o_fechado(self):
+        """Sem `always_open`, o comercial (seg–sex 08–18) segue pulando: qua 17:00 + 2 h = qui 09:00."""
+        assocs, hols = [make_cal()], {}
+        assert add_business_duration(assocs, hols, dt(2026, 9, 30, 17), 2) == dt(2026, 10, 1, 9)

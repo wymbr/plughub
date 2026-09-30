@@ -1,5 +1,36 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (3) — CAL-03: o prazo em horas úteis da avaliação existe, e o motor soma horas em calendário sempre aberto
+
+**O defeito da ficha:** `sampling.compute_expires_at` (expiração da instância) e
+`compute_deadline_at` (prazo de contestação) chamavam `POST /v1/calendar/business-deadline`, rota
+que a calendar-api **nunca teve**. Todo 404 caía no relógio de parede, e só havia log na exceção:
+status de erro passava calado.
+
+**O conserto decidido (rota por `calendar_id`):**
+- `POST /v1/engine/add-business-duration-calendar`, gêmea de `is-open-calendar` e
+  `next-open-slot-calendar`. Calendário inexistente ou de outro tenant responde **404**, nunca o
+  relógio de parede que o motor devolve para lista vazia de associações;
+- na evaluation, **um helper** (`_business_deadline`) serve aos dois prazos, com `X-Service-Token`.
+  A queda para relógio de parede continua (prazo não pode travar amostragem), mas agora é
+  **WARNING** com o calendário e o status.
+
+**O que o teste da rota achou no motor:** o calendário `always_open` marca o dia inteiro como
+`slots None`, e o `add_business_duration` lia esse `None` como "sem janela". Ele pulava para a
+próxima abertura, que é o próprio instante, e **girava até o teto de iterações** (~525 mil), para
+devolver o `from_dt` sem somar nada: prazo **imediato**. O `business_duration` contava **zero**. Os
+dois foram corrigidos. A suíte da calendar-api caiu de 5,6 s para 0,8 s, e a contraprova (desfazer o
+conserto) volta a levar 32 s e fica vermelha. O mesmo motor calcula o prazo do step `suspend` no
+skill-flow-service, que também herda o conserto.
+
+**Medido ao vivo:** anônimo 401; serviço com calendário inexistente, 404 `calendar not found`;
+varredura anônima verde com a linha nova.
+
+**Instrumentos:**
+- calendar-api 85: rota (soma, 404, 401) e motor (sempre aberto soma, atravessa meia-noite e fim de
+  semana, `business_duration` conta, e o controle comercial segue pulando o fechado);
+- evaluation 256: os dois prazos usam a rota nova com credencial, e a falha degrada **logando**.
+
 ## 2026-09-30 (2) — WHK-02: os WebSockets públicos de contato só aceitam endereço que existe
 
 **O defeito:** `/ws/chat/{x}` (webchat, publicado na borda) e `/ws/webrtc/{x}` resolviam `x` como

@@ -368,6 +368,42 @@ def blind_decide(flagged: bool, cfg: dict[str, Any], instance_id: str) -> tuple[
 
 # ─── Deadline calculation ─────────────────────────────────────────────────────
 
+async def _business_deadline(
+    calendar_api_url: str, calendar_id: str, from_dt: datetime, hours: float, what: str,
+) -> datetime | None:
+    """Prazo em horas úteis pelo calendário da campanha, ou None quando não deu (CAL-03).
+
+    Uma casa para os dois prazos (expiração da instância e contestação). Chamava
+    `POST /v1/calendar/business-deadline`, rota que a calendar-api nunca teve: todo 404
+    caía no relógio de parede e só havia log na EXCEÇÃO — status de erro passava calado.
+    Agora qualquer falha é WARNING nomeando o calendário, o status e que o prazo virou
+    relógio de parede. Degradar continua certo (prazo não pode travar a amostragem);
+    degradar em silêncio, não.
+    """
+    from .config import settings as _cfg   # AUT-63: o motor exige credencial
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{calendar_api_url}/v1/engine/add-business-duration-calendar",
+                headers={"X-Service-Token": _cfg.calendar_service_token} if _cfg.calendar_service_token else {},
+                json={"calendar_id": calendar_id, "from_dt": from_dt.isoformat(), "hours": hours},
+            )
+    except Exception as exc:  # noqa: BLE001 — o motivo vai ao log
+        logger.warning("prazo de %s: calendar-api inalcançável (calendário %s) — relógio de parede: %s",
+                       what, calendar_id, exc)
+        return None
+    if resp.status_code != 200:
+        logger.warning("prazo de %s: calendar-api respondeu HTTP %s para o calendário %s — "
+                       "relógio de parede", what, resp.status_code, calendar_id)
+        return None
+    deadline_str = (resp.json() or {}).get("deadline")
+    if not deadline_str:
+        logger.warning("prazo de %s: resposta sem `deadline` (calendário %s) — relógio de parede",
+                       what, calendar_id)
+        return None
+    return datetime.fromisoformat(deadline_str)
+
+
 async def compute_expires_at(
     campaign: dict[str, Any],
     calendar_api_url: str,
@@ -395,26 +431,8 @@ async def compute_expires_at(
     if not calendar_id:
         return now + timedelta(hours=ttl_hours)
 
-    # Call calendar-api: POST /v1/calendar/business-deadline
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{calendar_api_url}/v1/calendar/business-deadline",
-                json={
-                    "calendar_id": calendar_id,
-                    "from_dt": now.isoformat(),
-                    "hours": ttl_hours,
-                },
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                deadline_str = data.get("deadline")
-                if deadline_str:
-                    return datetime.fromisoformat(deadline_str)
-    except Exception as exc:
-        logger.warning("calendar-api call failed, using wall-clock: %s", exc)
-
-    return now + timedelta(hours=ttl_hours)
+    dl = await _business_deadline(calendar_api_url, calendar_id, now, ttl_hours, "expiração")
+    return dl or now + timedelta(hours=ttl_hours)
 
 
 async def compute_deadline_at(
@@ -434,19 +452,8 @@ async def compute_deadline_at(
     calendar_id = campaign.get("evaluation_calendar_id")
     if not use_business or not calendar_id:
         return now + timedelta(hours=hours)
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{calendar_api_url}/v1/calendar/business-deadline",
-                json={"calendar_id": calendar_id, "from_dt": now.isoformat(), "hours": hours},
-            )
-            if resp.status_code == 200:
-                deadline_str = resp.json().get("deadline")
-                if deadline_str:
-                    return datetime.fromisoformat(deadline_str)
-    except Exception as exc:
-        logger.warning("calendar-api deadline call failed, wall-clock: %s", exc)
-    return now + timedelta(hours=hours)
+    dl = await _business_deadline(calendar_api_url, calendar_id, now, hours, "contestação")
+    return dl or now + timedelta(hours=hours)
 
 
 # ─── T15 — janela de despacho (calendar window) ───────────────────────────────

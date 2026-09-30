@@ -393,6 +393,21 @@ def add_business_duration(
         local = _to_local(current, tz)
         _status, slots = _resolve_date(primary, h_index, local.date())
 
+        # `slots is None` = dia INTEIRO aberto (always_open). Até 2026-09-30 (CAL-03) este
+        # laço lia o None como "sem janela", pulava para a próxima abertura — que é o
+        # próprio instante — e girava até o teto de iterações, devolvendo `from_dt` sem
+        # somar nada: calendário sempre aberto dava prazo IMEDIATO.
+        if _status != "closed" and slots is None:
+            day_end = tz.localize(datetime.combine(local.date() + timedelta(days=1), time(0, 0)))
+            available = day_end - current
+            if available >= remaining:
+                current = current + remaining
+                remaining = timedelta(0)
+            else:
+                remaining -= available
+                current = day_end
+            continue
+
         if _status == "closed" or not slots or not _in_slots(local.time(), slots):
             # Not in a business window — jump to next open slot
             nxt = _calendar_next_open(primary, holidays_by_cal.get(primary["calendar_id"], []), current)
@@ -450,7 +465,8 @@ def business_duration(
     while current < end:
         local = _to_local(current, tz)
         _status, slots = _resolve_date(primary, h_index, local.date())
-        if _status != "closed" and slots and _in_slots(local.time(), slots):
+        # `slots is None` = dia inteiro aberto (always_open); contava ZERO até a CAL-03.
+        if _status != "closed" and (slots is None or (slots and _in_slots(local.time(), slots))):
             advance = min(step, end - current)
             total  += advance
         current += step

@@ -484,3 +484,38 @@ class TestCallerGate:
                     abertas.append(f"{method.upper()} {path} -> {r.status_code}")
         assert n >= 20, f"censo varreu só {n} rotas"
         assert not abertas, f"rotas que não recusam anônimo: {abertas}"
+
+
+class TestAddBusinessDurationCalendar:
+    """CAL-03: prazo em horas úteis por `calendar_id` — a rota que a evaluation chamava por
+    outro nome e que nunca existiu."""
+
+    def setup_method(self):
+        self.pool = _make_pool()
+        app.state.pool = self.pool
+        app.state.settings = _make_settings(jwt_secret=_SECRET, service_token=_SVC)
+        self.client = TestClient(app, raise_server_exceptions=True)
+
+    _CAL = {"id": "c1", "tenant_id": "tenant-zz", "timezone": "UTC", "always_open": True,
+            "weekly_schedule": [], "holiday_set_ids": [], "exceptions": []}
+
+    def _post(self, cal, headers=None):
+        with _patch("plughub_calendar_api.router.db_get_calendar", new=AsyncMock(return_value=cal)), \
+             _patch("plughub_calendar_api.router.db_get_holidays_for_sets", new=AsyncMock(return_value=[])):
+            return self.client.post("/v1/engine/add-business-duration-calendar",
+                                    json={"calendar_id": "c1", "from_dt": "2026-09-30T10:00:00+00:00", "hours": 5},
+                                    headers=headers if headers is not None else {"X-Service-Token": _SVC})
+
+    def test_calendario_sempre_aberto_soma_as_horas(self):
+        r = self._post(self._CAL)
+        assert r.status_code == 200, r.text
+        assert r.json()["deadline"].startswith("2026-09-30T15:00")
+
+    def test_calendario_inexistente_e_404_nunca_relogio_de_parede(self):
+        """O engine devolve relógio de parede para lista VAZIA de associações; a rota não
+        pode confundir "calendário não existe" com "sem calendário"."""
+        r = self._post(None)
+        assert r.status_code == 404
+
+    def test_anonimo_e_401(self):
+        assert self._post(self._CAL, headers={}).status_code == 401

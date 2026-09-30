@@ -505,3 +505,59 @@ class TestPassesFilters:
     def test_fails_on_any_filter(self):
         rules = {"outcome_filter": ["resolved"]}
         assert _passes_filters({"outcome": "escalated"}, rules) is False
+
+
+# ── CAL-03: prazo em horas úteis pela rota que EXISTE ─────────────────────────
+
+import logging
+from datetime import datetime, timedelta, timezone
+
+import httpx
+
+from .. import sampling as _smp
+
+
+class _Http:
+    """Troca o httpx.AsyncClient do módulo; guarda o que foi pedido."""
+
+    def __init__(self, monkeypatch, handler):
+        self.pedidos: list[httpx.Request] = []
+        real = httpx.AsyncClient
+
+        def _h(req):
+            self.pedidos.append(req)
+            return handler(req)
+        monkeypatch.setattr(_smp.httpx, "AsyncClient",
+                            lambda **kw: real(transport=httpx.MockTransport(_h), **kw))
+
+
+_CAMP = {"schedule": {"ttl_hours": 5, "business_hours": True}, "evaluation_calendar_id": "c1"}
+
+
+async def test_expiracao_usa_a_rota_por_calendario_com_credencial(monkeypatch):
+    from ..config import settings
+    monkeypatch.setattr(settings, "calendar_service_token", "svc-cal", raising=False)
+    http = _Http(monkeypatch, lambda req: httpx.Response(200, json={"deadline": "2030-01-01T00:00:00+00:00"}))
+    dl = await _smp.compute_expires_at(_CAMP, "http://cal:3700")
+    assert dl == datetime(2030, 1, 1, tzinfo=timezone.utc)
+    (req,) = http.pedidos
+    assert req.url.path == "/v1/engine/add-business-duration-calendar"
+    assert req.headers["x-service-token"] == "svc-cal"
+
+
+async def test_contestacao_usa_a_mesma_casa(monkeypatch):
+    http = _Http(monkeypatch, lambda req: httpx.Response(200, json={"deadline": "2030-01-01T00:00:00+00:00"}))
+    camp = {"contestation_policy": {"use_business_hours": True}, "evaluation_calendar_id": "c1"}
+    dl = await _smp.compute_deadline_at(camp, "http://cal:3700", hours=8)
+    assert dl == datetime(2030, 1, 1, tzinfo=timezone.utc)
+    assert http.pedidos[0].url.path == "/v1/engine/add-business-duration-calendar"
+
+
+async def test_falha_degrada_para_relogio_de_parede_e_LOGA(monkeypatch, caplog):
+    """O defeito medido: 404 caía no relógio de parede SEM log. Degradar é certo; calado, não."""
+    _Http(monkeypatch, lambda req: httpx.Response(404, json={"detail": "calendar not found"}))
+    antes = datetime.now(tz=timezone.utc)
+    with caplog.at_level(logging.WARNING):
+        dl = await _smp.compute_expires_at(_CAMP, "http://cal:3700")
+    assert antes + timedelta(hours=5) <= dl <= datetime.now(tz=timezone.utc) + timedelta(hours=5)
+    assert any("HTTP 404" in r.message and "c1" in r.message for r in caplog.records)

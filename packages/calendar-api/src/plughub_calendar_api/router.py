@@ -589,6 +589,40 @@ async def engine_next_open_slot_calendar(
     return {"next_open": nxt.isoformat() if nxt else None, "calendar_id": calendar_id}
 
 
+class AddBusinessDurationCalendarRequest(BaseModel):
+    calendar_id: str
+    from_dt:     str   # ISO 8601
+    hours:       float
+
+
+@router.post("/v1/engine/add-business-duration-calendar")
+async def engine_add_business_duration_calendar(
+    body: AddBusinessDurationCalendarRequest, request: Request, pool=Depends(_pool),
+) -> dict[str, Any]:
+    """Prazo `hours` horas úteis depois de `from_dt`, pelo calendário `calendar_id` (CAL-03).
+
+    Gêmea de `is-open-calendar` e `next-open-slot-calendar`: quem guarda um ponteiro de
+    calendário (a campanha de avaliação, com `evaluation_calendar_id`) pergunta por ele,
+    sem montar associação. A evaluation chamava `POST /v1/calendar/business-deadline`, rota
+    que nunca existiu, e todo prazo em horário comercial caía no relógio de parede em
+    silêncio. Calendário inexistente (ou de outro tenant) é 404 — nunca o relógio de parede,
+    que é o que o engine devolve para lista vazia de associações.
+    """
+    from_dt = datetime.fromisoformat(body.from_dt)
+    if from_dt.tzinfo is None:
+        from_dt = pytz.UTC.localize(from_dt)
+    assocs, hols = await _load_engine_data_by_calendar(pool, body.calendar_id, request)
+    if assocs is None:
+        raise HTTPException(404, "calendar not found")
+    deadline = add_business_duration(assocs, hols, from_dt, body.hours)
+    return {
+        "from_dt":     body.from_dt,
+        "hours":       body.hours,
+        "deadline":    deadline.isoformat(),
+        "calendar_id": body.calendar_id,
+    }
+
+
 class AddBusinessDurationRequest(BaseModel):
     tenant_id:   str
     entity_type: str
