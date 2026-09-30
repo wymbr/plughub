@@ -21,7 +21,8 @@ Namespaces:
   dashboards         — Dashboard template management
   quality_ingest     — Per-source identity/pool/version map (R13c)
   storage            — Retenção por CLASSE de artefato do AttachmentStore (VOZ-06: call_recording)
-  retention          — Retenção por CLASSE de dado pessoal (AUD-07): original_content
+  retention          — Retenção por CLASSE de dado pessoal (AUD-07/AUD-08): original_content,
+                       conversation_content, survey_free_text
 
 Note: 'quota' namespace removed. Per-tenant limits ({tenant}:quota:*) are written
   directly by the pricing integration when a plan is activated — not seeded here.
@@ -496,10 +497,12 @@ _SEED: list[tuple[str, str, object, str]] = [
     # Decisão do dono (2026-09-30): uma chave por classe, configurável por tenant. Só
     # entra aqui a classe que TEM expurgo — chave sem leitor é promessa sem mecanismo
     # (foi o que `audit_policy.default_retention_days` e a sua cópia em `masking` foram
-    # por meses, e saíram daqui por isso). As outras classes (conteúdo mascarado,
-    # transcrição, texto livre de pesquisa) entram com o expurgo delas. A gravação de
-    # chamada tem casa própria: `storage.call_recording_retention_days`.
-    # Source: session-replayer/retention_purge.py (quem lê e valida).
+    # por meses, e saíram daqui por isso). A gravação de chamada tem casa própria:
+    # `storage.call_recording_retention_days`; a entrada de mailing, o `entry_ttl_seconds`
+    # do mailing. Não há classe "transcrição": a transcrição É a conversa (medido, AUD-08).
+    # Leitores: session-replayer/retention_purge.py (original_content + conversation_content
+    # no stream) · analytics-api/retention_job.py (conversation_content no ClickHouse) ·
+    # evaluation-api/retention_job.py (survey_free_text).
     (
         "retention", "original_content_days",
         90,
@@ -507,6 +510,23 @@ _SEED: list[tuple[str, str, object, str]] = [
         "duravel (session_stream_events). Passado o prazo, contado do momento da mensagem, o "
         "original e apagado e so o conteudo mascarado fica. Inteiro de 1 a 3650. Config-api "
         "fora ou valor invalido: o expurgo PULA o tenant e loga — nunca adivinha um prazo."
+    ),
+    (
+        "retention", "conversation_content_days",
+        365,
+        "Dias que o CONTEUDO de uma conversa fica guardado, contado do momento do evento: o "
+        "payload do stream duravel (session_stream_events: mensagens, respostas de formulario, "
+        "prompts) e, no ClickHouse, o texto das mensagens, o valor dos insights e o payload da "
+        "linha do tempo. Passado o prazo o conteudo vira marcador e as linhas de METRICA ficam "
+        "(duracoes, desfechos, contagens). Nao ha loja de transcricao a parte: a transcricao E a "
+        "conversa. Inteiro de 1 a 3650. Config-api fora ou valor invalido: o expurgo PULA o tenant."
+    ),
+    (
+        "retention", "survey_free_text_days",
+        365,
+        "Dias que o TEXTO LIVRE de uma resposta de pesquisa (open_text, verbatims e as "
+        "referencias de audio e transcricao) fica guardado, contado da resposta. A nota fica. "
+        "Inteiro de 1 a 3650. Config-api fora ou valor invalido: o expurgo PULA o tenant."
     ),
 
     # ── audit_policy ──────────────────────────────────────────────────────────

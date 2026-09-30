@@ -1355,14 +1355,16 @@ mecanismo; cada um entra com a sua feature.
   `AUD-09`). **O veto de contato sobrevive** como lápide no cadastro. Loja que falha sai nomeada
   (207, `partial` na trilha), e o cadastro de identidade é o último a sair.
 - **Retenção é POR CLASSE de dado, por tenant, no namespace `retention` do config-api** (AUD-07).
-  Hoje só `original_content_days` (90), expurgado a cada hora pelo session-replayer — o texto mora
-  DENTRO de `payload`, nunca na coluna homônima. Classe nova entra na chave JUNTO com o expurgo
-  dela; na dúvida sobre o prazo, o expurgo PULA o tenant, nunca adivinha. Gravação tem casa
-  própria: `storage.call_recording_retention_days`.
+  Três classes (AUD-08): `original_content_days` (90) · `conversation_content_days` (365, stream
+  durável + `messages`/`contact_insights`/`session_timeline`) · `survey_free_text_days` (365). O
+  conteúdo sai, a linha de métrica fica; o texto desmascarado mora DENTRO de `payload`, nunca na
+  coluna homônima. Classe nova entra na chave JUNTO com o expurgo dela; na dúvida sobre o prazo, o
+  expurgo PULA o tenant, nunca adivinha. Prazos com casa própria: gravação
+  (`storage.call_recording_retention_days`) e entrada de mailing (`entry_ttl_seconds`, que ao vencer
+  perde contatos).
 
 **Deferred:** `original_content` desmascarado (`AUD-01`) · logs `user_access` (`AUD-02`) ·
-`config_snapshot` (`AUD-04`) · demais classes de retenção (`AUD-08`) · lojas fora do dossiê e da
-eliminação (`AUD-09`).
+`config_snapshot` (`AUD-04`) · lojas fora do dossiê e da eliminação (`AUD-09`).
 
 → See [`docs/arcos/audit-lgpd.md`](docs/arcos/audit-lgpd.md)
 

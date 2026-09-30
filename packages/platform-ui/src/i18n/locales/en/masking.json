@@ -21,8 +21,8 @@
       "warning": "Warning: may capture resolved sensitive values"
     },
     "retention": {
-      "title": "Unmasked text retention",
-      "description": "Days the UNMASKED text of a message (original_content) is kept in the durable session record, counted from when it was said. After that the original is deleted and only the masked content remains. Checked every hour; 1 to 3650 days."
+      "title": "Data retention",
+      "description": "How long each class of personal data is kept, counted from when it was produced. Past the limit the content is removed and the metric rows stay. Checked hourly (stream) or daily (analytics, surveys); 1 to 3650 days."
     },
     "categories": {
       "title": "Data Type Catalog",
@@ -140,5 +140,19 @@
     "none": "No echo",
     "masked": "Masked (••••••)",
     "plain": "Plain value"
+  },
+  "retentionClass": {
+    "original_content_days": {
+      "title": "Unmasked text",
+      "description": "The unmasked text of messages (original_content) in the durable session record. After that only the masked content remains."
+    },
+    "conversation_content_days": {
+      "title": "Conversation content",
+      "description": "What was said in the conversation, masked or not: the durable session record and the analytics messages, insights and timeline. Durations, outcomes and counts stay. There is no separate transcript store — the transcript is the conversation."
+    },
+    "survey_free_text_days": {
+      "title": "Survey free text",
+      "description": "Open-text answers, verbatims and audio/transcript references of survey responses. The score stays."
+    }
   }
 }

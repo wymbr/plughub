@@ -183,8 +183,18 @@ Regras que a implementação fixou:
   junto com o dossiê que o dava como `not_found`;
 - a trilha (`audit_access_log`) fica fora da eliminação: é obrigação própria.
 
-**Retenção — `AUD-07` (feita) e `AUD-08`.** Política por classe no namespace `retention`; a
-primeira classe expurgada é o `original_content`.
+**Retenção — `AUD-07` e `AUD-08` (feitas).** Política por classe, por tenant, no namespace
+`retention`; cada chave tem o seu expurgo:
+
+| chave | default | expurgo | sai | fica |
+|---|---|---|---|---|
+| `original_content_days` | 90 | session-replayer, 1 h | `original_content` dentro do `payload` | o conteúdo mascarado |
+| `conversation_content_days` | 365 | session-replayer, 1 h · analytics-api, 1 dia | `payload` do stream durável; `messages.content`, `contact_insights.value`, `session_timeline.payload` | a linha e as métricas |
+| `survey_free_text_days` | 365 | evaluation-api, 1 dia | texto livre, verbatims, refs de áudio/transcrição | a nota |
+
+Fora do namespace, com prazo na config dona: gravação (`storage.call_recording_retention_days`) e
+entrada de mailing (`entry_ttl_seconds`; vencida, perde contatos e metadado e vira `expired`).
+Não há loja de transcrição à parte da conversa.
 
 ### Phase 5 — config_snapshot
 

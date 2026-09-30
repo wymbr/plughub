@@ -528,6 +528,14 @@ def create_app() -> FastAPI:
         ))
         logger.info("conversations.participants consumer task scheduled")
 
+        # AUD-08 — retenção do texto livre das pesquisas (uma rodada por dia).
+        from .retention_job import run_forever as _retention_loop
+        app.state.retention_task = supervisionar("retention-survey-free-text", asyncio.create_task(
+            _retention_loop(app.state.db_pool),
+            name="retention-survey-free-text",
+        ))
+        logger.info("survey free-text retention task scheduled")
+
         # T15 — dispatcher por janela de calendário (§18.4)
         if settings.dispatch_scanner_enabled:
             app.state.dispatch_scanner_task = supervisionar("dispatch-scanner", asyncio.create_task(
@@ -548,6 +556,8 @@ def create_app() -> FastAPI:
             app.state.participants_consumer_task.cancel()
         if hasattr(app.state, "dispatch_scanner_task"):
             app.state.dispatch_scanner_task.cancel()
+        if hasattr(app.state, "retention_task"):
+            app.state.retention_task.cancel()
         if hasattr(app.state, "kafka_producer"):
             await app.state.kafka_producer.stop()
         if hasattr(app.state, "redis"):

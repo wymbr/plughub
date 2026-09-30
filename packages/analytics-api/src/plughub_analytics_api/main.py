@@ -133,10 +133,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         name="performance-sync",
     ))
 
+    # ── Retenção do conteúdo de conversa (AUD-08) ──────────────────────────────
+    # Uma vez por dia, por tenant, `retention.conversation_content_days` do config-api.
+    from .retention_job import run_forever as _retention_loop
+    retention_task = supervisionar("retention-conversation-content", asyncio.create_task(
+        _retention_loop(store, settings.config_api_url),
+        name="retention-conversation-content",
+    ))
+
     yield
 
     consumer_task.cancel()
     perf_task.cancel()
+    retention_task.cancel()
     try:
         await consumer_task
     except asyncio.CancelledError:

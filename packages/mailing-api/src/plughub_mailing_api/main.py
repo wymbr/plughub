@@ -72,7 +72,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "identidade — o opt-out global (do_not_contact) nao sera lido nem gravado"
         )
     app.state.identity = IdentityClient(settings.identity_api_url, service_token=settings.identity_service_token)
+    # AUD-08 — entrada vencida deixa de guardar contatos (o `expires_at` era só filtro).
+    from .retention_job import run_forever as _retention_loop, supervise as _supervise
+    retention_task = _supervise(asyncio.create_task(_retention_loop(pool), name="retention-mailing-entries"))
     yield
+    retention_task.cancel()
     await pool.close()
 
 

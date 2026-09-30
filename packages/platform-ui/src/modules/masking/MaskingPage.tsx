@@ -8,7 +8,7 @@
  * Sections:
  *   1. Access Policy — who can see original_content (unmasked values)
  *   2. Audit Capture — whether to capture input/output in audit records
- *   3. Retention     — how long masked tokens are kept in Redis
+ *   3. Retention     — per data class (namespace `retention`, AUD-07/AUD-08)
  *   4. Rules overview — read-only list of DEFAULT_MASKING_RULES categories
  */
 import React, { useState } from 'react'
@@ -192,9 +192,12 @@ export default function MaskingPage() {
 
   const captureInput:  boolean = val('capture_input')  === true
   const captureOutput: boolean = val('capture_output') === true
-  const rawRetention = retentionEntries['original_content_days']?.value ?? retentionEntries['original_content_days']
-  // Ausente é ausente: um 30 inventado aqui esconderia o deploy sem seed.
-  const retentionDays: number | null = typeof rawRetention === 'number' ? rawRetention : null
+  // Uma chave por CLASSE de dado (AUD-08). Ausente é ausente: um número inventado aqui
+  // esconderia o deploy sem seed.
+  const retentionValue = (key: string): number | null => {
+    const raw = retentionEntries[key]?.value ?? retentionEntries[key]
+    return typeof raw === 'number' ? raw : null
+  }
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok })
@@ -216,13 +219,13 @@ export default function MaskingPage() {
     }
   }
 
-  async function saveRetention(value: number) {
+  async function saveRetention(key: string, value: number) {
     if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
-    setSaving('original_content_days')
+    setSaving(key)
     try {
-      await putConfig('retention', 'original_content_days', value, tenantId, '', adminToken)
+      await putConfig('retention', key, value, tenantId, '', adminToken)
       reloadRetention()
-      showToast(t('toast.keySaved', { key: 'retention.original_content_days' }), true)
+      showToast(t('toast.keySaved', { key: `retention.${key}` }), true)
     } catch (e) {
       showToast(String(e), false)
     } finally {
@@ -454,12 +457,18 @@ export default function MaskingPage() {
           title={t('section.retention.title')}
           desc={t('section.retention.description')}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
-            <RetentionEditor
-              value={retentionDays}
-              onSave={saveRetention}
-              saving={saving === 'original_content_days'}
-            />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 12 }}>
+            {RETENTION_CLASSES.map(key => (
+              <div key={key}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#cbd5e1' }}>{t(`retentionClass.${key}.title`)}</div>
+                <div style={{ fontSize: 12, color: '#64748b', margin: '2px 0 6px' }}>{t(`retentionClass.${key}.description`)}</div>
+                <RetentionEditor
+                  value={retentionValue(key)}
+                  onSave={v => saveRetention(key, v)}
+                  saving={saving === key}
+                />
+              </div>
+            ))}
           </div>
         </Section>
 
@@ -894,6 +903,11 @@ function ToggleCard({ label, sublabel, active, onToggle, saving, warning }: {
     </div>
   )
 }
+
+// AUD-08 — as classes com expurgo. Classe nova entra aqui JUNTO com o expurgo dela
+// (chave sem leitor é promessa sem mecanismo). Gravação de chamada e entrada de mailing
+// têm prazo em outro lugar: `storage.call_recording_retention_days` e `entry_ttl_seconds`.
+const RETENTION_CLASSES = ['original_content_days', 'conversation_content_days', 'survey_free_text_days'] as const
 
 function RetentionEditor({ value, onSave, saving }: {
   value: number | null; onSave: (v: number) => void; saving: boolean

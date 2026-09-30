@@ -1,5 +1,48 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (10) — AUD-08: o conteúdo de conversa, o texto livre de pesquisa e a entrada de mailing vencida deixam de ficar para sempre
+
+**O que a ficha registrava:** a AUD-07 deu a política por classe (namespace `retention`) e expurgou
+só o `original_content`. Pela decisão do dono de 2026-09-30, faltavam o conteúdo mascarado da
+conversa, as transcrições e o texto livre de pesquisa (**1 ano** cada), e as entradas de mailing
+que só "expiravam" como filtro. Métricas ficam sem prazo.
+
+**Regra mantida da AUD-07: a chave entra JUNTO com o expurgo que a lê.** Duas chaves novas, cada
+uma com leitor no mesmo commit:
+
+| chave | default | quem expurga | o que sai | o que fica |
+|---|---|---|---|---|
+| `conversation_content_days` | 365 | session-replayer (a cada hora) | `session_stream_events.payload` inteiro vira `{"expired": true}`, `original_content` nulo | a linha: tipo, momento, sessão |
+| | | analytics-api (a cada dia, `retention_job.py`) | `messages.content` e `contact_insights.value` → `[expired]`; `session_timeline.payload` → `{}` | durações, desfechos, contagens |
+| `survey_free_text_days` | 365 | evaluation-api (a cada dia, `retention_job.py`) | `open_text`, `verbatims`, `audio_ref`, `transcript_ref` | `signals` (a nota), canal, datas |
+
+**Transcrição não é classe à parte, e isso foi medido:** não há loja de transcrição separada da
+conversa (a fala transcrita da chamada entra no stream como mensagem), então o prazo dela é o de
+`conversation_content_days`. Criar uma terceira chave seria prazo sem leitor.
+
+**Mailing sem chave nova.** `mailing_entries.expires_at` já vem do `entry_ttl_seconds` do mailing,
+config editável na tela; o que faltava era EFEITO. Agora `mailing-api/retention_job.py`, a cada
+hora, esvazia `contacts` e `metadata` da entrada vencida e muda `active` para `expired`. Ficam a
+linha, o `customer_id` e as entregas: o fato da campanha, sem a pessoa. Duas casas para o mesmo
+prazo seriam o defeito de sempre.
+
+**Degradação igual à da AUD-07:** config-api fora ou valor fora de 1–3650 **pula** o tenant na
+rodada, com o motivo no log; chave ausente usa o default declarado e diz que usou. No ClickHouse a
+escolha foi `ALTER … UPDATE` por tenant (o prazo é por tenant, e `TTL` de tabela não é), com
+contagem antes e mutação só na tabela que tem linha vencida. Cada filtro exclui o que já expirou,
+senão toda rodada reescreveria o mesmo dado.
+
+**Tela:** a seção de retenção de `/config/masking` passou de uma chave a três, cada uma com o
+que sai e o que fica. A escrita de `retention` pede `config.masking`, e é lá que ela mora.
+
+**Testes:** replayer 66 · analytics 882 · evaluation 260 · mailing 40, na imagem. Contraprova, cada
+uma com 1 vermelho: tirar o filtro de "ainda não expirado" (analytics e replayer), mutar tabela sem
+linha vencida, apagar `signals` na pesquisa, perder o `CASE` do status no mailing. Ao vivo
+(tenant `aud08_probe`): linha de 400 dias expirada e de 1 dia intacta em cada loja; a entrada de
+mailing vencida ficou sem contatos, `expired`, com o `customer_id`. Dado real do demo: **0 linhas**
+afetadas, porque nada tem um ano. Gates: supervisão de tasks, varredura anônima de rotas, escrita
+de config, chaves i18n, ledger e invariantes de config verdes.
+
 ## 2026-09-30 (9) — WFL-02: a cadeia `collect.events` sai inteira — ela nunca transportou um evento
 
 **O que a ficha registrava:** depois da WFL-01, o tópico `collect.events` tinha dois consumidores e

@@ -21,8 +21,8 @@
       "warning": "Atenção: pode capturar valores sensíveis resolvidos"
     },
     "retention": {
-      "title": "Retenção do texto desmascarado",
-      "description": "Dias que o texto DESMASCARADO de uma mensagem (original_content) fica no registro durável da sessão, contados de quando foi dito. Depois disso o original é apagado e só o conteúdo mascarado fica. Conferido a cada hora; de 1 a 3650 dias."
+      "title": "Retenção de dados",
+      "description": "Por quanto tempo cada classe de dado pessoal fica guardada, contado de quando foi produzida. Passado o prazo, o conteúdo sai e as linhas de métrica ficam. Conferido a cada hora (stream) ou a cada dia (analytics, pesquisas); de 1 a 3650 dias."
     },
     "categories": {
       "title": "Catálogo de Tipos de Dado",
@@ -140,5 +140,19 @@
     "none": "Sem eco",
     "masked": "Mascarado (••••••)",
     "plain": "Valor em claro"
+  },
+  "retentionClass": {
+    "original_content_days": {
+      "title": "Texto desmascarado",
+      "description": "O texto desmascarado das mensagens (original_content) no registro durável da sessão. Depois disso só o conteúdo mascarado fica."
+    },
+    "conversation_content_days": {
+      "title": "Conteúdo da conversa",
+      "description": "O que foi dito na conversa, mascarado ou não: o registro durável da sessão e, no analytics, mensagens, insights e linha do tempo. Durações, desfechos e contagens ficam. Não há loja de transcrição à parte — a transcrição é a conversa."
+    },
+    "survey_free_text_days": {
+      "title": "Texto livre de pesquisa",
+      "description": "Respostas abertas, verbatims e referências de áudio/transcrição das pesquisas. A nota fica."
+    }
   }
 }

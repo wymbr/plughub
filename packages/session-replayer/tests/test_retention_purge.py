@@ -61,24 +61,32 @@ async def test_absent_key_uses_declared_default_and_says_so(caplog):
 
 # ── a rodada ───────────────────────────────────────────────────────────────────
 
-async def test_purge_uses_the_event_cutoff_per_tenant():
+async def test_purge_uses_the_event_cutoff_per_tenant_and_per_class():
     pool = _pool(["t1", "t2"])
-    pol = {"t1": rp.Retention(90, "config"), "t2": rp.Retention(7, "config")}
-    with patch.object(rp, "fetch_retention", AsyncMock(side_effect=lambda _u, t: pol[t])):
+    pol = {("t1", "original_content_days"): rp.Retention(90, "config"),
+           ("t2", "original_content_days"): rp.Retention(7, "config"),
+           ("t1", "conversation_content_days"): rp.Retention(365, "config"),
+           ("t2", "conversation_content_days"): rp.Retention(30, "config")}
+    with patch.object(rp, "fetch_retention",
+                      AsyncMock(side_effect=lambda _u, t, k, _d: pol[(t, k)])):
         out = await rp.purge_once(pool, "http://cfg", now=NOW)
-    assert out == {"t1": 3, "t2": 3}
+    assert out == {"original_content_days": {"t1": 3, "t2": 3},
+                   "conversation_content_days": {"t1": 3, "t2": 3}}
     calls = [c.args for c in pool.execute.await_args_list]
     assert calls[0][1:] == ("t1", NOW - timedelta(days=90))
     assert calls[1][1:] == ("t2", NOW - timedelta(days=7))
+    assert calls[2][1:] == ("t1", NOW - timedelta(days=365))
+    assert calls[3][1:] == ("t2", NOW - timedelta(days=30))
+    assert calls[2][0] == rp.CLASSES[1].purge_sql
 
 
 async def test_skipped_tenant_is_not_purged_but_the_others_are():
     pool = _pool(["down", "ok"])
     pol = {"down": rp.Retention(None, "skip: x"), "ok": rp.Retention(90, "config")}
-    with patch.object(rp, "fetch_retention", AsyncMock(side_effect=lambda _u, t: pol[t])):
+    with patch.object(rp, "fetch_retention", AsyncMock(side_effect=lambda _u, t, _k, _d: pol[t])):
         out = await rp.purge_once(pool, "http://cfg", now=NOW)
-    assert out == {"ok": 3}
-    assert [c.args[1] for c in pool.execute.await_args_list] == ["ok"]
+    assert out == {"original_content_days": {"ok": 3}, "conversation_content_days": {"ok": 3}}
+    assert [c.args[1] for c in pool.execute.await_args_list] == ["ok", "ok"]
 
 
 def test_purge_sql_removes_the_key_inside_payload_not_only_the_column():
@@ -106,3 +114,20 @@ async def test_run_forever_survives_a_failed_round():
         with pytest.raises(rp.asyncio.CancelledError):
             await rp.run_forever(MagicMock(), "http://cfg", interval_s=1)
     assert calls["n"] == 2
+
+
+async def test_class_default_is_used_when_the_key_is_absent():
+    with patch.object(rp.urllib.request, "urlopen", _urlopen_returning({"entries": {}})):
+        r = await rp.fetch_retention("http://cfg", "t1", "conversation_content_days", 365)
+    assert (r.days, r.source) == (365, "default")
+
+
+def test_conversation_class_wipes_the_whole_payload_not_a_list_of_keys():
+    """O conteúdo não mora numa chave só (`message`, `session_resumed`,
+    `interaction_request`); uma lista de chaves envelheceria no primeiro tipo novo."""
+    cls = {c.key: c for c in rp.CLASSES}["conversation_content_days"]
+    sql = " ".join(cls.purge_sql.split())
+    assert """SET payload = '{"expired": true}'::jsonb""" in sql
+    assert "original_content = NULL" in sql
+    assert "tenant_id = $1" in sql and "timestamp < $2" in sql
+    assert """payload <> '{"expired": true}'::jsonb""" in sql, "sem isto, reescreve a linha já expirada toda hora"
