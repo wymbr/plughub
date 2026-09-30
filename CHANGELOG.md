@@ -1,5 +1,30 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (12) — RPL-03: não era regressão — o gate pedia o vazamento que a MSK-06 fechou
+
+**O que a ficha registrava:** `probe_replay_customer_text.sh` com A1 vermelho — nenhuma linha com
+autor `customer` e o e-mail do probe na sessão do `auth_form_ia` —, lido como regressão da RPL-01.
+
+**Medido:** a linha existe, com autor `customer` e o formulário no conteúdo. O que mudou é o
+conteúdo: `masked: true`, `masked_categories: ["phone", "email_addr"]`, o e-mail aparece como
+`probe.rpl.***1***@exemplo.com`, e o cru está em `payload.original_content`. As três linhas de
+16/09 estão sem máscara; as quatro de 30/09, todas mascaradas. É a MSK-06 (*o que o cliente digita
+aparece mascarado para quem lê e para o que guarda, e cru só para o fluxo*) fazendo o que decidiu. O
+A1 procurava o e-mail literal no `content` — ou seja, reprovava justamente a proteção. Um
+instrumento honesto medindo a proposição errada.
+
+**O gate agora pergunta o que a RPL-01 queria saber:**
+- **A1** — a resposta do cliente chegou ao leitor: autor `customer`, `[Formulário:` no conteúdo, e
+  o valor do probe no original (que prova ser a resposta DESTE probe);
+- **A4 (novo)** — o outro lado: o e-mail não fica cru no conteúdo lido. Sem ele, um A1 que aceita o
+  original passaria também se a máscara parasse;
+- **H1** — a parte sem dígitos da fala no conteúdo e o marcador no conteúdo ou no original. O
+  verde de antes dependia de o `_` antes do número desarmar o padrão de telefone: sorte, não
+  garantia.
+
+**Contraprova nas linhas reais**, com as mesmas consultas: a sessão de 16/09 (antes da MSK-06)
+acende o A4; uma sessão sem formulário zera o A1. Rodada completa: VERDE.
+
 ## 2026-09-30 (11) — AUD-09: o dossiê e a eliminação do titular alcançam o registro durável da sessão, as avaliações e o wrap-up
 
 **O que a ficha registrava:** a AUD-06 fixou que dossiê e eliminação percorrem as MESMAS lojas, e

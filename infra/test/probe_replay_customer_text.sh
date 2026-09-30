@@ -76,10 +76,21 @@ else
           and (author->>'role') <> 'customer' and coalesce(payload->'content'->>'text', payload->>'text','') <> ''")
   if [ "$AG" -gt 0 ]; then
     ok "A0 CONTROLE sessao persistida, $AG mensagem(ns) de agente com texto"
+    # RPL-03: desde a MSK-06 o texto do cliente é MASCARADO no `content` (o e-mail do probe tem
+    # dígitos e cai também como telefone), e o cru fica em `payload.original_content`. A1 procurava
+    # o e-mail literal no `content` — ou seja, pedia o vazamento que a MSK-06 fechou. A proposição
+    # é outra: a resposta do cliente CHEGOU ao leitor (linha com autor customer, formulário no
+    # conteúdo) e é a do probe (o original a identifica). A4 guarda o outro lado: o cru não volta.
     CL=$(Q "select count(*) from session_stream_events where session_id='$SID' and event_type='message'
-            and author->>'role'='customer' and coalesce(payload->'content'->>'text', payload->>'text','') like '%probe.rpl.$SUF%'")
-    [ "$CL" -gt 0 ] && ok "A1 resposta do cliente persistida com autor customer e texto ($CL)" \
-      || falha "A1 a resposta do cliente nao chegou ao avaliador (0 linhas com autor customer e o email do probe)"
+            and author->>'role'='customer'
+            and coalesce(payload->'content'->>'text', payload->>'text','') like '[Formulário:%'
+            and coalesce(payload->'original_content'->>'text', payload->'content'->>'text', payload->>'text','') like '%probe.rpl.$SUF@%'")
+    [ "$CL" -gt 0 ] && ok "A1 resposta do cliente persistida com autor customer e formulario no conteudo ($CL)" \
+      || falha "A1 a resposta do cliente nao chegou ao avaliador (0 linhas com autor customer, formulario e o email do probe)"
+    CRU=$(Q "select count(*) from session_stream_events where session_id='$SID'
+             and coalesce(payload->'content'->>'text', payload->>'text','') like '%probe.rpl.$SUF@%'")
+    [ "$CRU" = 0 ] && ok "A4 o e-mail do cliente nao fica cru no conteudo lido (MSK-06)" \
+      || falha "A4 o e-mail do cliente esta cru no conteudo de $CRU linha(s) — a mascara da MSK-06 nao correu"
     V=$(vazias "$SID")
     [ "$V" = 0 ] && ok "A2 nenhuma mensagem sem autor e sem payload" || falha "A2 $V mensagem(ns) persistida(s) VAZIA(s)"
   else
@@ -128,7 +139,12 @@ elif ! persistida "$SID"; then
 else
   ok "H0 sessao $SID persistida (texto encaminhado ao humano: $ATEND)"
   CL=$(Q "select count(*) from session_stream_events where session_id='$SID' and event_type='message'
-          and author->>'role'='customer' and coalesce(payload->'content'->>'text', payload->>'text','') like '%PROBE_RPL_CLIENTE_$SUF%'")
+          and author->>'role'='customer'
+          and coalesce(payload->'content'->>'text', payload->>'text','') like '%quero falar sobre minha fatura%'
+          and coalesce(payload->'original_content'->>'text', payload->'content'->>'text', payload->>'text','') like '%PROBE_RPL_CLIENTE_$SUF%'")
+  # RPL-03: o marcador tem dígitos, e a MSK-06 pode mascará-los como telefone no `content`
+  # conforme a vizinhança — o texto sem dígitos prova que a fala chegou ao leitor, e o original
+  # prova que é a do probe. Antes, o verde dependia de o `_` antes do número desarmar o padrão.
   [ "$CL" -gt 0 ] && ok "H1 texto do cliente persistido com autor customer ($CL)" \
     || falha "H1 o texto do cliente nao chegou ao avaliador (0 linhas com autor customer e o texto do probe)"
   V=$(vazias "$SID")
