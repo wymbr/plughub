@@ -393,9 +393,9 @@ class CallAttachMixin:
                         if ready:
                             await self._on_attendant_left(ws, session_id, fields)
                         else:
-                            who = (fields.get("author_id", "")
-                                   or self._json_field(fields, "payload").get("participant_id", ""))
-                            if state["attendants"].pop(who, None) is not None:
+                            who, _ = self._left_attendant(fields, state["attendants"])
+                            if who is not None:
+                                state["attendants"].pop(who)
                                 changed = True
             if ready or not (changed or pending_sent is None) or lidos >= 50:
                 continue            # lote cheio = replay ainda não alcançou o fim do stream

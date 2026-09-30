@@ -171,6 +171,19 @@ class TestWatcher(_Setup):
         assert tipos[-1] == "webrtc.call_ended"
 
     @pytest.mark.asyncio
+    async def test_saida_da_IA_pelo_agent_done_tambem_casa_antes_da_sala(self):
+        """VOZ-11 (fatia a): o `agent_done` põe o participant_id do ROUTING no `author_id` e a
+        instância só no payload. Antes da sala, este caminho só olhava o `author_id`: a IA de fila
+        ficava no conjunto e o teto do humano que chega depois herdava o dela."""
+        saida = {"type": "participant_left", "author_id": "uuid-do-routing",
+                 "payload": json.dumps({"participant_id": "uuid-do-routing", "instance_id": "ia1"})}
+        self._stream([_assigned("native", "ia1", source="not_webrtc", pool_id="fila_ia"), saida,
+                      _assigned("human", "human-u1", source="not_webrtc", pool_id="humano")])
+        await self._run()
+        ready = next(m for m in self.ws.sent_messages if m["type"] == "webrtc.ready")
+        assert ready["policy_sources"] == ["pool:humano"], "a IA que saiu seguiu decidindo o teto"
+
+    @pytest.mark.asyncio
     async def test_so_ia_nao_monta_sala_e_diz_por_que(self):
         """IA de pool que não publica áudio (`agent_publish: []`): nada a oferecer, nenhuma sala."""
         self._stream([_assigned("native", "ia1", source="not_webrtc", pool_id="fila_ia")])

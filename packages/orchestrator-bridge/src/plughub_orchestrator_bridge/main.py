@@ -1253,6 +1253,45 @@ async def _write_routing_assigned_to_stream(
         )
 
 
+async def _write_participant_left_to_stream(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    instance_id:  str,
+    framework:    str,
+    role:         str,
+    reason:       str,
+) -> bool:
+    """O PAR de `_write_routing_assigned_to_stream`: a saída de um atendente que o bridge ativou.
+
+    VOZ-11 (fatia a): a IA nativa entrava no stream (`routing.assigned`) e saía só no Kafka de
+    analytics. O gateway, que tira o atendente do conjunto de mídia no `participant_left`, nunca a
+    via sair: o teto do cliente ficava mais permissivo que o devido e o bot leg seguia rodando.
+
+    `agents_only` de propósito: o chat do cliente transforma `participant_left` em "agente saiu",
+    e a saída de um hook de wrap-up não é assunto do cliente. Stream AUSENTE não é criado.
+    """
+    stream_key = f"session:{session_id}:stream"
+    try:
+        if not instance_id or not await redis_client.exists(stream_key):
+            return False
+        await redis_client.xadd(stream_key, {
+            "type":       "participant_left",
+            "event_id":   str(uuid.uuid4()),
+            "timestamp":  datetime.now(timezone.utc).isoformat(),
+            "visibility": "agents_only",
+            "author_id":  instance_id,
+            "author":     json.dumps({"participant_id": instance_id, "instance_id": instance_id,
+                                      "role": role or "primary"}),
+            "payload":    json.dumps({"participant_id": instance_id, "instance_id": instance_id,
+                                      "framework": framework, "reason": reason}),
+        }, maxlen=500)
+        return True
+    except Exception as exc:  # noqa: BLE001 — dito, nunca calado
+        logger.warning("participant_left NAO registrado no stream: session=%s instance=%s — %s; "
+                       "o teto de midia do cliente fica sem a saida", session_id, instance_id, exc)
+        return False
+
+
 async def get_skill_flow(
     http: aiohttp.ClientSession,
     tenant_id: str,
@@ -5199,6 +5238,11 @@ async def _finish_native_segment(
     # always go through process_routed (here), so the guard is set and the Kafka
     # handler correctly skips emission.  External agents never reach this branch,
     # so the guard is absent and conference_agent_completed emits for them.
+    # VOZ-11 — a saída entra no stream, com a MESMA identidade da entrada (`routing.assigned`).
+    await _write_participant_left_to_stream(
+        redis_client, session_id, native_instance_id, "native", _part_role,
+        _part_outcome or "agent_done",
+    )
     if native_instance_id:
         try:
             await redis_client.set(

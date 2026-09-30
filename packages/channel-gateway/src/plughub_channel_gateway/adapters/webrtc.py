@@ -1296,8 +1296,11 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                         elif event_type == "participant_left" and ready_sent:
                             await self._on_attendant_left(ws, session_id, fields)
 
-                        elif event_type in ("session.closed", "agent_done"):
-                            # Session ended from server side — stop watcher
+                        elif event_type == "session_closed":
+                            # O fim da sessão no STREAM se chama `session_closed` (bridge,
+                            # VOZ-40). Este ramo esperava `session.closed` (nome do evento no
+                            # KAFKA de saída) e `agent_done` (que nunca vai ao stream): era
+                            # código morto, e o observador só parava quando a conexão caía.
                             logger.info(
                                 "webrtc stream_watcher: %s for session=%s",
                                 event_type, session_id,
@@ -1542,12 +1545,33 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             ws, session_id, state, f"attendant_joined:{record['framework'] or 'unknown'}",
         )
 
+    @classmethod
+    def _left_candidates(cls, fields: dict) -> list[str]:
+        """As identidades que o PRÓPRIO evento de saída carrega, na ordem de confiança.
+
+        VOZ-11 (fatia a): a entrada registra o atendente pelo `instance_id` do `routing.assigned`,
+        e as saídas vinham com outros nomes — o `agent_done` põe o `participant_id` do routing no
+        `author_id` e o `instance_id` só no payload. O leitor pegava o primeiro e não achava: o
+        teto do cliente ficava MAIS PERMISSIVO que o devido, com um WARNING por saída."""
+        payload, author = cls._json_field(fields, "payload"), cls._json_field(fields, "author")
+        seen: list[str] = []
+        for c in (payload.get("instance_id"), author.get("instance_id"), fields.get("author_id"),
+                  payload.get("participant_id"), author.get("participant_id")):
+            if isinstance(c, str) and c and c not in seen:
+                seen.append(c)
+        return seen
+
+    @classmethod
+    def _left_attendant(cls, fields: dict, attendants: dict) -> tuple[str | None, list[str]]:
+        """Quem saiu, CASADO com o conjunto registrado — nunca inventado."""
+        cands = cls._left_candidates(fields)
+        return next((c for c in cands if c in attendants), None), cands
+
     async def _on_attendant_left(self, ws: WebSocket, session_id: str, fields: dict) -> None:
         """`participant_left` no stream: o atendente sai do conjunto e o teto é refeito."""
         author = self._json_field(fields, "author")
-        who = (fields.get("author_id", "")
-               or self._json_field(fields, "payload").get("participant_id", "")
-               or author.get("participant_id", ""))
+        cands = self._left_candidates(fields)
+        who = cands[0] if cands else ""
         # Supervisor nunca entra no conjunto de atendentes (entra por `routing.assigned`, e
         # ele não é roteado): a saída dele não é divergência de id, é outra população. Sem
         # este filtro, cada "Sair" da supervisão virava WARNING de atendente desconhecido
@@ -1563,16 +1587,17 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             logger.debug("webrtc media: agente de fila saiu (session=%s) — nao e atendente", session_id)
             return
         state = await self._load_media_state(session_id)
-        if who not in state["attendants"]:
+        matched, _ = self._left_attendant(fields, state["attendants"])
+        if matched is None:
             # Não se inventa quem saiu. Se ids de entrada e saída divergirem, o teto fica
             # MAIS PERMISSIVO do que devia — por isso o aviso nomeia os dois lados.
             logger.warning(
-                "webrtc media: participant_left de %r, que nao e atendente registrado "
+                "webrtc media: participant_left de %s, nenhum atendente registrado "
                 "(atendentes=%s) — teto do cliente NAO recalculado (session=%s)",
-                who, sorted(state["attendants"]), session_id,
+                cands, sorted(state["attendants"]), session_id,
             )
             return
-        record = state["attendants"].pop(who)
+        record = state["attendants"].pop(matched)
         framework = record.get("framework", "") if isinstance(record, dict) else ""
         await self._apply_customer_ceiling(ws, session_id, state, f"attendant_left:{framework or 'unknown'}")
 

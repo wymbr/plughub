@@ -1,5 +1,61 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (19) — VOZ-11 fatia a: a saída do atendente é reconhecida, e a IA passa a sair do conjunto de mídia
+
+**Redesenho com o dono antes de codar.** A VOZ-11 foi repensada no modelo de videoconferência:
+- câmera e microfone são **escolha** do participante, inclusive do cliente, e não degradação;
+- o fallback nomeado vale só para **incapacidade**;
+- a capacidade do humano é **deduzida** do dispositivo, e a da IA vem do deploy;
+- a preferência de mídia no roteamento espera a WCH-04 (`VOZ-51`).
+
+A ficha ficou com as fatias b, c e d. Esta entrega é a fatia **a**, pré-requisito das outras.
+
+**O que foi medido antes:** o teto de mídia do cliente é a união do que os atendentes consomem, e o
+atendente sai do conjunto no `participant_left` do stream. Três defeitos faziam essa saída quase nunca
+acontecer:
+1. **Identidade trocada.** A entrada registra o `instance_id` do `routing.assigned`. O `agent_done`
+   (`runtime.ts`) punha o `participant_id` do **routing** no `author_id`, e o `session_escalate` fazia
+   o mesmo sem nem levar a instância. O leitor pegava o primeiro nome, não achava, logava WARNING e **não
+   recalculava o teto**.
+2. **A IA nativa não saía do stream.** O bridge publicava a saída só no Kafka de analytics. A IA ficava
+   no conjunto: o teto do cliente ficava mais permissivo que o devido, e o bot leg seguia rodando.
+3. **Ramo morto no observador.** Ele parava em `session.closed` ou `agent_done`, e nenhum dos dois vai
+   ao stream (o fim ali é `session_closed`). Na prática só parava quando a conexão caía.
+
+**O que mudou:**
+- **Gateway.** A saída é casada entre as identidades que o **próprio evento** carrega: `instance_id` do
+  payload ou do autor, `author_id`, `participant_id`. Casa com o conjunto registrado e nunca inventa
+  ninguém. O caminho da chamada do chat (WCH-01) usa a mesma regra. O observador para no
+  `session_closed`.
+- **mcp-server.** A saída do `session_escalate` leva o `instance_id` do token assinado.
+- **Bridge.** Ganhou `_write_participant_left_to_stream`, par do `routing.assigned`, chamado quando a IA
+  nativa termina:
+  - `agents_only`, porque o chat do cliente transforma `participant_left` em "agente saiu", e a saída
+    de um wrap-up não é assunto do cliente;
+  - mesma identidade da entrada;
+  - stream ausente não é criado;
+  - falha é WARNING.
+
+**Ao vivo:** um contato real no pool `wrapup_detached_ia`, atendido por IA nativa. O stream registrou
+`routing.assigned` com `instance_id=wrapup_detached_ia-002`, depois `participant_left` com `author_id` e
+`instance_id` = `wrapup_detached_ia-002`, `agents_only`, antes do `session_closed`. Um primeiro disparo
+num pool de prova sem instância ficou na fila e foi removido à mão.
+
+**Testes e verificação:**
+- **Testes:** channel-gateway 1487, orchestrator-bridge 275.
+- **Casos novos:** as quatro formas reais de saída, o controle *"não se tira quem o evento não nomeia"*,
+  o caminho da chamada do chat e o observador parando no `session_closed`.
+- **Duas asserções vazias.** Asserções `not in` conferiam a frase antiga do aviso e passariam sem medir
+  nada. Foram atualizadas.
+- **Contraprovas**, cada uma com vermelho:
+  - voltar a só olhar o `author_id`, no adapter e no caminho do chat;
+  - restaurar o ramo morto;
+  - saída da IA visível ao cliente.
+- **Gates:** `probe_wch01_chat_call`, `probe_webrtc_media_plane` e `probe_python_suites` verdes.
+- **Achados sem relação com esta entrega:** `probe_webrtc_pool_media_policy` (A1) e
+  `probe_webrtc_participant_media` (A3) estão vermelhos por checagens estáticas sobre arquivos fora do
+  diff. Registrados em `VOZ-52`.
+
 ## 2026-09-30 (18) — RUL-05: o dry-run de regra simula de verdade, contra o contexto que as regras viram em cada turno
 
 **O que a ficha registrava:** desde a AUT-65 o dry-run recusava com 501, porque não havia de onde

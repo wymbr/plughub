@@ -830,6 +830,47 @@ class TestWebRTCAdapterMediaCeiling:
         assert self.provider.permission_updates[-1]["identity"] == "customer-c1"
         assert self.adapter._customer_media[self.session_id] == frozenset()
 
+    # ── VOZ-11 (fatia a): a saída é reconhecida pela identidade da ENTRADA ──
+    # As quatro formas REAIS de `participant_left` no stream. Antes só a do humano (agent-ws,
+    # `author_id` = instância) casava; as outras viravam WARNING e o teto não caía.
+
+    async def _ia_e_humano(self):
+        await self.redis.setex(f"session:{self.session_id}:contact_id", 3600, "c1")
+        await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
+        await self.adapter._on_routing_renegotiate(self.ws, self.session_id, _assigned("native", "ia1"), self.settings)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("evento", [
+        # agent_done (runtime.ts): participant_id do ROUTING no author_id, instância no payload
+        {"type": "participant_left", "author_id": "uuid-do-routing",
+         "payload": json.dumps({"participant_id": "uuid-do-routing", "instance_id": "ia1"})},
+        # bridge, saída da IA nativa: a instância em todos os lugares
+        {"type": "participant_left", "author_id": "ia1", "visibility": "agents_only",
+         "author": json.dumps({"participant_id": "ia1", "instance_id": "ia1", "role": "primary"}),
+         "payload": json.dumps({"participant_id": "ia1", "instance_id": "ia1", "framework": "native"})},
+        # session_escalate (session.ts): o instance_id assinado no payload
+        {"type": "participant_left", "author_id": "p-qualquer",
+         "payload": json.dumps({"participant_id": "p-qualquer", "instance_id": "ia1"})},
+    ])
+    async def test_saida_da_IA_casa_pela_instancia_de_entrada(self, evento, caplog):
+        await self._ia_e_humano()
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_attendant_left(self.ws, self.session_id, evento)
+        assert _fw(await self._state()) == {"h1": "human"}, "a IA seguiu no conjunto de midia"
+        assert "nenhum atendente registrado" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_saida_nunca_tira_quem_o_evento_nao_nomeia(self, caplog):
+        """Controle: casar entre as identidades DO EVENTO, nunca inventar — nomear outro atendente
+        num campo que não é de identidade não tira ninguém."""
+        await self._ia_e_humano()
+        with caplog.at_level("WARNING"):
+            await self.adapter._on_attendant_left(self.ws, self.session_id, {
+                "type": "participant_left", "author_id": "x",
+                "payload": json.dumps({"participant_id": "y", "reason": "ia1"})})
+        assert _fw(await self._state()) == {"h1": "human", "ia1": "native"}
+        assert "nenhum atendente registrado" in caplog.text and "'x'" in caplog.text
+
     @pytest.mark.asyncio
     async def test_saida_de_quem_nao_e_atendente_nao_mexe_e_avisa(self, caplog):
         await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
@@ -848,7 +889,7 @@ class TestWebRTCAdapterMediaCeiling:
                 "author": '{"role": "supervisor", "participant_id": "sup-1"}',
             })
         assert _fw(await self._state()) == {"h1": "human"}
-        assert "nao e atendente registrado" not in caplog.text
+        assert "nenhum atendente registrado" not in caplog.text
         assert [m["type"] for m in self.ws.sent_messages] == ["webrtc.ready"]
 
     @pytest.mark.asyncio
@@ -857,7 +898,7 @@ class TestWebRTCAdapterMediaCeiling:
         with caplog.at_level("WARNING"):
             await self.adapter._on_attendant_left(self.ws, self.session_id, {
                 "type": "participant_left", "author_id": f"queue-{self.session_id}"})
-        assert "nao e atendente registrado" not in caplog.text
+        assert "nenhum atendente registrado" not in caplog.text
         assert _fw(await self._state()) == {"h1": "human"}
 
     @pytest.mark.asyncio
@@ -866,7 +907,7 @@ class TestWebRTCAdapterMediaCeiling:
         with caplog.at_level("WARNING"):
             await self.adapter._on_attendant_left(self.ws, self.session_id, {
                 "type": "participant_left", "author_id": "queue-outra-sessao"})
-        assert "nao e atendente registrado" in caplog.text
+        assert "nenhum atendente registrado" in caplog.text and "queue-outra-sessao" in caplog.text
 
     @pytest.mark.asyncio
     async def test_framework_ausente_consome_nada_e_avisa(self, caplog):
@@ -1170,3 +1211,26 @@ class TestIWebRTCProviderProtocol:
         monkeypatch.setattr(webrtc_provider_mod, "_sdk_present", lambda: True)
         provider = LiveKitProvider(url="ws://x", api_key="k", api_secret="s" * 32)
         assert isinstance(provider, IWebRTCProvider)
+
+
+class TestStreamWatcherStops:
+    """VOZ-11 (fatia a): o fim da sessão no STREAM é `session_closed`. O ramo esperava
+    `session.closed`/`agent_done`, que nunca chegam ao stream — o observador só parava quando a
+    conexão caía, e ninguém via isso porque parecer vivo é o valor plausível."""
+
+    @pytest.mark.asyncio
+    async def test_session_closed_encerra_o_observador(self):
+        adapter = _make_adapter(provider=MockWebRTCProvider(), redis=_fake_redis(),
+                                settings=_fake_settings(webrtc_stt_enabled=False))
+        chamadas = {"n": 0}
+
+        async def _xread(*a, **k):
+            chamadas["n"] += 1
+            if chamadas["n"] == 1:
+                return [("k", [("1-0", {"type": "session_closed"})])]
+            raise AssertionError("o observador seguiu lendo depois do session_closed")
+
+        adapter._redis.xread = _xread
+        import asyncio
+        await asyncio.wait_for(adapter._stream_watcher(AsyncMock(), str(uuid.uuid4()), "p"), timeout=2)
+        assert chamadas["n"] == 1

@@ -1136,6 +1136,23 @@ duplicada e rotulada `[Seleção: …]`) · `WCH-12` (fala depende da instância
 Gate: `infra/test/probe_wch01_chat_call.sh` (porta, espera dita, independência chamada × contato).
 O caminho com humano e áudio foi validado pelo dono no browser.
 
+## 20a. A saída do atendente casa pela identidade da entrada (VOZ-11 fatia a, 2026-09-30)
+
+O conjunto de atendentes de `channel:webrtc:{sid}:media` entra pelo `instance_id` do
+`routing.assigned` e sai no `participant_left`. O leitor (`WebRTCAdapter._left_attendant`, também no
+caminho da chamada do chat) casa entre as identidades que o evento carrega — `instance_id` do payload
+ou do autor, `author_id`, `participant_id` — contra o conjunto registrado; nunca inventa. Escritores:
+
+| Saída | Quem escreve | Identidade |
+|---|---|---|
+| humano (agent-ws) | mcp-server | `author_id` = instância |
+| `agent_done` (IA externa) | mcp-server `runtime.ts` | `instance_id` no payload |
+| `session_escalate` | mcp-server `session.ts` | `instance_id` do token no payload |
+| IA nativa | bridge `_write_participant_left_to_stream` (`agents_only`) | instância em tudo |
+
+O observador para no `session_closed` do stream. O que resta da VOZ-11 (estado real de mídia pelos
+eventos de trilha, capacidade do recurso, fallback nomeado por incapacidade) está no `pending.md`.
+
 ## 21. A chamada tem DONA entre réplicas (WCH-12, 2026-09-24)
 
 A chamada vive na **memória** de uma réplica do gateway: a sala, o bot leg, a fila de fala, a coleta

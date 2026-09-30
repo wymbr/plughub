@@ -733,7 +733,7 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         const { session_token, session_id, participant_id, target_pool, handoff_reason, pipeline_state } =
           SessionEscalateInputSchema.parse(input)
 
-        const { tenant_id } = verifySessionToken(session_token)
+        const { tenant_id, instance_id } = verifySessionToken(session_token)
 
         // Lê metadados da sessão para enriquecer o evento de roteamento
         let channel  = "webchat"
@@ -760,6 +760,9 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
             visibility:  "all",
             payload: {
               participant_id,
+              // VOZ-11: a identidade com que o atendente ENTROU (`routing.assigned`) — é por
+              // ela que o gateway o tira do conjunto de mídia. Vem do token assinado.
+              instance_id,
               reason: handoff_reason,
             },
             event_id,

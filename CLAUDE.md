@@ -1511,6 +1511,10 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   `probe_voz36_recording_access.sh`.
 - **Mídia é fato do PARTICIPANTE, nunca da sessão** (VOZ-09): teto do cliente = política ∩ UNIÃO do
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
+  **A saída casa pela identidade da ENTRADA** (VOZ-11a): o atendente entra pelo `instance_id` do
+  `routing.assigned` e sai no `participant_left` que o nomeia — a IA nativa inclusive, escrita pelo
+  bridge (`agents_only`). Saída que não casa é WARNING e o teto NÃO cai; câmera/microfone desligados
+  são ESCOLHA, nunca degradação (VOZ-11 b–d).
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,
   obrigatória em pool de contato com `webrtc` **ou `voice`** (VOZ-02), lida fresca pelo bridge e levada no `routing.assigned`
   com a procedência. **Ausência nunca vira permissão** — pool sem política ou registry fora oferece nada.
