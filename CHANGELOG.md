@@ -1,5 +1,35 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (15) — WCH-15: anexo com id que não é UUID responde 404, não 500 — e o upload não diz mais "tipo errado"
+
+**Origem:** achado na varredura anônima da WFL-02 (§ 2026-09-30 (9)), registrado como tarefa à parte.
+
+**Medido antes:**
+
+| chamada | antes |
+|---|---|
+| `GET /webchat/v1/attachments/nao-e-uuid` e `…/a'b` | **500** (`ValueError: badly formed hexadecimal UUID string` no log) |
+| `POST /webchat/v1/upload/nao-e-uuid` | **415**, porque o mesmo `ValueError` caía no ramo *"magic bytes não conferem"* e o cliente ouvia *"tipo de arquivo errado"* para um id que não existe |
+
+**Onde consertou, e por quê lá:** no STORE, não na rota. O `file_id` entra de fora por quatro
+portas — a URL pública, a de upload, a rota de gravação (`recording_router.py`) e a mensagem do
+cliente no WebSocket (`webchat.py`). `parse_file_id` devolve `None` para o malformado; o `resolve`
+dos dois backends (disco e S3) responde `None` sem ir ao banco, e o `commit` levanta
+`FileNotFoundError`. Cada chamador já tratava *"não existe"*: a rota responde 404, o que também
+evita confirmar se um id existe. O `uuid.UUID(file_id)` que sobrou roda só com id já validado
+(`UPDATE` do commit, `stream_bytes` depois do `resolve`) ou gerado pelo servidor (`reserve`).
+
+**Tropeço registrado:** o helper foi inserido entre o `@runtime_checkable` e a classe
+`AttachmentStore`, o decorador foi para a função, e o gateway **não subiu** (`TypeError: issubclass()`)
+por cerca de um minuto no demo — pego pela reprodução ao vivo logo em seguida, corrigido e resubido.
+
+**Testes e verificação:**
+- **Testes:** suíte do channel-gateway com 1481, na imagem. O `TestMalformedFileId` cobre o `parse`, o
+  `resolve` e o `commit` nos dois backends, com o controle de que um UUID válido continua indo ao banco.
+- **Contraprova:** sem a guarda no `resolve`, 8 testes ficam vermelhos.
+- **Ao vivo:** GET e upload com id malformado → 404, UUID inexistente → 404, gateway `healthy` e log
+  sem erro.
+
 ## 2026-09-30 (14) — AUT-65: a API do rules-engine exige credencial, e ativar regra deixou de ser anônimo
 
 **O que a ficha registrava:** 7 de 8 rotas do rules-engine sem guard, *"na rede interna"*. Desde a

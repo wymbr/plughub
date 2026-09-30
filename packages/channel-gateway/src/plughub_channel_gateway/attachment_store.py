@@ -376,6 +376,17 @@ async def _list_session(db, serving_url: str, *, tenant_id: str, session_id: str
     ]
 
 
+def parse_file_id(file_id: str) -> "uuid.UUID | None":
+    """O `file_id` chega de FORA (URL pública de anexo, rota de gravação, mensagem do cliente no
+    WebSocket). Malformado é o mesmo que desconhecido: `None`, e cada chamador já trata "não
+    existe". Antes, `uuid.UUID(file_id)` levantava `ValueError` dentro da consulta — a URL pública
+    respondia 500, e o upload o confundia com MIME errado (415)."""
+    try:
+        return uuid.UUID(str(file_id))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 @runtime_checkable
 class AttachmentStore(Protocol):
     """
@@ -588,6 +599,9 @@ class FilesystemAttachmentStore:
         data:      bytes,
     ) -> AttachmentMeta:
         # Carrega registro pendente
+        fid = parse_file_id(file_id)
+        if fid is None:
+            raise FileNotFoundError(f"slot não encontrado: file_id malformado ({str(file_id)[:40]!r})")
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -595,7 +609,7 @@ class FilesystemAttachmentStore:
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2 AND status = 'pending'
                 """,
-                uuid.UUID(file_id), tenant_id,
+                fid, tenant_id,
             )
 
         if row is None:
@@ -666,6 +680,9 @@ class FilesystemAttachmentStore:
         file_id:   str,
         tenant_id: str,
     ) -> AttachmentMeta | None:
+        fid = parse_file_id(file_id)
+        if fid is None:
+            return None
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -674,7 +691,7 @@ class FilesystemAttachmentStore:
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
-                uuid.UUID(file_id), tenant_id,
+                fid, tenant_id,
             )
 
         if row is None:
@@ -896,6 +913,9 @@ class S3AttachmentStore:
         tenant_id: str,
         data:      bytes,
     ) -> AttachmentMeta:
+        fid = parse_file_id(file_id)
+        if fid is None:
+            raise FileNotFoundError(f"slot não encontrado: file_id malformado ({str(file_id)[:40]!r})")
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -903,7 +923,7 @@ class S3AttachmentStore:
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2 AND status = 'pending'
                 """,
-                uuid.UUID(file_id), tenant_id,
+                fid, tenant_id,
             )
 
         if row is None:
@@ -975,6 +995,9 @@ class S3AttachmentStore:
         file_id:   str,
         tenant_id: str,
     ) -> AttachmentMeta | None:
+        fid = parse_file_id(file_id)
+        if fid is None:
+            return None
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -983,7 +1006,7 @@ class S3AttachmentStore:
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
-                uuid.UUID(file_id), tenant_id,
+                fid, tenant_id,
             )
 
         if row is None:

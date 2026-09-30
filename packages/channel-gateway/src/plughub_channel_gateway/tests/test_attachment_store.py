@@ -667,3 +667,56 @@ class TestS3AttachmentStore:
         sql = conn.execute.call_args.args[0]
         assert "deleted_at" in sql
         assert "UPDATE session_attachments" in sql
+
+
+# ── file_id malformado = desconhecido (a URL pública respondia 500) ─────────────
+#
+# O `file_id` chega de fora: URL pública de anexo, rota de gravação, mensagem do cliente no
+# WebSocket. `uuid.UUID(file_id)` dentro da consulta levantava `ValueError` — 500 na URL pública,
+# e o upload o confundia com MIME errado (415). O controle ao lado de cada caso garante que o
+# atalho não engole o id VÁLIDO: um "sempre None" passaria em todos os de recusa.
+
+from plughub_channel_gateway.attachment_store import parse_file_id  # noqa: E402
+
+MALFORMADOS = ["nao-e-uuid", "a'b", "", "../../etc/passwd", "1" * 200]
+
+
+class TestMalformedFileId:
+    @pytest.mark.parametrize("bad", MALFORMADOS)
+    def test_parse_returns_none(self, bad):
+        assert parse_file_id(bad) is None
+
+    def test_parse_control_valid_uuid(self):
+        fid = str(uuid.uuid4())
+        assert parse_file_id(fid) == uuid.UUID(fid)
+
+    @pytest.mark.parametrize("bad", MALFORMADOS)
+    def test_fs_resolve_is_none_without_touching_the_db(self, tmp_path, bad):
+        store, conn = make_store(tmp_path, fetchrow={"x": 1})
+        assert asyncio.run(store.resolve(file_id=bad, tenant_id=TENANT)) is None
+        conn.fetchrow.assert_not_called()
+
+    @pytest.mark.parametrize("bad", MALFORMADOS)
+    def test_fs_commit_is_not_found_not_mime_error(self, tmp_path, bad):
+        store, conn = make_store(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(store.commit(file_id=bad, tenant_id=TENANT, data=b"\xff\xd8\xff"))
+        conn.fetchrow.assert_not_called()
+
+    def test_fs_control_valid_id_reaches_the_db(self, tmp_path):
+        store, conn = make_store(tmp_path, fetchrow=None)
+        assert asyncio.run(store.resolve(file_id=str(uuid.uuid4()), tenant_id=TENANT)) is None
+        conn.fetchrow.assert_called_once()
+
+    def test_fs_stream_bytes_of_malformed_is_not_found(self, tmp_path):
+        store, _ = make_store(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(store.stream_bytes(file_id="nao-e-uuid", tenant_id=TENANT))
+
+    @pytest.mark.parametrize("bad", ["nao-e-uuid", "a'b"])
+    def test_s3_resolve_and_commit(self, bad):
+        store, conn, _ = make_s3_store()
+        assert asyncio.run(store.resolve(file_id=bad, tenant_id=TENANT)) is None
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(store.commit(file_id=bad, tenant_id=TENANT, data=b"x"))
+        conn.fetchrow.assert_not_called()
