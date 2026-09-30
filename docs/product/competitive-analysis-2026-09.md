@@ -53,7 +53,7 @@ Mesmo método do snapshot de julho, com três reforços.
 | Governança MCP por invariante — **[E] diferencial real** | **[rebaixado]**. Ver § 3. |
 | Voz nativa — **[E] Arc 15** | Era falso em julho (nota de 19/08); **hoje [P] forte**, validado com gente (§ 4.1). |
 | BYO framework — **[E]** agnóstico + proxy do SDK | **[rebaixado]** por decisão de produto (13/08): runtime importado saiu do roadmap; o substituto (A2A servidor) é ADR **proposto**, sem código. |
-| MCP "~97 mi downloads/mês", A2A e MCP sob a mesma fundação | MCP passou de **110 mi/mês**, spec **2026-07-28** final (núcleo sem estado, autorização OAuth/OIDC). **A2A é projeto próprio da Linux Foundation**, não da AAIF. |
+| MCP "~97 mi downloads/mês", A2A e MCP sob a mesma fundação | MCP passou de **110 mi/mês**, spec **2026-07-28** final (núcleo sem estado, autorização OAuth/OIDC). ~~A2A é projeto próprio da Linux Foundation, não da AAIF~~ — *corrigido em 2026-09-30:* o A2A **entrou na AAIF em 27/08/2026** ([anúncio](https://a2a-protocol.org/latest/blog/2026/08/27/a-new-chapter-for-a2a-joining-the-agentic-ai-foundation/)). |
 | Intercom Fin como concorrente independente | Renomeada **Fin** (mai/2026) e **comprada pela Salesforce** (US$ 3,6 bi, concluída 10/09). |
 | LangGraph US$ 0,001/nó; CrewAI Pro US$ 25 | Preços saíram das páginas oficiais: LangSmith cobra deploy por recurso (LCU/LSU); CrewAI ficou só Basic grátis + Enterprise sob consulta. |
 | n8n: avaliação US$ 2,5 bi, ARR US$ 40 mi | SAP investiu (mai/2026) a **US$ 5,2 bi**; ARR ~US$ 100 mi *(est.)*; canvas embutido no Joule Studio. |
