@@ -1,5 +1,27 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-29 (16) — CAP-15: fechada pela própria bifurcação, sem remover a porta do demo
+
+A ficha estava `adiado`, com um gatilho escrito: *"decidir se o alvo é rede compartilhada ou deploy
+distribuído"*. E ela mesma dizia o que fazer em cada ramo: se o alvo for **distribuído**, *"a porta
+volta a ser NECESSÁRIA e a pergunta deixa de ser topologia: vira autenticação de transporte"*. A CAP-10
+respondeu os dois: o alvo da v1 é distribuído, e o `/sse` e o `/messages` exigem `x-service-token`.
+
+**Medido antes de fechar:**
+- a 3100 publica só em `127.0.0.1` (`docker port`);
+- vindo da LAN, os dois IPs do host **recusam** a 3100, e a 5174 de controle **aceita** nas duas;
+- `/sse` sem token responde **401**;
+- `probe_mcp_rest_surface.sh`: ramos F (loopback declarado nos composes e vivo) e G (transporte exige
+  credencial) passam, com `FAIL=0`. O D fica INCONCLUSIVO pelo login (Git Bash sem `jq`), sem relação
+  com esta ficha;
+- quem usa a porta no host: **32 scripts** de `infra/test/`, o proxy de dev do vite e a suíte e2e.
+
+**Decisão:** tirar a porta do compose demo quebraria esses três consumidores sem ganho de segurança,
+porque ela já está em loopback e autenticada. O requisito que sobra é de **produção** e tem casa: a
+`PRD-01` recebeu como critério que o mcp-server seja alcançado **só pela rede de serviço**, sem
+publicação em host nem na borda (`/sse` e `/messages` nunca no nginx/ingress), e sem depender só do
+token.
+
 ## 2026-09-29 (15) — AUD-03: o dossiê de acesso do titular
 
 **A ficha era grande demais para um trabalho só, e o dono a dividiu:** o **acesso** fica aqui; a

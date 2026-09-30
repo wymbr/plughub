@@ -60,7 +60,7 @@ As fichas abertas cuidam da **correção** do core e dos canais. O que separa o 
 ### Fase 0 — decidir e medir
 
 - Topologia da instância dedicada (Kubernetes ou compose multi-host) e o pacote de produção — `PRD-01`.
-  Decide junto a `CAP-10`/`CAP-15`.
+  Decide junto a `CAP-10` (e herda o critério da `CAP-15`: mcp-server só na rede de serviço).
 - Harness de carga e a primeira rodada **sem conserto nenhum**, para medir os tetos reais — `PRD-02`.
 - Escolha de STT e TTS para PT-BR na bancada unitária, com áudio de telefonia real — `VOZ-50`.
 
@@ -81,7 +81,7 @@ backup) · `PRD-06` (réplicas e offset) · `PRD-08` (admissão por canal) · ~~
 
 ### Fase 3 — instância dedicada segura e operável
 
-`PRD-01` (segredos, TLS, borda com a allowlist dos sete prefixos) · ~~`CAP-10`~~ (transporte MCP autenticado; fechada 2026-09-29)/`CAP-15` · ~~`AUT-20`~~ (UI só na própria origem; fechada 2026-09-29) ·
+`PRD-01` (segredos, TLS, borda com a allowlist dos sete prefixos) · ~~`CAP-10`~~ (transporte MCP autenticado; fechada 2026-09-29)/~~`CAP-15`~~ (fechada 2026-09-29; critério foi para a `PRD-01`) · ~~`AUT-20`~~ (UI só na própria origem; fechada 2026-09-29) ·
 ~~`AUT-58`~~ → `AUT-59..70` · `CNS-25` · ~~`AUD-03`~~ (acesso do titular; fechada 2026-09-29) → `AUD-06` (eliminação) · `AUD-07` (retenção) · `PRD-07` (observabilidade, backup testado,
 runbook de atualização).
 
@@ -103,7 +103,7 @@ do Redis, broker) sem perder conversa — e o piloto.
 ## 5. Prioridade das fichas existentes
 
 **P0 — bloqueia produção:** `VOZ-50`, `VOZ-45`, ~~`VOZ-03`~~ (fechada 2026-09-28), `VOZ-20`, `PID-22`, `WCH-03`, ~~`ALW-18`~~ (fechada 2026-09-28), ~~`DUR-01`~~ (fechada 2026-09-28),
-~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), ~~`CAP-10`~~ (fechada 2026-09-29), `CAP-15`, ~~`AUT-20`~~ (fechada 2026-09-29), ~~`AUT-58`~~ (fechada 2026-09-29), ~~`AUD-03`~~ (fechada 2026-09-29; seguem `AUD-06`/`AUD-07`) — e as portas abertas PELA BORDA que a AUT-58 mediu: ~~`AUT-59`~~ (evaluation; fechada 2026-09-29), ~~`AUT-60`~~ (mailing; fechada 2026-09-29), ~~`AUT-61`~~ (pricing; fechada 2026-09-29), ~~`AUT-62`~~ (dialog; fechada 2026-09-29), ~~`AUT-63`~~ (calendar; fechada 2026-09-29), ~~`AUT-64`~~ (workflow; rotas removidas 2026-09-29), ~~`AUT-69`~~ (catálogo ABAC; fechada 2026-09-29).
+~~`SFS-01`~~ (fechada 2026-09-28), ~~`PRM-04`~~ (fechada 2026-09-29), ~~`CAP-10`~~ (fechada 2026-09-29), ~~`CAP-15`~~ (fechada 2026-09-29), ~~`AUT-20`~~ (fechada 2026-09-29), ~~`AUT-58`~~ (fechada 2026-09-29), ~~`AUD-03`~~ (fechada 2026-09-29; seguem `AUD-06`/`AUD-07`) — e as portas abertas PELA BORDA que a AUT-58 mediu: ~~`AUT-59`~~ (evaluation; fechada 2026-09-29), ~~`AUT-60`~~ (mailing; fechada 2026-09-29), ~~`AUT-61`~~ (pricing; fechada 2026-09-29), ~~`AUT-62`~~ (dialog; fechada 2026-09-29), ~~`AUT-63`~~ (calendar; fechada 2026-09-29), ~~`AUT-64`~~ (workflow; rotas removidas 2026-09-29), ~~`AUT-69`~~ (catálogo ABAC; fechada 2026-09-29).
 
 **P1 — necessário nos primeiros meses:** `AUT-65`, `AUT-66`, `AUT-67`, `AUT-68` (rotas abertas só na rede interna), `AUT-70` (serviços fora da varredura), `VOZ-13`, `VOZ-11`, `VOZ-34`, `WCH-02`, `WCH-04`, `USG-01`,
 `USG-03`, `USG-04`, `AIG-02`, `AIG-01`, `KPI-01..05`, `AUD-01`, `AUD-02`, `CAP-07`, `CAP-08`, `CAP-14`,
