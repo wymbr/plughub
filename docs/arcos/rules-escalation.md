@@ -58,8 +58,15 @@ ai-gateway ──pub/sub session:updates:{sid}──▶ rules-engine
 - **Corrida com a escalação do próprio fluxo.** Se o fluxo chega ao seu `escalate` antes da marca,
   ele decide; a marca sobra sem efeito (TTL 24 h) — ou o bridge já recusa com `no_ai_conductor`.
 - **Regra não tem filtro por pool.** Vale para o tenant inteiro.
-- **Regra de sentimento vê só o sentimento AUTO-DECLARADO pelo `reason`** (`RUL-04`); regras não
-  têm tela (`RUL-03`); não há dry-run histórico (`RUL-05`, recusa 501).
+- **Regra de sentimento vê só o sentimento AUTO-DECLARADO pelo `reason`** (`RUL-04`); não há
+  dry-run histórico (`RUL-05`, recusa 501).
+
+## A tela e o que se muda (RUL-03)
+
+`/config/rules` (platform-ui, `modules/rules/`), pela borda `/rules-api/*` → `rules-engine:3201`.
+`PUT` e `DELETE /rules/{id}` só em `draft`/`disabled` — 409 nomeando o caminho senão: regra que mede
+(`dry_run`/`shadow`) ou age (`active`) não muda por baixo; leve-a a `disabled` → `draft`, edite e
+percorra o ciclo. As transições que a tela oferece vêm de `GET /lifecycle`, nunca de cópia.
 
 ## Quem pode mexer nas regras (AUT-65)
 

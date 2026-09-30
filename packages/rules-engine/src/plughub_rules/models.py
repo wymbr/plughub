@@ -208,6 +208,16 @@ class RuleCreateRequest(BaseModel):
     customer_notice: str | None   = Field(default=None, max_length=500)   # RUL-02
 
 
+class RuleUpdateRequest(BaseModel):
+    """RUL-03 — substitui o que a regra DECIDE; id, tenant e status não mudam por aqui."""
+    name:         str
+    conditions:   list[Condition] = Field(min_length=1)
+    logic:        RuleLogic       = "AND"
+    target_pool:  str | None      = None
+    priority:     int             = Field(default=1, ge=1, le=10)
+    customer_notice: str | None   = Field(default=None, max_length=500)
+
+
 class RuleStatusPatch(BaseModel):
     status: RuleStatus
 

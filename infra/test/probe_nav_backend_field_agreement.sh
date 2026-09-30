@@ -117,7 +117,8 @@ NAVS_SEM_ESCRITA="nav.contextMap"
 # (as duas abas da tela Recursos), e continua servido tambem pelo agent-registry
 # (`/v1/pools`), medido na secao REGISTRY abaixo. Um campo pode ter dois backends;
 # o que ele nao pode e ter dois CAMPOS para a mesma tela.
-NAO_CONFIG_API="users permissions calendars dialog_forms"
+# `rules` (RUL-03): servido pelo rules-engine, que o gateia com o mesmo campo (AUT-65).
+NAO_CONFIG_API="users permissions calendars dialog_forms rules"
 
 ns_de() {  # nav.x -> namespace
   case "$1" in

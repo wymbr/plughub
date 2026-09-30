@@ -61,6 +61,18 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # rules-engine (RUL-03) — tela de regras. /rules-api/* -> rules-engine:3201/* (prefixo\n\
+    # removido: as rotas dele nao tem prefixo proprio). O servico exige Bearer config.rules.\n\
+    location ~ ^/rules-api/ {\n\
+        set $up_rules http://rules-engine:3201;\n\
+        rewrite ^/rules-api(/.*)$ $1 break;\n\
+        proxy_pass         $up_rules;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # analytics-api (agent-assist customer history + transcript)\n\
     # /analytics/* → analytics-api:3500/*  (prefix stripped, mirrors legacy agent-assist-ui).\n\
     # Reaches /sessions/customer/{id} and /v1/transcript/sessions/{id} without colliding\n\

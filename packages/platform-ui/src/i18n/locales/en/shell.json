@@ -66,6 +66,7 @@
     "masking": "Masking",
     "contextMap": "ContextStore fields",
     "dialogForms": "Dialog Forms",
+    "rules": "Escalation rules",
     "billing": "Billing",
     "agent_reports": "Agent Reports",
     "access": "Access",

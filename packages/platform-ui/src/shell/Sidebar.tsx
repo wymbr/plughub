@@ -7,7 +7,7 @@ import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, ClipboardList, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
-  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send, Inbox,
+  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send, Inbox, Scale,
 } from 'lucide-react'
 
 type LucideIcon = React.FC<{ className?: string }>
@@ -207,6 +207,9 @@ const Sidebar: React.FC = () => {
         // credencial devolvia 200 nos dois. Leitura segue aberta: `form_get` e o survey
         // web sao chamadores de runtime sem credencial.
         { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'dialog_forms' } },
+        // RUL-03 — regras de escalação do rules-engine; o backend gateia com o MESMO campo
+        // (AUT-65): read_only vê, read_write cria, edita, apaga e ativa.
+        { label: t('nav.rules'),         href: '/config/rules',         icon: Scale,           abac: { module: 'config', field: 'rules' } },
         // Era a UNICA entrada gateada por PAPEL no nivel do item. O modulo `billing` ja
         // existia e o supervisor chegou a ter `billing.visualizar` concedido sem ver a
         // tela — grant e portao discordando, cada um em silencio.

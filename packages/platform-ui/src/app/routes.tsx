@@ -11,6 +11,7 @@ import MaskingPage from '@/modules/masking/MaskingPage'
 import ContextMapPage from '@/modules/context-map/ContextMapPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import SchedulesPage from '@/modules/schedules/SchedulesPage'
+import RulesPage from '@/modules/rules/RulesPage'
 import SchedulesMonitorPage from '@/modules/schedules/SchedulesMonitorPage'
 import WorkItemsPage from '@/modules/work-items/WorkItemsPage'
 import OutboundPage from '@/modules/outbound/OutboundPage'
@@ -241,6 +242,7 @@ export const routes: RouteObject[] = [
       { path: 'config/masking',    element: <RequireAbac module="config" field="masking"><MaskingPage /></RequireAbac> },
       { path: 'config/context-map', element: <RequireAbac module="config" field="context_map"><ContextMapPage /></RequireAbac> },
       { path: 'config/dialog-forms', element: <RequireAbac module="config" field="dialog_forms"><DialogFormsPage /></RequireAbac> },
+      { path: 'config/rules',      element: <RequireAbac module="config" field="rules"><RulesPage /></RequireAbac> },
       { path: 'config/billing',    element: <RequireAbac module="billing" field="visualizar"><BillingPage /></RequireAbac> },
       { path: 'config/agent-reports', element: <Navigate to="/analise/agents"    replace /> },
       { path: 'config/access',     element: <RequireAbac module="config" field="users"><AccessPage /></RequireAbac> },

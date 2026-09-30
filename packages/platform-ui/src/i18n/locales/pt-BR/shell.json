@@ -66,6 +66,7 @@
     "masking": "Mascaramento",
     "contextMap": "Campos do ContextStore",
     "dialogForms": "Formulários de Diálogo",
+    "rules": "Regras de escalação",
     "billing": "Faturamento",
     "agent_reports": "Relatórios de Agentes",
     "access": "Acesso",

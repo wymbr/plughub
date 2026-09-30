@@ -68,6 +68,7 @@ const BREADCRUMBS: Record<string, BreadcrumbDef> = {
   '/config/platform':        { section: 'nav.config',  sectionHref: '/config/resources',  page: 'nav.platform' },
   '/config/channels':        { section: 'nav.config',  sectionHref: '/config/resources',  page: 'nav.channels' },
   '/config/calendars':       { section: 'nav.config',  sectionHref: '/config/resources',  page: 'nav.calendars' },
+  '/config/rules':           { section: 'nav.config',  sectionHref: '/config/resources',  page: 'nav.rules' },
   '/config/masking':         { section: 'nav.config',  sectionHref: '/config/resources',  page: 'nav.masking' },
   '/config/billing':         { section: 'nav.config',  sectionHref: '/config/resources',  page: 'nav.billing' },
   '/config/access':          { section: 'nav.config',  sectionHref: '/config/resources',  page: 'nav.access' },

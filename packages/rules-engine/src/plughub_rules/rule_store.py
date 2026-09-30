@@ -5,6 +5,7 @@ Loading and caching of active rules per tenant.
 
 from __future__ import annotations
 import json
+import logging
 import time
 from typing import Any
 
@@ -14,6 +15,7 @@ from .models import Rule
 from .config import get_settings
 
 _RULES_KEY = lambda tenant_id: f"rules:{tenant_id}:active"
+logger = logging.getLogger("plughub.rules")
 
 
 class RuleStore:
@@ -43,7 +45,10 @@ class RuleStore:
                 Rule.model_validate(r) for r in rules_data
                 if r.get("status") in ("active", "shadow")
             ]
-        except Exception:
+        except Exception as exc:
+            # Cache ilegível desliga TODAS as regras do tenant — dito, nunca calado (RUL-03).
+            logger.error("regras ativas ilegíveis para tenant=%s (%s) — nenhuma regra avaliada "
+                         "até o cache ser regravado", tenant_id, exc)
             return []
 
         self._cache[tenant_id] = (rules, time.monotonic())

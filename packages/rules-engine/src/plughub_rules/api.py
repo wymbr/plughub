@@ -16,10 +16,11 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 
 from .auth import authorize, require_credential
 from .config import get_settings
+from .lifecycle import EDITABLE_STATUSES, transitions
 from .evaluator import RuleEvaluator
 from .models import (
     DryRunApiRequest,
@@ -28,8 +29,9 @@ from .models import (
     Rule,
     RuleCreateRequest,
     RuleStatusPatch,
+    RuleUpdateRequest,
 )
-from .rule_registry import RuleRegistry
+from .rule_registry import RuleLockedError, RuleRegistry
 from .rule_store import RuleStore
 from .session_reader import SessionParamsReader
 
@@ -177,6 +179,49 @@ async def update_rule_status(
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/lifecycle")
+async def lifecycle(request: Request, tenant_id: Annotated[str, Query(...)]) -> dict:
+    """RUL-03 — a máquina de estados e o que se edita, para a tela MOSTRAR sem copiar."""
+    authorize(request, tenant_id, write=False)
+    return {"transitions": transitions(), "editable_statuses": sorted(EDITABLE_STATUSES)}
+
+
+@router.put("/rules/{rule_id}", response_model=Rule)
+async def update_rule(
+    request:   Request,
+    rule_id:   str,
+    body:      RuleUpdateRequest,
+    registry:  Annotated[RuleRegistry, Depends(get_registry)],
+    tenant_id: Annotated[str, Query(...)],
+) -> Rule:
+    """RUL-03 — edita condições, pool, aviso e prioridade. Só em draft/disabled (409 senão)."""
+    tenant_id = authorize(request, tenant_id, write=True)
+    try:
+        return await registry.update(tenant_id, rule_id, body)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuleLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.delete("/rules/{rule_id}", status_code=204)
+async def delete_rule(
+    request:   Request,
+    rule_id:   str,
+    registry:  Annotated[RuleRegistry, Depends(get_registry)],
+    tenant_id: Annotated[str, Query(...)],
+) -> Response:
+    """RUL-03 — apaga a regra em draft/disabled (409 se ela age ou mede)."""
+    tenant_id = authorize(request, tenant_id, write=True)
+    try:
+        await registry.delete(tenant_id, rule_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuleLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return Response(status_code=204)
 
 
 @router.get("/rules/{rule_id}", response_model=Rule)

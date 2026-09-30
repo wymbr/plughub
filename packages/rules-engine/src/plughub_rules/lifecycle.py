@@ -22,6 +22,17 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+# RUL-03 (2026-09-30, decisão do dono): só a regra que NÃO age nem mede se edita ou se apaga.
+# Mudar uma regra ativa ou em shadow pularia o ciclo que existe para ela ser medida antes de
+# agir; para mudá-la: disabled → draft → editar → dry_run → shadow → active.
+EDITABLE_STATUSES: frozenset[str] = frozenset({"draft", "disabled"})
+
+
+def transitions() -> dict[str, list[str]]:
+    """A máquina de estados, para quem precisa MOSTRÁ-LA (a tela) sem copiá-la."""
+    return {k: sorted(v) for k, v in _VALID_TRANSITIONS.items()}
+
+
 def validate_transition(from_status: str, to_status: str) -> None:
     """
     Validates a lifecycle transition.

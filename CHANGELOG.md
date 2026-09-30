@@ -1,5 +1,91 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (16) — RUL-03: as regras têm tela, e regra se edita e se apaga enquanto não age nem mede
+
+**O que faltava:** regra de escalação só existia pela API do rules-engine, e a API só sabia criar e
+mudar status. Desde a RUL-02 uma regra ativa tira o contato da IA de verdade, e quem a opera não tinha
+onde vê-la; regra de teste ficava `disabled` para sempre (três da prova da RUL-02 estavam assim).
+
+**Decisões do dono (2026-09-30):**
+1. **Editar só em `draft` ou `disabled`.** Regra em `dry_run`, `shadow` ou `active` está sendo medida
+   ou agindo; mudá-la por baixo faria o shadow medir uma regra e o active executar outra. O caminho é
+   levá-la a `disabled` (e a `draft`), editar e percorrer o ciclo de novo.
+2. **Apagar só em `draft` ou `disabled`**, e apagar de verdade: os disparos passados ficam no log.
+
+**Backend (rules-engine):**
+- `PUT /rules/{id}` substitui o que a regra decide (nome, condições, lógica, pool, prioridade, aviso) e
+  não toca id, tenant nem status.
+- `DELETE /rules/{id}` remove a chave, o id do índice e regrava o cache de ativas.
+- Fora de `draft`/`disabled`, os dois respondem **409 nomeando o caminho**.
+- `GET /lifecycle` serve a máquina de estados e o que se edita (`EDITABLE_STATUSES` mora em
+  `lifecycle.py`), para a tela **mostrar** a regra que o serviço aplica em vez de copiá-la.
+- Todas as rotas usam o portão da AUT-65 (`read_write` para escrever).
+- O `RuleStore` engolia calado um cache de ativas ilegível e desligava todas as regras do tenant.
+  Agora loga ERROR dizendo isso.
+
+**Tela** (`/config/rules`, `modules/rules/`):
+- Grant-first por `config.rules`, o mesmo campo do backend: `read_only` vê, `read_write` cria, edita,
+  apaga e muda status.
+- Os botões de editar e apagar ficam desligados fora de `draft`/`disabled`, com o motivo no título.
+- As transições oferecidas vêm do `/lifecycle`.
+- Editor de condições:
+  - a sinalização (`flag`) vira uma escolha só, gravada como `eq` sobre o nome, que é o que o avaliador
+    compara;
+  - a janela de média aparece só para sentimento;
+  - pool de destino vem do registry; sem pool, a tela diz *"nunca age"*;
+  - o aviso ao cliente tem teto de 500.
+- A borda ganhou `/rules-api/*` → `rules-engine:3201` com o prefixo removido (nginx e Vite), porque as
+  rotas do serviço não têm prefixo próprio e `/config/*` é do config-api.
+
+**Achado de passagem:** o `probe_abac_field_labels_i18n.sh` estava vermelho desde a AUD-03.
+`audit.data_requests` não tinha rótulo em `access.json`, e a tela de acesso caía no texto do catálogo.
+Rótulos adicionados nas duas línguas.
+
+**Ao vivo, pela borda da 5174:**
+
+| chamada | resposta |
+|---|---|
+| anônimo | 401 |
+| `/lifecycle` | 200 |
+| criar | 201 |
+| editar em `draft` | 200 |
+| editar com `read_only` | 403 |
+| editar e apagar em `dry_run` | 409, com o caminho |
+| apagar em `disabled` | 204 |
+| ler depois de apagar | 404 |
+| SPA `/config/rules` | 200 `text/html` |
+
+Os três resíduos `rul02_probe_*` foram apagados (204), e o índice `tenant_demo:rules:ids` ficou vazio.
+
+⚠️ **A tela não foi vista renderizada.** Nenhum usuário tem `config.rules`, porque é preset de
+nascimento (AUT-65); quem opera regras recebe a concessão em `/config/access`.
+
+**Testes e verificação:**
+- **Testes:** rules-engine 61. Cobrem:
+  - edição em `draft`;
+  - 409 em `dry_run`, `shadow` e `active`;
+  - `disabled` editável e apagável, fora do cache e do índice;
+  - grau e tenant;
+  - `/lifecycle` servido e fechado ao anônimo.
+- **Contraprovas**, cada uma com vermelho:
+  - todo status editável;
+  - sem `srem` do índice. A primeira versão do teste **passava** com essa mutação, porque a lista pula
+    chave ausente; ganhou a asserção direta sobre o índice;
+  - `PUT` com `read_only`;
+  - `DELETE` sem portão.
+- **Gates verdes:**
+  - nav × backend, com `rules` classificado em `NAO_CONFIG_API`;
+  - nav × rota;
+  - grant-first;
+  - colisão `/config`;
+  - credencial das chamadas da UI;
+  - mesma origem;
+  - i18n duplicado;
+  - rótulos ABAC;
+  - classes de cor;
+  - varredura anônima, com três linhas novas `fechada`;
+  - ledger.
+
 ## 2026-09-30 (15) — WCH-15: anexo com id que não é UUID responde 404, não 500 — e o upload não diz mais "tipo errado"
 
 **Origem:** achado na varredura anônima da WFL-02 (§ 2026-09-30 (9)), registrado como tarefa à parte.

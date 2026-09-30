@@ -10,10 +10,14 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from .lifecycle import validate_transition
-from .models import Rule, RuleCreateRequest
+from .lifecycle import EDITABLE_STATUSES, validate_transition
+from .models import Rule, RuleCreateRequest, RuleUpdateRequest
 
 logger = logging.getLogger("plughub.rules")
+
+
+class RuleLockedError(Exception):
+    """A regra está agindo ou medindo (dry_run/shadow/active): não se edita nem se apaga."""
 
 
 class RuleRegistry:
@@ -132,6 +136,44 @@ class RuleRegistry:
         await self._refresh_active_cache(tenant_id)
 
         return updated
+
+    def _require_editable(self, rule: Rule, verbo: str) -> None:
+        if rule.status not in EDITABLE_STATUSES:
+            raise RuleLockedError(
+                f"regra '{rule.rule_id}' está em '{rule.status}' e não pode ser {verbo}: só draft ou "
+                f"disabled. Para mudá-la, leve a disabled (e a draft para editar) e percorra o ciclo "
+                f"de novo — assim a mudança é medida em shadow antes de agir."
+            )
+
+    async def update(self, tenant_id: str, rule_id: str, req: RuleUpdateRequest) -> Rule:
+        """RUL-03 — edita o que a regra decide. Só em draft/disabled (decisão do dono)."""
+        rule = await self.get(tenant_id, rule_id)
+        if rule is None:
+            raise KeyError(f"Rule not found: {rule_id}")
+        self._require_editable(rule, "editada")
+        updated = rule.model_copy(update={
+            "name":            req.name,
+            "conditions":      req.conditions,
+            "logic":           req.logic,
+            "target_pool":     (req.target_pool or "").strip() or None,
+            "priority":        req.priority,
+            "customer_notice": (req.customer_notice or "").strip() or None,
+            "updated_at":      datetime.now(timezone.utc).isoformat(),
+        })
+        await self._redis.set(self._rule_key(tenant_id, rule_id), updated.model_dump_json())
+        return updated
+
+    async def delete(self, tenant_id: str, rule_id: str) -> None:
+        """RUL-03 — apaga de verdade a regra que não age nem mede. Os disparos passados ficam
+        no log; regra não é dado pessoal nem trilha."""
+        rule = await self.get(tenant_id, rule_id)
+        if rule is None:
+            raise KeyError(f"Rule not found: {rule_id}")
+        self._require_editable(rule, "apagada")
+        await self._redis.delete(self._rule_key(tenant_id, rule_id))
+        await self._redis.srem(self._index_key(tenant_id), rule_id)
+        await self._refresh_active_cache(tenant_id)
+        logger.info("rule %s apagada (tenant=%s, status=%s)", rule_id, tenant_id, rule.status)
 
     # ─── cache helpers ─────────────────────────────────────────────────
 

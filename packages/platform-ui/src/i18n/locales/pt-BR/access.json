@@ -85,7 +85,8 @@
     },
     "audit": {
       "sessions": "Consultar trilha de acesso a sessões",
-      "mcp_calls": "Consultar trilha de chamadas MCP"
+      "mcp_calls": "Consultar trilha de chamadas MCP",
+      "data_requests": "Atender pedidos do titular (dossiê de acesso e eliminação)"
     }
   },
   "permForm": {

@@ -144,3 +144,73 @@ def test_dry_run_refuses_loudly_instead_of_zeros(client):
     assert r.status_code == 501 and "RUL-05" in r.text
     assert client.post("/rules/nao_existe/dry-run", json={"start_date": "a", "end_date": "b",
                                                            "tenant_id": T}, headers=h).status_code == 404
+
+
+# ─── RUL-03 — editar e apagar só em draft/disabled ─────────────────────────────
+
+UPD = {"name": "novo", "conditions": [{"parameter": "turn_count", "operator": "gte", "value": 5}],
+       "logic": "OR", "target_pool": "  outro  ", "priority": 3, "customer_notice": ""}
+
+
+def _to(client, h, *status):
+    for s in status:
+        r = client.patch(f"/rules/r1/status?tenant_id={T}", json={"status": s}, headers=h)
+        assert r.status_code == 200, (s, r.text)
+
+
+def test_edit_in_draft_replaces_what_the_rule_decides(client):
+    h = _tok("read_write")
+    client.post("/rules", json=RULE, headers=h)
+    r = client.put(f"/rules/r1?tenant_id={T}", json=UPD, headers=h)
+    assert r.status_code == 200, r.text
+    got = client.get(f"/rules/r1?tenant_id={T}", headers=h).json()
+    assert got["name"] == "novo" and got["logic"] == "OR" and got["priority"] == 3
+    assert got["target_pool"] == "outro" and got["customer_notice"] is None
+    assert got["conditions"][0]["parameter"] == "turn_count" and got["status"] == "draft"
+
+
+@pytest.mark.parametrize("path", [("dry_run",), ("dry_run", "shadow"), ("dry_run", "shadow", "active")])
+def test_rule_that_acts_or_measures_is_locked(client, path):
+    h = _tok("read_write")
+    client.post("/rules", json=RULE, headers=h)
+    _to(client, h, *path)
+    r = client.put(f"/rules/r1?tenant_id={T}", json=UPD, headers=h)
+    assert r.status_code == 409 and "disabled" in r.json()["detail"], r.text
+    assert client.delete(f"/rules/r1?tenant_id={T}", headers=h).status_code == 409
+    assert client.get(f"/rules/r1?tenant_id={T}", headers=h).json()["name"] == "n"
+
+
+def test_disabled_rule_is_editable_and_deletable_and_leaves_the_active_cache(client):
+    h = _tok("read_write")
+    client.post("/rules", json=RULE, headers=h)
+    _to(client, h, "dry_run", "shadow", "active")
+    fake = api_mod.app.dependency_overrides[api_mod.get_redis]()
+    assert "r1" in fake.kv[f"rules:{T}:active"]
+    _to(client, h, "disabled")
+    assert client.put(f"/rules/r1?tenant_id={T}", json=UPD, headers=h).status_code == 200
+    assert client.delete(f"/rules/r1?tenant_id={T}", headers=h).status_code == 204
+    assert client.get(f"/rules/r1?tenant_id={T}", headers=h).status_code == 404
+    assert client.get(f"/rules?tenant_id={T}", headers=h).json() == []
+    assert not fake.sets.get(f"{T}:rules:ids"), "o índice guardaria um id sem regra"
+    assert client.delete(f"/rules/r1?tenant_id={T}", headers=h).status_code == 404
+
+
+def test_edit_and_delete_need_read_write_and_own_tenant(client):
+    client.post("/rules", json=RULE, headers={"X-Service-Token": SVC})
+    ro = _tok("read_only")
+    assert client.put(f"/rules/r1?tenant_id={T}", json=UPD, headers=ro).status_code == 403
+    assert client.delete(f"/rules/r1?tenant_id={T}", headers=ro).status_code == 403
+    rw = _tok("read_write")
+    assert client.delete("/rules/r1?tenant_id=outro", headers=rw).status_code == 403
+    assert client.put(f"/rules/r1?tenant_id={T}", json=UPD).status_code == 401
+    assert client.delete(f"/rules/r1?tenant_id={T}").status_code == 401
+    assert client.get(f"/rules/r1?tenant_id={T}", headers=rw).status_code == 200
+
+
+def test_lifecycle_is_served_not_copied(client):
+    r = client.get(f"/lifecycle?tenant_id={T}", headers=_tok("read_only"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["editable_statuses"] == ["disabled", "draft"]
+    assert body["transitions"]["draft"] == ["disabled", "dry_run"]
+    assert client.get(f"/lifecycle?tenant_id={T}").status_code == 401

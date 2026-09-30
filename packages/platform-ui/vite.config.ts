@@ -26,6 +26,13 @@ export default defineConfig({
         ws: true,
         rewrite: (path: string) => path.replace(/^\/agent-ws/, '/agent/ws'),
       },
+      '^/rules-api': {
+        // rules-engine (RUL-03) — tela de regras. As rotas dele não têm prefixo (/rules,
+        // /lifecycle), então a borda usa um próprio e o remove, como /analytics.
+        target: 'http://localhost:3201',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/rules-api/, ''),
+      },
       '^/analytics': {
         // agent-assist customer history + transcript → analytics-api (prefix stripped)
         target: 'http://localhost:3500',

@@ -1,0 +1,93 @@
+{
+  "title": "Escalation rules",
+  "info": "When a rule's conditions match during an AI conversation, the AI stops at the next step and escalates the contact to the rule's pool. A rule is measured in dry-run and shadow before it acts.",
+  "new": "New rule",
+  "restricted": "You need config.rules to see escalation rules.",
+  "readOnly": "Read-only: editing requires config.rules with read and write.",
+  "empty": {
+    "title": "No rules yet",
+    "desc": "Create a rule in draft, then take it through dry-run and shadow before activating it."
+  },
+  "status": {
+    "draft": "Draft",
+    "dry_run": "Dry-run",
+    "shadow": "Shadow",
+    "active": "Active",
+    "disabled": "Disabled"
+  },
+  "param": {
+    "sentiment_score": "Sentiment",
+    "intent_confidence": "Intent confidence",
+    "turn_count": "Turns",
+    "elapsed_ms": "Elapsed (ms)",
+    "flag": "Flag"
+  },
+  "op": {
+    "lt": "<",
+    "lte": "≤",
+    "gt": ">",
+    "gte": "≥",
+    "eq": "=",
+    "neq": "≠",
+    "contains": "contains"
+  },
+  "flag": {
+    "human_requested": "Customer asked for a human",
+    "sensitive_topic": "Sensitive topic",
+    "policy_limit_hit": "Policy limit reached",
+    "handoff_requested": "Handoff requested"
+  },
+  "logic": {
+    "AND": "and",
+    "OR": "or"
+  },
+  "cond": {
+    "flagIs": "flag {{flag}} raised",
+    "window": "(average of {{n}} turns)"
+  },
+  "card": {
+    "noPool": "no pool — never acts",
+    "priority": "priority {{n}}",
+    "notice": "notice to customer",
+    "moveTo": "Move to:",
+    "lockedHint": "Only draft or disabled rules can be edited or deleted. Disable it first."
+  },
+  "actions": {
+    "edit": "Edit",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving…"
+  },
+  "confirm": {
+    "delete": "Delete rule \"{{name}}\"? Past triggers stay in the log."
+  },
+  "form": {
+    "id": "Rule id",
+    "idHint": "lowercase letters, digits and _ (3–64)",
+    "idFixed": "the id does not change",
+    "idInvalid": "Use 3–64 lowercase letters, digits or _.",
+    "idTaken": "There is already a rule with this id.",
+    "name": "Name",
+    "conditions": "Conditions",
+    "conditionsHint": "Sentiment is the one the AI declares in its reasoning step; unmeasured sentiment never matches.",
+    "addCondition": "condition",
+    "logicAnd": "all conditions (AND)",
+    "logicOr": "any condition (OR)",
+    "window": "avg. turns",
+    "windowHint": "Compare the average of the last N turns instead of the current one",
+    "targetPool": "Escalate to pool",
+    "targetPoolHint": "Without a pool the rule is evaluated but never acts.",
+    "noPool": "— no pool —",
+    "poolsError": "Could not list pools ({{detail}}).",
+    "priority": "Priority",
+    "priorityHint": "1 to 10; the highest matching rule wins.",
+    "notice": "Message to the customer (optional)",
+    "noticeHint": "Sent as-is when the rule transfers the customer. {{n}} characters left."
+  },
+  "errors": {
+    "load": "Could not load the rules: {{detail}}",
+    "status": "Could not change {{id}}: {{detail}}",
+    "delete": "Could not delete {{id}}: {{detail}}"
+  }
+}

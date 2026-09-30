@@ -85,7 +85,8 @@
     },
     "audit": {
       "sessions": "Query the session access trail",
-      "mcp_calls": "Query the MCP call trail"
+      "mcp_calls": "Query the MCP call trail",
+      "data_requests": "Answer data subject requests (access dossier and erasure)"
     }
   },
   "permForm": {

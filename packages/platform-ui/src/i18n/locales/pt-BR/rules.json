@@ -1,0 +1,93 @@
+{
+  "title": "Regras de escalação",
+  "info": "Quando as condições de uma regra batem durante uma conversa com IA, a IA para no próximo passo e escala o contato para o pool da regra. A regra é medida em dry-run e shadow antes de agir.",
+  "new": "Nova regra",
+  "restricted": "É preciso config.rules para ver as regras de escalação.",
+  "readOnly": "Somente leitura: editar exige config.rules com leitura e escrita.",
+  "empty": {
+    "title": "Nenhuma regra ainda",
+    "desc": "Crie uma regra em rascunho e leve-a por dry-run e shadow antes de ativá-la."
+  },
+  "status": {
+    "draft": "Rascunho",
+    "dry_run": "Dry-run",
+    "shadow": "Shadow",
+    "active": "Ativa",
+    "disabled": "Desativada"
+  },
+  "param": {
+    "sentiment_score": "Sentimento",
+    "intent_confidence": "Confiança da intenção",
+    "turn_count": "Turnos",
+    "elapsed_ms": "Tempo decorrido (ms)",
+    "flag": "Sinalização"
+  },
+  "op": {
+    "lt": "<",
+    "lte": "≤",
+    "gt": ">",
+    "gte": "≥",
+    "eq": "=",
+    "neq": "≠",
+    "contains": "contém"
+  },
+  "flag": {
+    "human_requested": "Cliente pediu um humano",
+    "sensitive_topic": "Assunto sensível",
+    "policy_limit_hit": "Limite de política atingido",
+    "handoff_requested": "Transferência pedida"
+  },
+  "logic": {
+    "AND": "e",
+    "OR": "ou"
+  },
+  "cond": {
+    "flagIs": "sinalização {{flag}} levantada",
+    "window": "(média de {{n}} turnos)"
+  },
+  "card": {
+    "noPool": "sem pool — nunca age",
+    "priority": "prioridade {{n}}",
+    "notice": "aviso ao cliente",
+    "moveTo": "Levar a:",
+    "lockedHint": "Só regra em rascunho ou desativada se edita ou apaga. Desative-a antes."
+  },
+  "actions": {
+    "edit": "Editar",
+    "delete": "Apagar",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "saving": "Salvando…"
+  },
+  "confirm": {
+    "delete": "Apagar a regra \"{{name}}\"? Os disparos passados ficam no registro."
+  },
+  "form": {
+    "id": "Id da regra",
+    "idHint": "letras minúsculas, dígitos e _ (3–64)",
+    "idFixed": "o id não muda",
+    "idInvalid": "Use de 3 a 64 letras minúsculas, dígitos ou _.",
+    "idTaken": "Já existe uma regra com este id.",
+    "name": "Nome",
+    "conditions": "Condições",
+    "conditionsHint": "O sentimento é o que a IA declara no passo de raciocínio; sentimento não medido nunca casa.",
+    "addCondition": "condição",
+    "logicAnd": "todas as condições (E)",
+    "logicOr": "qualquer condição (OU)",
+    "window": "média turnos",
+    "windowHint": "Compara a média dos últimos N turnos em vez do turno atual",
+    "targetPool": "Escalar para o pool",
+    "targetPoolHint": "Sem pool a regra é avaliada, mas nunca age.",
+    "noPool": "— sem pool —",
+    "poolsError": "Não foi possível listar os pools ({{detail}}).",
+    "priority": "Prioridade",
+    "priorityHint": "De 1 a 10; vence a regra de maior prioridade que casar.",
+    "notice": "Mensagem ao cliente (opcional)",
+    "noticeHint": "Enviada como está quando a regra transfere o cliente. Restam {{n}} caracteres."
+  },
+  "errors": {
+    "load": "Não foi possível carregar as regras: {{detail}}",
+    "status": "Não foi possível mudar {{id}}: {{detail}}",
+    "delete": "Não foi possível apagar {{id}}: {{detail}}"
+  }
+}
