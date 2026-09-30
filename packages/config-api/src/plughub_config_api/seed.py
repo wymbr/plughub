@@ -21,6 +21,7 @@ Namespaces:
   dashboards         — Dashboard template management
   quality_ingest     — Per-source identity/pool/version map (R13c)
   storage            — Retenção por CLASSE de artefato do AttachmentStore (VOZ-06: call_recording)
+  retention          — Retenção por CLASSE de dado pessoal (AUD-07): original_content
 
 Note: 'quota' namespace removed. Per-tenant limits ({tenant}:quota:*) are written
   directly by the pricing integration when a plan is activated — not seeded here.
@@ -491,6 +492,23 @@ _SEED: list[tuple[str, str, object, str]] = [
         "a data de expiracao e carimbada quando a gravacao e guardada (ADR voice-media-plane V5)."
     ),
 
+    # ── retention — política por CLASSE de dado pessoal (AUD-07) ────────────────
+    # Decisão do dono (2026-09-30): uma chave por classe, configurável por tenant. Só
+    # entra aqui a classe que TEM expurgo — chave sem leitor é promessa sem mecanismo
+    # (foi o que `audit_policy.default_retention_days` e a sua cópia em `masking` foram
+    # por meses, e saíram daqui por isso). As outras classes (conteúdo mascarado,
+    # transcrição, texto livre de pesquisa) entram com o expurgo delas. A gravação de
+    # chamada tem casa própria: `storage.call_recording_retention_days`.
+    # Source: session-replayer/retention_purge.py (quem lê e valida).
+    (
+        "retention", "original_content_days",
+        90,
+        "Dias que o texto DESMASCARADO (original_content) de uma mensagem fica no stream "
+        "duravel (session_stream_events). Passado o prazo, contado do momento da mensagem, o "
+        "original e apagado e so o conteudo mascarado fica. Inteiro de 1 a 3650. Config-api "
+        "fora ou valor invalido: o expurgo PULA o tenant e loga — nunca adivinha um prazo."
+    ),
+
     # ── audit_policy ──────────────────────────────────────────────────────────
     # Source: schemas/audit.ts (DEFAULT_MASKING_RULES, MaskingAccessPolicy)
     # Renamed from 'masking' → 'audit_policy' to reflect broader scope (LGPD audit,
@@ -501,12 +519,6 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Roles that can read original_content (unmasked) in session_context_get. "
         "primary and specialist always receive masked (display_partial) content. "
         "Source: schemas/audit.ts MaskingAccessPolicy"
-    ),
-    (
-        "audit_policy", "default_retention_days",
-        90,
-        "Default number of days masked tokens are retained in the audit trail. "
-        "After this period, token resolution may return null."
     ),
     (
         "audit_policy", "capture_input_default",
@@ -530,12 +542,6 @@ _SEED: list[tuple[str, str, object, str]] = [
         ["evaluator", "reviewer"],
         "[DEPRECATED — use audit_policy.authorized_roles] "
         "Roles that can read original_content (unmasked)."
-    ),
-    (
-        "masking", "default_retention_days",
-        90,
-        "[DEPRECATED — use audit_policy.default_retention_days] "
-        "Days masked tokens are retained in the audit trail."
     ),
     (
         "masking", "capture_input_default",

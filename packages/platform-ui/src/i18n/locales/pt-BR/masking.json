@@ -21,8 +21,8 @@
       "warning": "Atenção: pode capturar valores sensíveis resolvidos"
     },
     "retention": {
-      "title": "Retenção de Tokens",
-      "description": "Tempo em dias que os tokens de mascaramento são mantidos no Redis. Após expirar, o original_content não pode mais ser resolvido — use apenas em sessões encerradas ou relatórios com dados já exportados."
+      "title": "Retenção do texto desmascarado",
+      "description": "Dias que o texto DESMASCARADO de uma mensagem (original_content) fica no registro durável da sessão, contados de quando foi dito. Depois disso o original é apagado e só o conteúdo mascarado fica. Conferido a cada hora; de 1 a 3650 dias."
     },
     "categories": {
       "title": "Catálogo de Tipos de Dado",

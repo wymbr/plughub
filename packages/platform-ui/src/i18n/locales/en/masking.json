@@ -21,8 +21,8 @@
       "warning": "Warning: may capture resolved sensitive values"
     },
     "retention": {
-      "title": "Token Retention",
-      "description": "Time in days that masking tokens are kept in Redis. After expiration, original_content cannot be resolved — use only on closed sessions or exported reports."
+      "title": "Unmasked text retention",
+      "description": "Days the UNMASKED text of a message (original_content) is kept in the durable session record, counted from when it was said. After that the original is deleted and only the masked content remains. Checked every hour; 1 to 3650 days."
     },
     "categories": {
       "title": "Data Type Catalog",

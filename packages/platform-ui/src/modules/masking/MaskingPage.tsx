@@ -169,6 +169,11 @@ export default function MaskingPage() {
   // masking namespace stores per-category display rules
   const { entries: maskingEntries, reload: reloadMasking } = useNamespace(tenantId, 'masking')
 
+  // AUD-07 — retenção do texto DESMASCARADO mora no namespace `retention` (uma chave por
+  // classe de dado). Esta seção gravava `audit_policy.token_retention_days`, que NENHUM
+  // serviço lia: o número mudava na tela e nada era apagado.
+  const { entries: retentionEntries, reload: reloadRetention } = useNamespace(tenantId, 'retention')
+
   // ALW-06 — proveniência dos DOIS namespaces que esta tela escreve. Não é enfeite:
   // todo `putConfig` daqui manda `tenantId`, ou seja, a primeira gravação de uma key
   // CRIA um override e desliga aquele tenant das atualizações da plataforma, para
@@ -187,9 +192,9 @@ export default function MaskingPage() {
 
   const captureInput:  boolean = val('capture_input')  === true
   const captureOutput: boolean = val('capture_output') === true
-  const retentionDays: number  = typeof val('token_retention_days') === 'number'
-    ? (val('token_retention_days') as number)
-    : 30
+  const rawRetention = retentionEntries['original_content_days']?.value ?? retentionEntries['original_content_days']
+  // Ausente é ausente: um 30 inventado aqui esconderia o deploy sem seed.
+  const retentionDays: number | null = typeof rawRetention === 'number' ? rawRetention : null
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok })
@@ -204,6 +209,20 @@ export default function MaskingPage() {
       reload()
       provAudit.reload()   // a 1a gravacao CRIA o override — o banner muda junto
       showToast(t('toast.keySaved', { key }), true)
+    } catch (e) {
+      showToast(String(e), false)
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  async function saveRetention(value: number) {
+    if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
+    setSaving('original_content_days')
+    try {
+      await putConfig('retention', 'original_content_days', value, tenantId, '', adminToken)
+      reloadRetention()
+      showToast(t('toast.keySaved', { key: 'retention.original_content_days' }), true)
     } catch (e) {
       showToast(String(e), false)
     } finally {
@@ -438,8 +457,8 @@ export default function MaskingPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12 }}>
             <RetentionEditor
               value={retentionDays}
-              onSave={v => saveKey('token_retention_days', v)}
-              saving={saving === 'token_retention_days'}
+              onSave={saveRetention}
+              saving={saving === 'original_content_days'}
             />
           </div>
         </Section>
@@ -877,15 +896,15 @@ function ToggleCard({ label, sublabel, active, onToggle, saving, warning }: {
 }
 
 function RetentionEditor({ value, onSave, saving }: {
-  value: number; onSave: (v: number) => void; saving: boolean
+  value: number | null; onSave: (v: number) => void; saving: boolean
 }) {
   const { t } = useTranslation('masking')
   const [editing, setEditing] = useState(false)
-  const [draft,   setDraft]   = useState(String(value))
+  const [draft,   setDraft]   = useState(String(value ?? ''))
 
   function commit() {
     const n = parseInt(draft, 10)
-    if (!isNaN(n) && n >= 1 && n <= 365) {
+    if (!isNaN(n) && n >= 1 && n <= 3650) {
       onSave(n)
       setEditing(false)
     }
@@ -896,7 +915,7 @@ function RetentionEditor({ value, onSave, saving }: {
       {editing ? (
         <>
           <input
-            type="number" min={1} max={365}
+            type="number" min={1} max={3650}
             value={draft}
             onChange={e => setDraft(e.target.value)}
             style={{ ...inputStyle, width: 80 }}
@@ -914,10 +933,10 @@ function RetentionEditor({ value, onSave, saving }: {
             fontSize: 28, fontWeight: 700, color: '#7dd3fc',
             lineHeight: 1, fontVariantNumeric: 'tabular-nums',
           }}>
-            {value}
+            {value ?? '—'}
           </div>
           <div style={{ color: '#64748b', fontSize: 13 }}>{t('retention.days')}</div>
-          <button onClick={() => { setDraft(String(value)); setEditing(true) }} style={editBtnStyle}>
+          <button onClick={() => { setDraft(String(value ?? '')); setEditing(true) }} style={editBtnStyle}>
             <Pencil size={13} style={{ display: 'inline', marginRight: 4 }} aria-hidden="true" />{t('retention.edit')}
           </button>
         </>

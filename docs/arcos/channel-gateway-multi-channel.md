@@ -1547,10 +1547,17 @@ channel:voice:{session_id}:recording_opt_out                opt-out global (TTL 
 
 ### 13.8 Retenção e erasure
 
+> **Corrigido em 2026-09-30 (AUD-07).** Este bloco dizia *"TTL padrão: 5 anos (configurável por
+> tenant — mínimo regulatório ANATEL)"*, e nenhum código jamais implementou isso. O legado Twilio
+> descrito aqui foi aposentado na VOZ-03; a gravação de chamada é a classe `call_recording` do
+> AttachmentStore, com retenção em `storage.call_recording_retention_days` (**30 dias** por
+> default, configurável por tenant, 1 a 3650), carimbada quando a gravação é guardada. Decisão do
+> dono na AUD-07: a gravação segue a classe atual; os 5 anos saem da documentação. Prazo
+> regulatório, se houver, entra como valor dessa chave, não como texto aqui.
+
 ```
-AttachmentStore path:  voice_recordings/{tenant_id}/{session_id}/{segment_id}.mp3
-TTL padrão:            5 anos (configurável por tenant — mínimo regulatório ANATEL)
-Formato:               MP3 dual-channel (64kbps por canal)
+AttachmentStore:       classe call_recording (VOZ-06)
+Retenção:              storage.call_recording_retention_days — default 30 dias
 ```
 
 O pipeline de erasure LGPD (Audit LGPD Fase 4 — pendente) deve incluir

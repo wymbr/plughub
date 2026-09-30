@@ -33,6 +33,7 @@ from .stream_persister import StreamPersister
 from .pipeline_persister import PipelineStatePersister
 from .context_persister import ContextStorePersister
 from .import_stream_consumer import ImportStreamConsumer
+from . import retention_purge
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +212,8 @@ class SessionReplayerConsumer:
             self._run_persister_consumer(),
             self._run_replayer_consumer(),
             import_consumer.run(),
+            # AUD-07 — expurgo do original_content desmascarado por retenção do tenant.
+            retention_purge.run_forever(self._pg_pool, self._config_api_url),
         )
 
     async def stop(self) -> None:

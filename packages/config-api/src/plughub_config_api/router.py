@@ -64,6 +64,8 @@ router = APIRouter(prefix="/config")
 _NS_FIELD_OVERRIDES = {
     "masking":      "masking",
     "audit_policy": "masking",   # MaskingPage edita masking + audit_policy → mesmo campo
+    # AUD-07: retenção de dado pessoal é política de compliance, editada na mesma tela.
+    "retention":    "masking",
     "webchat":  "channels", "webhook": "channels", "sms": "channels", "whatsapp": "channels", "voice": "channels", "webrtc": "channels",
     # VOZ-25: perfis de fala por ponto de entrada — editados na mesma tela de canais (aba WebRTC)
     "speech_profiles": "channels",

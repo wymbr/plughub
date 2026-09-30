@@ -1,5 +1,73 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-09-30 (7) — AUD-07: retenção por classe de dado, e o texto desmascarado deixa de ficar para sempre
+
+**O defeito da ficha:** as lojas de dado pessoal não tinham prazo. O caso mais grave era o
+`session_stream_events`, que guardava o texto DESMASCARADO das mensagens (`original_content`) sem
+expurgo nenhum.
+
+**Decisão do dono (2026-09-30): política POR CLASSE de dado, configurável por tenant**, num namespace
+de retenção do config-api editável na tela. Defaults:
+- `original_content`: 90 dias;
+- conteúdo mascarado, transcrições e texto livre de pesquisa: 1 ano;
+- gravações: seguem a classe atual (30 dias), e o doc de 5 anos é corrigido;
+- métricas: sem TTL.
+
+Começa pelo `original_content`. Esta entrega é essa primeira classe; as outras seguem na `AUD-08`.
+
+**O que a medição achou antes de escrever o expurgo:**
+- **o texto desmascarado não mora na coluna `original_content`.** O escritor o põe DENTRO de
+  `payload`. Contagem no demo: 43 linhas com `payload.original_content` e **zero** com a coluna
+  preenchida. Um expurgo que limpasse só a coluna passaria em qualquer teste e não apagaria nada;
+- **já havia três "retenções" que nenhum código lia**: `audit_policy.default_retention_days` e a
+  cópia em `masking` (seed, 90 dias), e `audit_policy.token_retention_days`, que a tela de
+  Mascaramento editava com o rótulo "Retenção de Tokens" e default inventado de 30. O número mudava
+  na tela e nada era apagado.
+
+**O que mudou:**
+- config-api: namespace `retention` com `original_content_days` (default 90, 1 a 3650). Só a classe
+  que tem expurgo entra; as demais entram com o delas, para a chave nunca existir sem leitor. A
+  escrita pede `config.masking`, o mesmo grant da tela. As chaves mortas saíram do seed e foram
+  apagadas do demo pela API;
+- session-replayer (dono da tabela): `retention_purge.py`, a cada hora. Para cada tenant com
+  original guardado, remove a chave de `payload` e zera a coluna nas linhas mais velhas que o prazo,
+  contado do `timestamp` do EVENTO. A linha e o conteúdo mascarado ficam;
+- degradação na direção segura: config-api fora ou valor inválido **pula** o tenant naquela rodada,
+  com WARNING/ERROR, porque expurgar com um prazo adivinhado poderia apagar o que o tenant decidiu
+  guardar. Chave ausente com config-api de pé usa o default declarado e diz que usou. Uma rodada que
+  falha loga e não derruba o Persister nem o Replayer, que rodam no mesmo `gather`;
+- tela de Mascaramento: a seção passou a ler e gravar `retention.original_content_days`, com o texto
+  dizendo o que ela faz. Ausente mostra "—", nunca um número inventado. O teto de 365 virou 3650;
+- `channel-gateway-multi-channel.md` § 13.8 não promete mais 5 anos de gravação: a retenção é
+  `storage.call_recording_retention_days`, 30 dias por default.
+
+**Medido ao vivo:**
+- duas linhas sintéticas, uma de 200 dias e uma de 1 dia, com CPF no original. A rodada expurgou
+  uma; a velha perdeu o `original_content` e manteve o conteúdo mascarado, a nova ficou intacta.
+  Linhas de teste removidas;
+- antes de o seed rodar, a rodada disse `ausente … default de 90 dias`; depois dele, `fonte=config`;
+- escrita pela borda da UI com o Bearer do admin: 200. O override de teste foi apagado.
+
+**Achado de passagem:** o `config-seed` do compose tem imagem própria. Reconstruir o `config-api` não
+basta: a primeira rodada do seed recriou as chaves que tinham saído do código, porque rodou a imagem
+velha.
+
+**Instrumentos:**
+- session-replayer 64, com o novo `test_retention_purge.py`:
+  - lê o valor do tenant;
+  - config-api fora pula;
+  - sete valores inválidos pulam;
+  - ausente usa o default e avisa;
+  - corte por tenant, e tenant pulado não impede os outros;
+  - o SQL tira a chave de DENTRO do payload;
+  - o laço sobrevive a uma rodada que falha;
+- config-api 61;
+- gates verdes: chaves i18n duplicadas, escrita de config, supervisão de task, varredura anônima e
+  `check_config_invariants`.
+
+A suíte do session-replayer segue fora do `probe_python_suites` (`GAT-07`); rodei com pytest
+instalado num container descartável.
+
 ## 2026-09-30 (6) — CAL-01/CAL-02: a organização é a instalação, e a linha dela é de quem administra a plataforma
 
 **O defeito da CAL-01:** o `organization_id` de um calendário vinha de quem chamava, e cada tela dizia

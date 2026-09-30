@@ -1350,8 +1350,15 @@ mecanismo; cada um entra com a sua feature.
   ela), e as lojas donas respondem só a serviço. **Identificador da pessoa vai no corpo e nunca na
   trilha**; loja fora do ar sai `unavailable`, nunca vazia; `not_covered` diz o que não foi olhado.
 
+- **Retenção é POR CLASSE de dado, por tenant, no namespace `retention` do config-api** (AUD-07).
+  Hoje só `original_content_days` (90), expurgado a cada hora pelo session-replayer — o texto mora
+  DENTRO de `payload`, nunca na coluna homônima. Classe nova entra na chave JUNTO com o expurgo
+  dela; na dúvida sobre o prazo, o expurgo PULA o tenant, nunca adivinha. Gravação tem casa
+  própria: `storage.call_recording_retention_days`.
+
 **Deferred:** `original_content` desmascarado (`AUD-01`) · logs `user_access` (`AUD-02`) ·
-`config_snapshot` (`AUD-04`) · eliminação por anonimização (`AUD-06`) · retenção (`AUD-07`).
+`config_snapshot` (`AUD-04`) · eliminação por anonimização (`AUD-06`) · demais classes de
+retenção (`AUD-08`).
 
 → See [`docs/arcos/audit-lgpd.md`](docs/arcos/audit-lgpd.md)
 
