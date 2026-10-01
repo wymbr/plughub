@@ -2950,6 +2950,7 @@ async def a2a_agent_card(slug: str) -> JSONResponse:
 #   3. o pool do endereço tem de estar em `allowed_pools` do principal.
 
 @app.post("/a2a/{slug}")
+@app.post("/a2a/{slug}/")   # AAS-08: o card anuncia COM barra (base da descoberta); sem ela segue valendo
 async def a2a_interface(slug: str, request: Request) -> JSONResponse:
     settings = get_settings()
     auth = await a2a_principal.authenticate(
@@ -2993,6 +2994,12 @@ async def a2a_interface(slug: str, request: Request) -> JSONResponse:
     except ValueError:
         return JSONResponse({"jsonrpc": "2.0", "id": None,
                              "error": {"code": -32700, "message": "Parse error"}})
+    verr = a2a_tasks.version_error(request.headers.get("a2a-version"),
+                                   request.query_params.get("A2A-Version"))
+    if verr is not None:
+        logger.info("a2a: versão %s recusada (principal %s, slug=%s)", verr.data["requested"], p.sub, slug)
+        return JSONResponse({"jsonrpc": "2.0", "id": req.get("id") if isinstance(req, dict) else None,
+                             "error": verr.as_json()})
     caller = a2a_tasks.Caller(sub=p.sub, kind=p.kind, tenant_id=p.tenant_id, pool_id=ep.pool_id,
                               slug=slug)
     try:

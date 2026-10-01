@@ -540,7 +540,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera · **feita em 2026-10-01 (AAS-05)** |
 | **A4** | Adapter JSON-RPC | `message/send` (bloqueante com teto + `returnImmediately`), `tasks/get`, `tasks/cancel`, `tasks/list`; `menu` → `INPUT_REQUIRED` com `DataPart`/texto; D15 inteira | **basta para o OpenClaw** (só bearer, texto e JSON, polling) · **feita em 2026-10-01 (AAS-06)**; bloco mascarado por link = `AAS-14` |
 | **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling · **streaming feito em 2026-10-01 (AAS-07)**: `SendStreamingMessage`/`SubscribeToTask`, os nomes da v1.0; A2UI = `AAS-17` |
-| **A6** | Validação | clientes de referência: SDK oficial, **OpenClaw** (o mais restrito) e **Copilot Studio ou Gemini Enterprise** (o comprador real); isolamento cross-tenant e cross-titular (D15.4); probe de borda | gate |
+| **A6** | Validação | clientes de referência: SDK oficial, **OpenClaw** (o mais restrito) e **Copilot Studio ou Gemini Enterprise** (o comprador real); isolamento cross-tenant e cross-titular (D15.4); probe de borda | gate · **SDKs e isolamento feitos em 2026-10-01 (AAS-08)**: a2a-sdk 1.2.1 e @a2a-js/sdk 1.3.0 de ponta a ponta, outro tenant recusado ao vivo; clientes corporativos = roteiro do dono (`AAS-18`); cross-titular é `customer_agent` (`AAS-09`) |
 | **B1** | Prova federada (ID-FED) | `princ` (PID-21) e `oidc_email` pelo escritor único; RP OIDC por tenant; cofre de segredo | **bloqueia B2** |
 | **B2** | `customer_agent` | emissão por autosserviço após prova, cota por principal (D9), `AUTH_REQUIRED` (D12), mandato (D13) | o caso do consumidor |
 | **B3** | Pool humano por A2A | fila de pessoas atrás do canal, com `on_no_resource` e cota | *(rev. 2)* deixa de ser "fase 2 com canal a decidir": o canal já existe |
@@ -665,6 +665,13 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.
 - **2026-10-01, fase A2 (AAS-04).** D6 ganhou o *como ficou* do `partner`; a porta `POST /a2a/{slug}`
   existe antes da execução; o carimbo do principal no `AuditRecord` foi para a A4.
+- **2026-10-01, fase A6 (AAS-08), a parte medível sem conta de terceiro.** Os dois SDKs oficiais
+  falam com o canal do card ao artefato. O SDK JavaScript achou que o endereço do agente sem barra
+  final perdia o slug ao resolver `.well-known/agent-card.json` por RFC 3986: a interface do card
+  passou a ser `{base}/a2a/{slug}/`, e a porta atende com e sem a barra. `A2A-Version` passou a ser
+  conferido (Major.Minor; ausente vale 0.3, como manda a spec, e é recusado com `-32009`). Outro
+  tenant na porta é `403`, medido ao vivo. OpenClaw, Copilot Studio e Gemini Enterprise ficaram
+  num roteiro para o dono (`docs/guias/a2a-validacao-clientes-corporativos.md`, `AAS-18`).
 - **2026-10-01, fase A5 (AAS-07).** Streaming sobre SSE com os nomes da v1.0
   (`SendStreamingMessage`, `SubscribeToTask`; a tabela da § 2 usa os da 0.3). Regras conferidas
   no texto CRU da spec:

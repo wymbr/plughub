@@ -83,7 +83,8 @@ const PRINCIPAL_SCHEME_DESCRIPTION: Record<"partner" | "customer_agent", string>
 }
 
 export interface AgentCardInput {
-  /** URL pública do endereço do pool, já com o slug: `{base}/a2a/{slug}`. */
+  /** URL pública do endereço do pool, já com o slug e COM barra final: `{base}/a2a/{slug}/` —
+   *  é também a base da descoberta (`.well-known/agent-card.json` relativo a ela). */
   interfaceUrl: string
   /** `set_at` do slot `current` — a identidade de versão do deploy (D2). */
   deployedAt:   string

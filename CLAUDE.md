@@ -1022,8 +1022,11 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   `POST /a2a/{slug}` autentica ANTES de revelar o slug e confere `allowed_pools`; a execução
   (AAS-06, `a2a_tasks.py`) entra ATRÁS dela, e task e `contextId` são do principal que os criou
   (alheio e inexistente têm a mesma resposta). Desde a AAS-07 também por SSE
-  (`SendStreamingMessage`/`SubscribeToTask`, fecha em terminal ou interrompido). Gates:
-  `probe_aas04_a2a_principal.sh`, `probe_aas06_a2a_tasks.sh`, `probe_aas07_a2a_stream.sh`.
+  (`SendStreamingMessage`/`SubscribeToTask`, fecha em terminal ou interrompido). A porta só fala
+  **A2A 1.0** e `A2A-Version` ausente vale 0.3 pela spec (`-32009`), e o endereço do agente que o
+  card anuncia termina em `/` (AAS-08: sem a barra, o SDK JS perde o slug ao buscar o card). Gates:
+  `probe_aas04_a2a_principal.sh`, `probe_aas06_a2a_tasks.sh`, `probe_aas07_a2a_stream.sh`,
+  `probe_aas08_a2a_sdk.sh` (os dois SDKs oficiais e outro tenant na porta).
 - **Toda rota de serviço Python tem UMA linha em `infra/test/route_credential_baseline.tsv`** (AUT-58):
   `fechada`, `guard_corpo:<g>` (conferido no código), `isenta` com motivo, ou `divida:<ficha>`. Quem
   mede é uma varredura ANÔNIMA ao vivo, não a leitura do código — o código não mostra guard que falha

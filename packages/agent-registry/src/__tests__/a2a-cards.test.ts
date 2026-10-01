@@ -84,7 +84,7 @@ describe("GET /v1/a2a-cards/:slug — o card é projeção", () => {
     expect(r.body.name).toBe(descritor.display_name)
     expect(r.body.version).toBe(SET_AT.toISOString())                       // D2: versão = set_at do current
     expect(r.body.supportedInterfaces).toEqual([
-      { url: `${BASE}/a2a/segunda-via`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }])
+      { url: `${BASE}/a2a/segunda-via/`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }])
     expect(r.body.capabilities.extendedAgentCard).toBe(false)               // até AAS-04
     expect(r.body.capabilities.extensions[0].params).toEqual({
       input_schema: descritor.input_schema, output_schema: descritor.output_schema })
@@ -102,7 +102,7 @@ describe("GET /v1/a2a-cards/:slug — o card é projeção", () => {
   it("a barra final da base não duplica na URL da interface", async () => {
     arma()
     const r = await card("segunda-via", `${BASE}/`)
-    expect(r.body.supportedInterfaces[0].url).toBe(`${BASE}/a2a/segunda-via`)
+    expect(r.body.supportedInterfaces[0].url).toBe(`${BASE}/a2a/segunda-via/`)
   })
 
   it.each([

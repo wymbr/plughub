@@ -61,7 +61,9 @@ export async function resolveA2ACard(
   if (!current || !current["skill_id"] || !setAt) return { refusal: "no_current_deploy", pool_id: ep.pool_id }
 
   const card = projectAgentCard({
-    interfaceUrl: `${baseUrl.replace(/\/+$/, "")}/a2a/${identifier}`,
+    // Barra final (AAS-08): o endereço do agente é também a BASE da descoberta, e cliente que
+    // resolve `.well-known/agent-card.json` por RFC 3986 (o SDK JS) perde o slug sem ela.
+    interfaceUrl: `${baseUrl.replace(/\/+$/, "")}/a2a/${identifier}/`,
     deployedAt:   setAt instanceof Date ? setAt.toISOString() : String(setAt),
     pool:         { agent_kind: pool["agent_kind"] as string | null },
     descriptor:   parsed.data,

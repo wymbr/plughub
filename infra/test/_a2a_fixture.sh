@@ -80,7 +80,7 @@ CRED2=$(principal "probe AAS-06 outro")
 PID=$(req "$MASTER" GET "$P" >/dev/null; body | jq -r '.[] | select(.display_name=="probe AAS-06") | .agent_principal_id')
 
 rpc() {  # $1 credencial  $2 JSON do params  $3 método
-  $C -o "$BODY" -w '%{http_code}' -X POST "$GW/a2a/$SLUG" -H 'Content-Type: application/json' \
+  $C -o "$BODY" -w '%{http_code}' -X POST "$GW/a2a/$SLUG" -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
     -H "Authorization: Bearer $1" -d "{\"jsonrpc\":\"2.0\",\"id\":\"p6\",\"method\":\"$3\",\"params\":$2}"; }
 send() { rpc "$1" "{\"message\":$2${3:+,\"configuration\":$3}}" SendMessage; }
 estado() { rpc "$1" "{\"id\":\"$2\"}" GetTask >/dev/null; body | jq -r '.result.status.state // .error.code'; }

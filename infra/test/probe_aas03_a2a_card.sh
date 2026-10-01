@@ -116,7 +116,7 @@ else
   [ "$forma" = OK ] && ok "C2 forma do AgentCard v1.0 (AgentCardSchema, no container do registry)" || falha "C2 forma: $forma"
   [ "$(jq -r .version "$CARD")" = "$SET_AT" ] && ok "C3 version = set_at do slot current ($SET_AT)" \
     || falha "C3 version=$(jq -r .version "$CARD") esperado set_at=$SET_AT"
-  [ "$(jq -r '.supportedInterfaces[0].url' "$CARD")" = "${PUBLIC%/}/a2a/$SLUG" ] && ok "C4 interface = env pública + slug (${PUBLIC%/}/a2a/$SLUG)" \
+  [ "$(jq -r '.supportedInterfaces[0].url' "$CARD")" = "${PUBLIC%/}/a2a/$SLUG/" ] && ok "C4 interface = env pública + slug + barra (${PUBLIC%/}/a2a/$SLUG/)" \
     || falha "C4 interface=$(jq -c .supportedInterfaces "$CARD")"
   exp=$(echo "$D" | jq -cS '{skills: [.skills[].id], io: {input_schema, output_schema}, sec: (.principal_kinds|sort)}')
   got=$(jq -cS '{skills: [.skills[].id], io: .capabilities.extensions[0].params, sec: (.securitySchemes|keys|sort)}' "$CARD")

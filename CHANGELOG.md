@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (17) — AAS-08: os dois SDKs oficiais do A2A falam com o canal, e outro tenant para na porta
+
+Fase A6 do `adr-a2a-server-binding`, a parte que se mede sem conta de terceiro (decisão do dono):
+o SDK oficial em Python **e** em JavaScript contra o gateway vivo, o isolamento entre tenants ao
+vivo e a borda. OpenClaw, Copilot Studio e Gemini Enterprise precisam de URL pública e contas, e
+viraram um roteiro para o dono (`docs/guias/a2a-validacao-clientes-corporativos.md`, `AAS-18`).
+Cross-titular é do `customer_agent` e fica na `AAS-09`.
+
+**Por que SDK e não `curl`:** o SDK lê nossas respostas com o parser dele — `json_format.ParseDict`
+estrito no Python, os `fromJSON` do ts-proto no JS — e escolhe transporte, método e streaming pelo
+CARD. Campo que o proto não tem, enum fora do domínio ou card mal resolvido aparecem ali e em
+nenhum dos probes anteriores. Versões fixas: `a2a-sdk==1.2.1`, `@a2a-js/sdk@1.3.0`.
+
+**O que o SDK achou, e o que mudou por isso:**
+- **O SDK Python passou 10/10 de primeira; o JavaScript parou no card.** Ele resolve
+  `.well-known/agent-card.json` RELATIVO ao endereço do agente (RFC 3986), e `…/a2a/probe-aas06`
+  sem barra final vira `…/a2a/.well-known/…`: 404, o slug some. Não há conserto do lado servidor
+  para esse pedido — a URL que chega já não tem o slug. Por isso a interface que o card anuncia
+  passou a ser **`{base}/a2a/{slug}/`** (projeção do registry), e a porta atende com e sem a barra
+  (`@app.post("/a2a/{slug}/")`). Com a barra, o SDK JS passou 9/9.
+- **`A2A-Version` passou a ser conferido**, por header ou parâmetro de query, comparado por
+  Major.Minor. **Ausente vale 0.3** — a spec diz isso explicitamente, e é assim que os dois SDKs
+  julgam do lado servidor — e esta interface só fala 1.0: a resposta é `-32009
+  VersionNotSupportedError` com o `id` ecoado e `data` dizendo o que foi pedido e se foi suposto.
+  Os dois SDKs mandam o header em toda chamada (medido). Os probes por `curl` da AAS-04/06/07
+  passaram a mandá-lo. ⚠️ É o primeiro ponto a olhar num cliente corporativo: se ele ainda fala
+  0.3, é aqui que para.
+
+**Outro tenant, ao vivo** (a AAS-04 o tinha declarado *não medido*): o probe monta o tenant
+`probe_aas08_outro` como o `auth-seed` monta uma instalação — um Bearer de bootstrap assinado com o
+segredo do auth-api — e daí só pela API oficial: pool com descritor A2A no registry, principal
+`partner` no auth-api. A credencial dele na porta do `tenant_demo` é **403**, e o log do gateway
+nomeia o TENANT como motivo (não o pool).
+
+**Achado de passagem, fora do escopo:** montando esse tenant, medi que o auth-api grava usuário e
+template no tenant do **corpo**: o admin do `tenant_demo` criou um usuário em `probe_aas08_outro`
+(201). Três rotas — `POST /auth/users`, `…/from-template/{id}`, `POST /auth/templates`. Com
+`roles: ["admin"]` é tomada de tenant. Não usei o furo como fixture (o probe passa pelo caminho
+legítimo); registrado como **`AUT-71`**, P0.
+
+**Gates.** `probe_aas08_a2a_sdk.sh` (AUTO): K1–K10 (Python), J1–J9 (JS), V1–V4 (versão e barra), X1
+(outro tenant) — VERDE. `mut_aas08_a2a_sdk.sh`: M1 sem conferência de versão → V1 · M2 ausente vale
+1.0 → V1 · M3 sem a rota com barra → V4 · M4 sem conferência de tenant → X1 · M5 a task volta a
+carregar `"kind": "task"` (campo da 0.3) → K2, pelo parser estrito do SDK — o defeito que `curl` e
+os probes AAS-06/07 deixam passar. Unidade: `test_aas08_a2a_interop.py` (versão, porta, barra);
+`a2a-cards.test.ts` com a barra. AAS-03/04/06/07 re-rodados verdes.
+
+Deixou fichas: `AAS-18` (clientes corporativos, roteiro do dono) e `AUT-71` (tenant do corpo no
+auth-api). A `AAS-17` (A2UI) passou a esperar a `AAS-18`, de onde sai a versão de A2UI que o
+cliente anuncia.
+
 ## 2026-10-01 (16) — AAS-07: o canal `a2a` transmite a task, e o stream fecha quando ela para
 
 Fase A5 do `adr-a2a-server-binding`, só a metade de streaming: a A2UI saiu para a `AAS-17` por

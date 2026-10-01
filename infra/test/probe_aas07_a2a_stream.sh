@@ -34,7 +34,7 @@ for dep in jq curl docker; do command -v "$dep" >/dev/null || { echo "INCONCLUSI
 
 SSE=$(mktemp); HDR=$(mktemp); trap 'rm -f "$BODY" "$SSE" "$HDR"' EXIT
 stream() {  # $1 credencial $2 método $3 params → SSE em $SSE, cabeçalhos em $HDR; ecoa o rc do curl
-  curl -sN --max-time 40 -D "$HDR" -o "$SSE" -X POST "$GW/a2a/$SLUG" -H 'Content-Type: application/json' \
+  curl -sN --max-time 40 -D "$HDR" -o "$SSE" -X POST "$GW/a2a/$SLUG" -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
     -H "Authorization: Bearer $1" -d "{\"jsonrpc\":\"2.0\",\"id\":\"p7\",\"method\":\"$2\",\"params\":$3}"
   echo $?; }
 eventos() { grep '^data: ' "$SSE" | sed 's/^data: //'; }

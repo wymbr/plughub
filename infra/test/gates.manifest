@@ -516,6 +516,13 @@ probe_aas06_a2a_tasks.sh
 # = o Task e fecha · S5 outro principal -32001 · S6 card com streaming e teto. Fixture comum em
 # _a2a_fixture.sh. Bateria: mut_aas07_a2a_stream.sh.
 probe_aas07_a2a_stream.sh
+# AAS-08 (2026-10-01): os SDKs OFICIAIS do A2A (a2a-sdk 1.2.1 em python:3.11-slim, @a2a-js/sdk 1.3.0
+# em node:20-alpine, versoes fixas) falam com o canal do card ao artefato, lendo com os parsers
+# deles: K1-K10 (Python) · J1-J9 (JS, pelo endereco COM barra final que o card anuncia) · V1-V4
+# A2A-Version (ausente = 0.3 = -32009; query vale) e interface do card com barra · X1 principal de
+# OUTRO tenant (cadastrado pela API daquele tenant) -> 403 pelo tenant. Precisa de rede para
+# instalar os SDKs (sem ela, INCONCLUSIVO). Bateria: mut_aas08_a2a_sdk.sh.
+probe_aas08_a2a_sdk.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro
@@ -1096,6 +1103,7 @@ smoke_wrapup_slot_handoff.sh
 =mut_aas05_session_result.sh                          mutacao
 =mut_aas06_a2a_tasks.sh                               mutacao
 =mut_aas07_a2a_stream.sh                              mutacao
+=mut_aas08_a2a_sdk.sh                                 mutacao
 =mut_sip_edge_surface.sh                              mutacao
 =mutation_claim_lease_slot.sh                         mutacao
 =mutation_occupancy_peak.sh                           mutacao

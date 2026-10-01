@@ -56,6 +56,7 @@ TASK_NOT_FOUND       = -32001
 TASK_NOT_CANCELABLE  = -32002
 UNSUPPORTED          = -32004
 CONTENT_TYPE         = -32005
+VERSION_UNSUPPORTED  = -32009
 
 # ── Estados (ProtoJSON do `TaskState`) ────────────────────────────────────────
 SUBMITTED      = "TASK_STATE_SUBMITTED"
@@ -121,6 +122,27 @@ class A2AError(Exception):
         if self.data is not None:
             err["data"] = self.data
         return err
+
+
+SUPPORTED_VERSIONS = ("1.0",)            # Major.Minor que esta interface fala (o card publica o mesmo)
+
+
+def version_error(header: str | None, query: str | None) -> "A2AError | None":
+    """`A2A-Version` (spec v1.0 § 3.6): header ou parâmetro de query, comparado por Major.Minor.
+
+    AUSENTE significa 0.3, não "a mais nova" — o texto é explícito (*"0.3 will be assumed for
+    empty header"*), e é assim que os dois SDKs oficiais julgam do lado servidor. Servir 1.0 a
+    quem não declarou seria responder com a semântica que o cliente pode não ler. Os SDKs
+    oficiais mandam o header em toda chamada (medido: a2a-sdk 1.2.1, @a2a-js/sdk 1.3.0).
+    """
+    raw = (header or query or "").strip()
+    pedida = raw or "0.3"
+    partes = pedida.split(".")
+    major_minor = ".".join(partes[:2]) if len(partes) >= 2 else pedida
+    if major_minor in SUPPORTED_VERSIONS:
+        return None
+    return A2AError(VERSION_UNSUPPORTED, "VersionNotSupportedError",
+                    {"requested": pedida, "assumed": not raw, "supported": list(SUPPORTED_VERSIONS)})
 
 
 class A2AUnavailable(Exception):

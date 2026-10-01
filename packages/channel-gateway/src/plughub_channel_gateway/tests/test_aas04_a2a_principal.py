@@ -129,7 +129,7 @@ def test_controle_principal_com_o_pool_passa_e_chega_ao_adapter(porta, monkeypat
             recebido["caller"], recebido["req"] = caller, req
             return {"jsonrpc": "2.0", "id": req.get("id"), "result": {"ok": True}}
     monkeypatch.setattr(gw_main, "_a2a_service", lambda: _Svc())
-    r = c.post("/a2a/segunda-via", json=RPC, headers={"Authorization": "Bearer pha_x"})
+    r = c.post("/a2a/segunda-via", json=RPC, headers={"Authorization": "Bearer pha_x", "A2A-Version": "1.0"})
     assert r.status_code == 200 and r.json() == {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}}
     cl = recebido["caller"]
     assert (cl.sub, cl.tenant_id, cl.pool_id, cl.kind, cl.slug) == (

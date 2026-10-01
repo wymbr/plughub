@@ -105,7 +105,7 @@ P="$AUTHB/auth/v1/agent-principals"
 intro() { $C -o "$BODY" -w '%{http_code}' -X POST "$P/introspect" -H 'Content-Type: application/json' \
   ${2:+-H "x-service-token: $2"} -d "{\"credential\":\"$1\"}"; }
 porta() {  # $1 slug $2 credencial (vazia = anônimo)
-  $C -o "$BODY" -D "$BODY.h" -w '%{http_code}' -X POST "$GW/a2a/$1" -H 'Content-Type: application/json' \
+  $C -o "$BODY" -D "$BODY.h" -w '%{http_code}' -X POST "$GW/a2a/$1" -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
     ${2:+-H "Authorization: Bearer $2"} -d '{"jsonrpc":"2.0","id":"probe-7","method":"GetTask","params":{"id":"probe-aas04-inexistente"}}'; }
 
 # ── A ────────────────────────────────────────────────────────────────────────
