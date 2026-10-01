@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (4) — ATT-02: quem atende vê o anexo pela porta INTERNA, com capacidade, escopo da sessão e trilha
+
+**O que a medição achou.** O Console (VOZ-28) e o transcript abriam a `url` gravada na mensagem: uma
+URL **absoluta para `:8010`**, num `<img src>` **sem credencial**, durável no stream Redis, no Postgres
+(`session_stream_events.payload`) e no Kafka. Quem tivesse o `file_id` via o arquivo, por fora de
+qualquer escopo, e nenhum acesso chegava à trilha. De passagem:
+- o e-mail gravava como `serving_url` o **2º retorno do `reserve`, que é a URL de UPLOAD**;
+- `session_attachments` **não tem pool**, então a pergunta "este supervisor pode ver?" precisava
+  vir da sessão.
+
+**O que passou a ser verdade:**
+- **Porta interna na analytics-api**, `GET /v1/attachments/{file_id}` (pela borda,
+  `/analytics/v1/attachments/{id}`, regra que já existia). Ela confere:
+  1. `contacts.transcricao` **antes de resolver o id**: quem não pode ler não aprende se o id existe;
+  2. `authorize_session_scope` sobre a **sessão do anexo**, viva e fechada — a mesma resposta do
+     transcript.
+
+  **Todo desfecho** vai a `audit_access_log` pelo `_record_access`: `ok`, `denied`, `not_found`,
+  `expired` e `unavailable`, com a recusa gravada antes de responder.
+- **A capacidade é `contacts.transcricao`** (decisão do dono, 2026-10-01): o anexo é conteúdo da
+  conversa. Não houve campo novo nem backfill; operator, supervisor e admin já o têm.
+- **O gateway só entrega bytes, e só a serviço** (`/v1/attachments/{id}/meta` e `/content`, via
+  `identity_principal`). O usuário com o grant recebe 403 ali: não é porta alternativa.
+- **O Console busca por blob**: componente `AttachmentView` (`platform-ui/src/components`), usado
+  pelo `MessageBubble` e pelo `SessionTranscript`. O caminho é montado pelo `file_id`, e a `url`
+  gravada deixou de ser lida. Imagem vira miniatura; o resto vira "Baixar". Ganho lateral: o anexo
+  do WhatsApp, que chegava sem `url` e aparecia como "sem link", passa a abrir.
+- O e-mail grava a URL de leitura que o `commit` devolve.
+
+**Gates:**
+- `probe_att02_attachment_internal_door.sh`, pelo caminho do Console (5174): VERDE nos ramos A1–A5,
+  I1 e T1.
+- `mut_att02_attachment_internal_door.sh`: M0 verde; foram **todas pegas** as mutações M1
+  (capacidade depois do id, que vira oráculo), M2 (sem escopo) e M3 (recusa fora da trilha).
+- Unidade:
+  - `test_att02_attachment_door.py` (analytics, 8 casos, ordem capacidade→gateway e trilha antes
+    da resposta);
+  - `test_att02_attachment_internal.py` (gateway, 7 casos).
+- Suítes:
+  - gateway: **1540 passed**;
+  - analytics-api: **905 passed**.
+- Também verdes: `probe_route_anon_sweep` (com 3 linhas novas na baseline), `probe_ui_credential_coverage`,
+  `probe_i18n_duplicate_keys`, `probe_gates_manifest_coverage` e `probe_att01_attachment_door`.
+
+**O que NÃO foi medido:** a tela no navegador. O probe exercita a URL exata que o componente chama,
+com Bearer, mas a renderização do `AttachmentView` só passou pelo typecheck (286 arquivos lidos).
+E um `admin@` sem `accessible_pools` recebe 403, como no transcript: é install não provisionado,
+não defeito.
+
+**Ficou para as próximas fichas da leva:** a porta pública ainda aceita o `file_id` nu (ATT-03); a
+`url` velha continua gravada no histórico durável e no Kafka, mas nenhum leitor da plataforma a usa
+mais.
+
 ## 2026-10-01 (3) — ATT-01: o tipo que o remetente escolhe não é gravado, e a porta de anexos não serve página
 
 **O risco era de hoje e não dependia do A2A** (achado na revisão 2 do ADR A2A, 2026-09-30). Medido:

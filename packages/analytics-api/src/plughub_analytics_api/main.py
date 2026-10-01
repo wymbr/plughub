@@ -75,6 +75,7 @@ from .sessions        import router as sessions_router
 from .supervisor      import router as supervisor_router
 from .audit           import router as audit_router
 from .transcript      import router as transcript_router
+from .attachments     import router as attachments_router   # ATT-02
 from .auth            import Principal, require_principal
 from .pool_auth       import PoolPrincipal, require_pool_principal
 from plughub_tasks import supervisionar
@@ -217,6 +218,7 @@ app.include_router(sessions_router)
 app.include_router(supervisor_router)
 app.include_router(audit_router)
 app.include_router(transcript_router)
+app.include_router(attachments_router)
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────

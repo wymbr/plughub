@@ -268,9 +268,14 @@
   },
   "transcript": {
     "attachment": {
-      "open": "Open {{kind}}",
+      "download": "Download {{kind}}",
+      "loading": "Loading…",
+      "denied": "You cannot view this attachment",
+      "expired": "Attachment expired",
+      "notFound": "Attachment not found",
+      "loadError": "Could not load the attachment ({{status}})",
       "noLink": "{{kind}} attached (no link)",
-      "kind": { "image": "image", "document": "document", "video": "video" }
+      "kind": { "image": "image", "document": "document", "video": "video", "audio": "voice note" }
     },
     "call": { "started": "📞 call started", "ended": "📞 call ended", "endRequested": "📞 agent asked to end the call", "endedWith": "📞 call ended · {{duration}}" },
     "media": {

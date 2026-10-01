@@ -346,7 +346,9 @@ class EmailAdapter(ChannelAdapter):
                     self._redis, tenant_id, self._settings.attachment_expiry_days
                 )
                 expires_at = datetime.now(timezone.utc) + timedelta(days=_expiry_days)
-                file_id, serving_url = await self._attachment_store.reserve(
+                # ATT-02: o 2º retorno do reserve é a URL de UPLOAD, e ia gravada como a de
+                # leitura. A de leitura é a que o commit devolve.
+                file_id, _ = await self._attachment_store.reserve(
                     tenant_id  = tenant_id,
                     session_id = session_id,
                     file_name  = att.filename,
@@ -357,7 +359,7 @@ class EmailAdapter(ChannelAdapter):
                 # ⚠️ VOZ-06 (2026-09-13): passava `mime_type=` (que `commit` não aceita)
                 # e omitia `tenant_id` (que ele exige) — TypeError em TODO anexo, engolido
                 # pelo `except` abaixo. O MIME já está no slot gravado pelo `reserve`.
-                await self._attachment_store.commit(
+                meta = await self._attachment_store.commit(
                     file_id   = file_id,
                     tenant_id = tenant_id,
                     data      = att.data,
@@ -367,7 +369,7 @@ class EmailAdapter(ChannelAdapter):
                     "filename":    att.filename,
                     "mime_type":   mime_type,
                     "size_bytes":  len(att.data),
-                    "serving_url": serving_url,
+                    "serving_url": meta.serving_url,
                 })
             except Exception as exc:
                 logger.error("email attachment store failed file=%s: %s", att.filename, exc)

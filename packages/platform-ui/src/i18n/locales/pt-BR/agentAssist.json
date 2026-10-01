@@ -655,9 +655,14 @@
     "commandAck": "✓ comando \"{{command}}\" reconhecido"
   },
   "attachment": {
-    "open": "Abrir {{kind}}",
+    "download": "Baixar {{kind}}",
+    "loading": "Carregando…",
+    "denied": "Você não pode ver este anexo",
+    "expired": "Anexo expirado",
+    "notFound": "Anexo não encontrado",
+    "loadError": "Não foi possível carregar o anexo ({{status}})",
     "noLink": "{{kind}} anexado (sem link)",
-    "kind": { "image": "imagem", "document": "documento", "video": "vídeo" }
+    "kind": { "image": "imagem", "document": "documento", "video": "vídeo", "audio": "nota de voz" }
   },
   "mediaDegradation": {
     "kind": {

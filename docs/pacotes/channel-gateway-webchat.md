@@ -118,8 +118,32 @@ os consuma.
   aspas, reescrevia o cabeçalho;
 - serve tipo fora da allowlist (linha antiga) como `application/octet-stream`.
 
-A porta continua tomando o `file_id` como credencial (URL assinada, porta interna com capacidade e
-auditoria de acesso são da **ATT-02**).
+A porta pública continua tomando o `file_id` como credencial até a **ATT-03** (URL assinada).
+
+### Quem atende vê pela porta INTERNA (ATT-02, 2026-10-01)
+
+Console e transcript não usam mais a porta pública. Antes abriam a `url` gravada na mensagem:
+absoluta para `:8010`, num `<img src>` sem credencial, durável no stream, no Postgres e no Kafka.
+Hoje:
+
+```
+Console ── apiFetch (Bearer) ──▶ /analytics/v1/attachments/{file_id}   (borda 5174 → analytics-api)
+                                   1. contacts.transcricao ANTES de resolver o id   → 403
+                                   2. meta no gateway  (/v1/attachments/{id}/meta, X-Service-Token)
+                                   3. authorize_session_scope(pool da SESSÃO)       → 403
+                                   4. bytes no gateway (/v1/attachments/{id}/content)
+                                   todo desfecho → audit_access_log (ok · denied · not_found · expired · unavailable)
+```
+
+- **A capacidade é `contacts.transcricao`** (decisão do dono, 2026-10-01): o anexo é conteúdo da
+  conversa, e quem lê a transcrição vê o anexo. Não há campo novo nem backfill.
+- **O escopo é o da SESSÃO**, a mesma resposta do transcript. `session_attachments` não tem pool.
+- **A rota interna do gateway é só de serviço.** Usuário com grant recebe 403 ali: ela não é
+  porta alternativa para quem a analytics-api recusaria.
+- **O componente `AttachmentView`** (`platform-ui/src/components`) monta o caminho pelo `file_id`.
+  Imagem vira miniatura (clicar abre numa aba); o resto vira "Baixar".
+
+Gate: `probe_att02_attachment_internal_door.sh`, com bateria em `mut_att02_attachment_internal_door.sh`.
 
 Gate: `infra/test/probe_att01_attachment_door.sh`, com bateria em `mut_att01_attachment_door.sh`.
 

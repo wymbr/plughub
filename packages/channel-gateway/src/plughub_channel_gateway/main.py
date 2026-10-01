@@ -517,6 +517,8 @@ from .recording_router import router as recording_router  # noqa: E402 — VOZ-3
 from plughub_tasks import disparar, supervisionar
 app.include_router(upload_router)
 app.include_router(recording_router)
+from .attachment_internal_router import router as attachment_internal_router  # noqa: E402
+app.include_router(attachment_internal_router)
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────

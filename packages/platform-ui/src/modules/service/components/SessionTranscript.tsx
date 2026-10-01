@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { AttachmentView, type AttachmentRef } from '@/components/AttachmentView'
 import type React from 'react'
 import { Play } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -640,7 +641,7 @@ function StatusDot({ status }: { status: string }) {
 // normalizeContent() unwraps all shapes into a single NormalizedContent so
 // ContentRenderer can render each type uniformly.
 
-interface NormalizedText    { kind: 'text';   text: string; attachment?: { media_type?: string; url?: string } }
+interface NormalizedText    { kind: 'text';   text: string; attachment?: AttachmentRef }
 interface NormalizedMenu    { kind: 'menu';   text: string; options: { id: string; label: string }[]; mode?: string }
 interface NormalizedButton  { kind: 'button'; text: string; options: { id: string; label: string }[] }
 interface NormalizedForm    { kind: 'form';   text: string; fields: { id: string; label: string; type?: string }[] }
@@ -668,7 +669,7 @@ function normalizeContent(content: unknown): NormalizedContent {
     if (type === 'text' || (!type && text)) {
       // VOZ-28 — o anexo do cliente viaja em `content.attachment` (o texto é o indicador)
       const att = obj.attachment && typeof obj.attachment === 'object'
-        ? obj.attachment as { media_type?: string; url?: string } : undefined
+        ? obj.attachment as AttachmentRef : undefined
       return att ? { kind: 'text', text, attachment: att } : { kind: 'text', text }
     }
     if (type === 'menu')   return { kind: 'menu',   text, options, mode: typeof obj.mode === 'string' ? obj.mode : undefined }
@@ -692,13 +693,10 @@ function ContentRenderer({ normalized, maskingRules }: {
   const { t } = useTranslation('contacts')
   if (normalized.kind === 'text') {
     const att = normalized.attachment
-    const kind = att ? t(`transcript.attachment.kind.${att.media_type ?? ''}`, { defaultValue: att.media_type ?? '' }) : ''
     return (
       <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
         {renderWithTokens(normalized.text, maskingRules)}
-        {att && (att.url
-          ? <div><a href={att.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline' }}>📎 {t('transcript.attachment.open', { kind })}</a></div>
-          : <div style={{ fontStyle: 'italic' }}>📎 {t('transcript.attachment.noLink', { kind })}</div>)}
+        {att && <AttachmentView attachment={att} ns="contacts" keyPrefix="transcript.attachment" />}
       </div>
     )
   }

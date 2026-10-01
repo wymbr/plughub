@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import { AuthorType, ChatAttachment, ChatMessage } from "../types";
 import { MenuCard, SubmitResult } from "./MenuCard";
 import { renderWithTokens, type MaskingRulesMap } from "@/components/MaskedToken";
+import { AttachmentView as AttachmentDoor } from "@/components/AttachmentView";
 
 interface MessageBubbleProps {
   message:           ChatMessage;
@@ -25,24 +26,10 @@ interface MessageBubbleProps {
   onToggleSelection?: () => void;
 }
 
-/** VOZ-28 — o anexo do cliente: miniatura se é imagem, link para abrir em qualquer caso. */
-const AttachmentView: React.FC<{ attachment: ChatAttachment }> = ({ attachment }) => {
-  const { t } = useTranslation("agentAssist");
-  const kind = t(`attachment.kind.${attachment.media_type}`, { defaultValue: attachment.media_type });
-  if (!attachment.url) {
-    return <div className="mt-1 text-xs italic opacity-80">📎 {t("attachment.noLink", { kind })}</div>;
-  }
-  return (
-    <div className="mt-1 flex flex-col gap-1">
-      {attachment.media_type === "image" && (
-        <img src={attachment.url} alt={kind} className="max-h-40 max-w-full rounded-md object-contain" />
-      )}
-      <a href={attachment.url} target="_blank" rel="noopener noreferrer" className="text-xs underline">
-        📎 {t("attachment.open", { kind })}
-      </a>
-    </div>
-  );
-};
+/** VOZ-28 — o anexo do cliente. ATT-02: pela porta interna, por `file_id` (nunca a `url` gravada). */
+const AttachmentView: React.FC<{ attachment: ChatAttachment }> = ({ attachment }) => (
+  <AttachmentDoor attachment={attachment} ns="agentAssist" keyPrefix="attachment" />
+);
 
 function agentLabel(agentTypeId: string | undefined): string {
   if (!agentTypeId) return "IA";
