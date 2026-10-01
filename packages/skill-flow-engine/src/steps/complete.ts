@@ -42,11 +42,28 @@ export function executeComplete(
     }
   }
 
+  // AAS-05: o resultado terminal. Declarado e ausente é DITO — o chamador A2A receberia "terminou
+  // sem resultado" e construiria lógica em cima; com `missing`, quem lê sabe que o fluxo prometeu.
+  let result: StepResult["result"]
+  if (step.result_from) {
+    const results = ctx.state?.results ?? {}
+    if (Object.prototype.hasOwnProperty.call(results, step.result_from)) {
+      result = { from: step.result_from, value: results[step.result_from] }
+    } else {
+      console.warn(
+        `[complete] ${step.id}: result_from="${step.result_from}" ausente em results — ` +
+        `o fluxo fecha SEM o resultado que declarou (sessão ${ctx.sessionId})`
+      )
+      result = { from: step.result_from, missing: true }
+    }
+  }
+
   return {
     next_step_id:      "__complete__",
     outcome,
     transition_reason: "on_success",
     // SFE-02: o motivo declarado viaja; ausente fica ausente (nunca inventado).
     ...(step.issue_status ? { issue_status: step.issue_status } : {}),
+    ...(result ? { result } : {}),
   }
 }

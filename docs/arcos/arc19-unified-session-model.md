@@ -108,7 +108,9 @@ POST /v1/channels/webhook/resume/{resume_token}
   Retorna session_id
 
 GET /v1/channels/webhook/{session_id}/status
-  Retorna status atual da sessão (active|suspended|closed)
+  Retorna status atual da sessão (active|suspended|closed|unknown), DEDUZIDO de fatos
+  (AAS-05): resultado do `complete` → closed + outcome/result/contract; `session_closed`
+  registrado → closed + close_reason; nenhum fato → unknown (antes: closed)
 ```
 
 ### resume_token lookup

@@ -688,7 +688,9 @@ A chave é escrita como `"active"` pelo caminho de **resume** (`webhook.py:1254`
 `"closed"` é o **Core** (comentário em `:1451`) — que não participa de sessão webhook. Logo ela
 reporta `active` para **toda** sessão de workflow encerrada, portabilidade inclusive. Consequência
 real: `GET /v1/channels/webhook/{session_id}/status` mente. Pequeno, pré-existente, fora do escopo
-deste cenário — mas é dívida nomeada agora.
+deste cenário — mas é dívida nomeada agora. *(Fechada na AAS-05, 2026-10-01: o resume apaga a
+marca `suspended` em vez de gravar `active` sem TTL, e o status é deduzido de fatos —
+`session_closed` registrado, resultado do `complete` —, com `unknown` onde não há nenhum.)*
 
 Lição do instrumento: **medir a chave errada acusou defeito onde o comportamento estava certo.**
 O 7c passou a afirmar sobre o fato durável (`analytics.sessions`, alimentado pelo

@@ -9,6 +9,8 @@ dependencies    = [
     "redis[hiredis]>=5.2.0",
     "aiohttp>=3.10.0",
     "pyyaml>=6.0.0",
+    # AAS-05 — o resultado terminal é conferido contra o output_schema do contrato A2A do pool.
+    "jsonschema>=4.21",
 ]
 
 [project.scripts]

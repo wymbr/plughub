@@ -54,7 +54,8 @@ pela retomada, nunca por HTTP. Logo **não existe superfície de resultado**:
 
 - o trigger devolve só `{session_id}`;
 - `GET /v1/channels/webhook/{session_id}/status` responde `"closed"` quando a chave não existe
-  (`webhook.py:1812-1814`), então "não sei" e "terminou" são indistinguíveis;
+  (`webhook.py:1812-1814`), então "não sei" e "terminou" são indistinguíveis *(consertado na
+  AAS-05: ver D5)*;
 - o step `complete` não persiste nada legível (`complete.ts` só sinaliza `agent_done`).
 
 Para consumidor interno isso passou; num contrato externo é um valor plausível escondendo ausência.
@@ -198,6 +199,33 @@ terceira vez. As regras de início, fim e continuação estão em D15.
 
 Sem (1) não existe `tasks/get` com artefato; sem (2) o chamador recebe "terminou" para uma sessão
 que nunca existiu, e vai construir lógica em cima disso.
+
+**Como ficou (AAS-05, 2026-10-01).**
+
+- **Quem declara o resultado é o step**: `complete.result_from: <chave de output_as>`. O engine
+  devolve, só quando o fluxo termina num `complete`, o bloco `terminal` (`step_id`, `outcome`,
+  `issue_status`, `result: {from, value}` — ou `{from, missing: true}` com WARNING se a chave não
+  existia). Escalar, estacionar e falhar não têm `terminal`: não terminaram num `complete`.
+- **Quem grava é o bridge**, não o engine: é ele que escreve os fatos de ciclo de vida da sessão,
+  conhece o pool que atende e o TTL da sessão, e lê o pool FRESCO do registry. Chave
+  `{t}:session:{sid}:result`, TTL `_stl()`. **Só o pipeline principal** grava: especialista de
+  conferência não fala pela sessão (`session_result.py`).
+- **"Validado" é VEREDICTO gravado junto, nunca filtro**: o resultado fora do `output_schema`
+  (JSON Schema 2020-12) é preservado com `contract: {checked: true, valid: false, errors: [...]}`
+  e um WARNING que nomeia o campo; quem decide o que fazer é o leitor (a A4 responde `FAILED` com o
+  motivo). Os outros desfechos são nomeados: `no_contract` · `result_not_declared` ·
+  `result_missing` · `registry_unavailable` · `schema_invalid`.
+- **O status é deduzido de fatos, nesta ordem**: resultado gravado → `closed` por `complete` ·
+  meta de outro tenant → `unknown` · `session_closed` registrado (VOZ-40) → `closed` com o motivo ·
+  marca `suspended` → `suspended` · meta do tenant → `active` · nada → **`unknown`**.
+- **Defeito vizinho achado e consertado**: a única outra escrita da chave de status era o resume,
+  com `SET active KEEPTTL` sobre uma chave já expirada — chave SEM TTL, e toda sessão que suspendeu
+  uma vez respondia `active` para sempre (registrado como dívida em
+  `limite-credito-3-niveis-design.md`). O resume agora APAGA a marca `suspended`.
+- ⚠️ A rota de status continua anônima com o tenant da query (`AUT-68`); a A4 lê o mesmo fato
+  atrás da porta autenticada, não por ela.
+
+Gate: `infra/test/probe_aas05_session_result.sh` (bateria `mut_aas05_session_result.sh`, 5/5).
 
 ### D6 — Principal de máquina: **um** mecanismo (`agent_principals`), dois tipos *(rev. 2)*
 
@@ -464,7 +492,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | **A0** | Canal + descritor | `a2a` no `ChannelSchema` e no perfil; bloco `a2a` no pool; tela | destrava delegate-por-pool · **feita em 2026-10-01 (AAS-01)** |
 | **A1** | AgentCard read-only | card público + estendido, modos derivados, `securitySchemes` | **sem execução**; força o descritor a ser honesto · **card público feito em 2026-10-01 (AAS-03)**; o estendido espera o principal (`AAS-13`) |
 | **A2** | Principal `partner` | `agent_principals` (fusão, D6), credencial, `allowed_pools`, tenant da credencial (D7), linha no probe de borda | **bloqueia A4** · **feita em 2026-10-01 (AAS-04)**, com a porta autenticada já de pé |
-| **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera |
+| **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera · **feita em 2026-10-01 (AAS-05)** |
 | **A4** | Adapter JSON-RPC | `message/send` (bloqueante com teto + `returnImmediately`), `tasks/get`, `tasks/cancel`, `tasks/list`; `menu` → `INPUT_REQUIRED` com `DataPart`/texto; D15 inteira | **basta para o OpenClaw** (só bearer, texto e JSON, polling) |
 | **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling |
 | **A6** | Validação | clientes de referência: SDK oficial, **OpenClaw** (o mais restrito) e **Copilot Studio ou Gemini Enterprise** (o comprador real); isolamento cross-tenant e cross-titular (D15.4); probe de borda | gate |
@@ -592,3 +620,6 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.
 - **2026-10-01, fase A2 (AAS-04).** D6 ganhou o *como ficou* do `partner`; a porta `POST /a2a/{slug}`
   existe antes da execução; o carimbo do principal no `AuditRecord` foi para a A4.
+- **2026-10-01, fase A3 (AAS-05).** D5 ganhou o *como ficou*: `complete.result_from`, o bridge
+  grava o resultado com o veredicto do contrato, status deduzido de fatos com `unknown`; o resume
+  deixou de gravar `active` eterno.

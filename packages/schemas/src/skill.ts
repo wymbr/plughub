@@ -309,6 +309,12 @@ export const CompleteStepSchema = z.object({
   // Antes de existir aqui ele era DESCARTADO em silêncio pelo parse (37 de 96
   // `complete` do repositório o declaravam; 0 segmentos de IA o tinham).
   issue_status: z.string().min(1).optional(),
+  // AAS-05 (2026-10-01): o RESULTADO terminal — a chave em pipeline_state (`output_as` de um
+  // `reason`/`invoke`) cujo valor é o que o fluxo entrega a quem o chamou. Por A2A ele vira o
+  // `DataPart` do artefato, validado contra o `output_schema` do contrato do pool (ADR D5).
+  // Ausente = o fluxo não declara resultado (só outcome). Declarado e não achado é DITO
+  // (`result_missing`), nunca resultado vazio.
+  result_from: z.string().min(1).optional(),
 })
   // `.strict()`: chave desconhecida é RECUSADA no parse — foi o objeto aberto que
   // deixou o `issue_status` sumir calado, e ele faria o mesmo com o próximo campo.

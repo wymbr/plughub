@@ -2881,9 +2881,14 @@ async def webhook_pending(contact_identifier: str, tenant_id: str, request: Requ
 @app.get("/v1/channels/webhook/{session_id}/status", status_code=200)
 async def webhook_status(session_id: str, tenant_id: str) -> dict:
     """
-    Query the current status of a webhook session.
+    Query the current status of a webhook session — derived from FACTS (AAS-05).
 
-    Returns: { session_id, status: "active"|"suspended"|"closed" }
+    Returns { session_id, status: "active"|"suspended"|"closed"|"unknown" }, plus:
+      closed by `complete`       → closed_by="complete", outcome, completed_at, contract, result?, issue_status?
+      closed by `session_closed` → closed_by="session_closed", close_reason
+    `unknown` = no fact answers (never existed, expired, or another tenant's session); it was
+    `closed` before. ⚠️ Still anonymous with the tenant from the query (AUT-68 debt).
+    See `WebhookAdapter.get_status`.
     """
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")

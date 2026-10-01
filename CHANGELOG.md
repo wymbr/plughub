@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (14) — AAS-05: o fim do fluxo deixa o resultado legível, e o status só afirma o que sabe
+
+Fase A3 do `adr-a2a-server-binding` (D5). Sem ela não há `tasks/get` com artefato, e o chamador
+externo receberia "terminou" para uma sessão que nunca existiu.
+
+**O resultado terminal:**
+- **O step declara** o que é o resultado: `complete.result_from: <chave de output_as>` (campo novo
+  no `CompleteStepSchema`, que é `.strict()`; mexer no schema rebuildou agent-registry,
+  skill-flow-service e mcp-server juntos).
+- **O engine devolve** o bloco `terminal` (`step_id`, `outcome`, `issue_status`, `result`) **só**
+  quando o fluxo termina num `complete`. Chave declarada e ausente vira `{from, missing: true}` com
+  WARNING, nunca resultado vazio que pareça resposta.
+- **O bridge grava** `{t}:session:{sid}:result`, TTL da sessão (`_stl()`), e não o engine: é o
+  bridge que escreve os fatos de ciclo de vida, conhece o pool que atende e lê o pool fresco do
+  registry. **Só o pipeline principal**: especialista de conferência não fala pela sessão.
+- **"Validado" é veredicto, não filtro.** O resultado vai conferido contra o `output_schema` do
+  contrato A2A do pool (JSON Schema 2020-12, `jsonschema` novo no bridge) e o veredicto é gravado
+  JUNTO: inválido preserva o resultado, sai em WARNING nomeando o campo e leva `errors`. Os outros
+  desfechos são nomeados: `no_contract` · `result_not_declared` · `result_missing` ·
+  `registry_unavailable` · `schema_invalid`. Falha de escrita é ERROR e não derruba o fechamento.
+
+**O status honesto** (`WebhookAdapter.get_status`), deduzido de fatos nesta ordem: resultado do
+`complete` → `closed` (`closed_by: complete`, com outcome, resultado e contrato) · meta de outro
+tenant → `unknown` · `session_closed` registrado (VOZ-40) → `closed` com o motivo · marca
+`suspended` → `suspended` · meta do tenant → `active` · nada → **`unknown`**. Antes, chave ausente
+respondia `closed`.
+
+**Defeito vizinho, medido e consertado:** a chave de status tinha dois escritores — `suspended`
+(bridge) e `active` no resume, com `SET … KEEPTTL` sobre chave já expirada, ou seja, SEM TTL. Toda
+sessão que suspendeu uma vez respondia `active` para sempre, e uma ativa que nunca suspendeu
+respondia `closed`. A dívida já estava nomeada em `limite-credito-3-niveis-design.md`; o resume
+agora APAGA a marca `suspended`.
+
+**O teste achou um defeito do próprio código novo:** `type` desconhecido no `output_schema` não é
+`SchemaError` na construção do validador, é `UnknownType` no meio da validação — e derrubava a
+gravação. `check_schema` antes, e as duas exceções viram `schema_invalid`.
+
+**Medição:**
+- engine 343 (4 novos) · bridge 293 (12 novos, `test_aas05_session_result.py`) · gateway 1649
+  (resume e 6 de status reescritos sobre fatos).
+- `infra/test/probe_aas05_session_result.sh` ao vivo, sem LLM (pool webhook `probe_aas05`, fluxo
+  `invoke pool_status_get` + `complete` com `result_from`): três sessões reais — contrato cumprido,
+  violado (resultado preservado, campo nomeado) e ausente —, sessão inventada e de outro tenant em
+  `unknown`, resultado com TTL, nenhuma chave de status eterna. Verde.
+- Bateria `mut_aas05_session_result.sh`: 5/5 pegas (engine sem `terminal`, veredicto sempre válido,
+  gravação sem TTL, outro tenant e ausência voltando a `closed`). Não medidos ao vivo, guardados por
+  teste de unidade e declarados no cabeçalho: a guarda de conferência e o resume.
+
+**Ficou de fora:** a rota de status continua anônima com o tenant da query (`AUT-68`) — a A4 lê o
+mesmo fato atrás da porta autenticada. A `AAS-06` deixa de estar bloqueada.
+
 ## 2026-10-01 (13) — AAS-04: quem chama por A2A é um principal cadastrado, e a porta confere antes de revelar
 
 Fase A2 do `adr-a2a-server-binding` (D6, D7). Ainda **sem execução**: a fechadura vem antes da sala.

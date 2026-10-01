@@ -177,7 +177,14 @@ export interface SkillFlowEngineConfig {
 export type RunResult =
   /** `issue_status` (SFE-02): só no fechamento por `complete` que o declarou. */
   /** `deploy_version` (SFE-03): a versão que EXECUTOU — a do nascimento, também na retomada. */
-  | { outcome: string; issue_status?: string; deploy_version?: string; pipeline_state: PipelineState }
+  | { outcome: string; issue_status?: string; deploy_version?: string; pipeline_state: PipelineState
+      /**
+       * AAS-05: presente SÓ quando o fluxo terminou num `complete` — nunca em
+       * `escalated_human`/`awaiting_*`/`suspended`, que também devolvem `outcome`. É o que
+       * permite a quem grava o resultado da sessão distinguir FIM de PAUSA.
+       */
+      terminal?: { step_id: string; outcome: string; issue_status?: string
+                   result?: { from: string; value?: unknown; missing?: boolean } } }
   | { error: "PRECONDITION_FAILED"; active_job_id: string }
   /** DUR-01 — acordar (`wakeOnly`) sem pipeline em andamento: nada foi executado. */
   | { error: "NOT_PARKED"; status: string }
@@ -825,10 +832,17 @@ export class SkillFlowEngine {
         )
         const completedState = { ...state, status: "completed" as const }
         await this.stateManager.complete(tenantId, pipelineSessionId, state)
+        const outcome = result.outcome ?? "resolved"
         return {
-          outcome: result.outcome ?? "resolved",
+          outcome,
           ...(result.issue_status ? { issue_status: result.issue_status } : {}),
           pipeline_state: completedState,
+          terminal: {
+            step_id: currentStep.id,
+            outcome,
+            ...(result.issue_status ? { issue_status: result.issue_status } : {}),
+            ...(result.result ? { result: result.result } : {}),
+          },
         }
       }
 

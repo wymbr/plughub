@@ -1548,7 +1548,7 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 **Collect step revisado**: exclusivo de workflows. Cria sessão-filho de contato com channel negociado por capabilities (Arc 16). Workflow suspende; agente channel-aware atende a sessão-filho e retorna resultado. Workflow nunca conhece o canal usado.
 
-**WebhookAdapter** em `channel-gateway/adapters/webhook.py`: `POST /v1/channels/webhook/{skill_id}` (trigger), `POST /v1/channels/webhook/resume/{token}` (resume), `GET /v1/channels/webhook/{session_id}/status`. **Pool webhook**: `channel_types: [webhook]` + `skill_id` como endpoint.
+**WebhookAdapter** em `channel-gateway/adapters/webhook.py`: `POST /v1/channels/webhook/{skill_id}` (trigger), `POST /v1/channels/webhook/resume/{token}` (resume), `GET /v1/channels/webhook/{session_id}/status` — **deduzido de fatos, com `unknown` onde não há nenhum** (AAS-05; antes chave ausente respondia `closed`, e o resume gravava `active` sem TTL); o `complete` com `result_from` deixa o resultado em `{t}:session:{sid}:result`, gravado pelo bridge com o veredicto contra o `output_schema` do pool. **Pool webhook**: `channel_types: [webhook]` + `skill_id` como endpoint.
 
 **O que é eliminado**: `workflow-api` lifecycle endpoints, `WorkflowInstance` entidade separada, `skill-flow-worker` Kafka consumer, `workflow.events` topic (✅ WFL-01, 2026-09-30), entidade Journey ✅ (Fase F concluída 2026-05-28), Monitor/Processes e Analytics/Processes páginas separadas.
 

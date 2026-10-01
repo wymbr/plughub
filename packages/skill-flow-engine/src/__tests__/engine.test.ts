@@ -485,3 +485,60 @@ describe("SkillFlowEngine — SFE-02: issue_status do complete no RunResult", ()
     expect("issue_status" in result).toBe(false)
   })
 })
+
+// ── AAS-05: o fim do fluxo diz que é FIM, e leva o resultado declarado ─────────
+// O bridge grava o resultado da sessão SÓ quando há `terminal` — e `escalated_human` também
+// devolve `outcome`, então sem o bloco ele confundiria pausa com fim.
+
+describe("SkillFlowEngine — AAS-05: terminal e resultado do complete", () => {
+  const comResultado = (from: string): SkillFlow => ({
+    entry: "consultar",
+    steps: [
+      simpleFlow.steps[0]!,
+      { id: "concluir", type: "complete", outcome: "resolved", result_from: from },
+      simpleFlow.steps[2]!,
+    ],
+  })
+
+  it("complete com result_from devolve o valor da chave no terminal", async () => {
+    mockMcpCall.mockResolvedValue({ nome: "Ana", plano: "pos" })
+    const r = await makeEngine().run({
+      tenantId: TENANT, sessionId: "session-aas05a", customerId: "c",
+      skillId: "skill_test_v1", flow: comResultado("cliente"), sessionContext: {},
+    }) as Record<string, any>
+    expect(r["terminal"]).toEqual({
+      step_id: "concluir", outcome: "resolved",
+      result: { from: "cliente", value: { nome: "Ana", plano: "pos" } },
+    })
+  })
+
+  it("result_from que não existe em results é DITO (missing), nunca valor vazio", async () => {
+    mockMcpCall.mockResolvedValue({})
+    const r = await makeEngine().run({
+      tenantId: TENANT, sessionId: "session-aas05b", customerId: "c",
+      skillId: "skill_test_v1", flow: comResultado("nao_existe"), sessionContext: {},
+    }) as Record<string, any>
+    expect(r["terminal"].result).toEqual({ from: "nao_existe", missing: true })
+  })
+
+  it("complete sem result_from: terminal sem `result`", async () => {
+    mockMcpCall.mockResolvedValue({})
+    const r = await makeEngine().run({
+      tenantId: TENANT, sessionId: "session-aas05c", customerId: "c",
+      skillId: "skill_test_v1", flow: simpleFlow, sessionContext: {},
+    }) as Record<string, any>
+    expect(r["terminal"]).toEqual({ step_id: "concluir", outcome: "resolved" })
+  })
+
+  it("CONTROLE: escalar devolve outcome mas NÃO terminal — pausa não é fim", async () => {
+    // só o invoke falha; o `escalate` (que também chama MCP) tem de passar, senão o fluxo
+    // termina por outro caminho e o controle mede a coisa errada
+    mockMcpCall.mockRejectedValueOnce(new Error("crm fora")).mockResolvedValue({})
+    const r = await makeEngine().run({
+      tenantId: TENANT, sessionId: "session-aas05d", customerId: "c",
+      skillId: "skill_test_v1", flow: simpleFlow, sessionContext: {},
+    }) as Record<string, any>
+    expect(r["outcome"]).toBe("escalated_human")
+    expect("terminal" in r).toBe(false)
+  })
+})

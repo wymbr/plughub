@@ -67,6 +67,7 @@ from .instance_bootstrap import InstanceBootstrap
 from .registry_syncer import RegistrySyncer
 from .session_config import session_config
 from . import rule_escalation as _rule_esc
+from . import session_result as _session_result   # AAS-05
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1757,6 +1758,21 @@ async def activate_native_agent(
                     "Native agent executed: session=%s skill=%s outcome=%s in_flight=%d",
                     session_id, skill_id, body.get("outcome"), _EXECUTE_IN_FLIGHT,
                 )
+                # AAS-05: o fim do fluxo do agente PRINCIPAL é o resultado da sessão. Conferência
+                # (`conference_id`) roda em pipeline isolado e não fala pela sessão — especialista
+                # e hook terminando não podem sobrescrever o resultado de quem conduz.
+                if not conference_id and isinstance(body.get("terminal"), dict) and tenant_id:
+                    await _session_result.persist_session_result(
+                        redis_client,
+                        tenant_id      = tenant_id,
+                        session_id     = session_id,
+                        pool_id        = pool_id,
+                        skill_id       = skill_id,
+                        deploy_version = str(body.get("deploy_version") or _dv_now or ""),
+                        terminal       = body["terminal"],
+                        ttl_s          = _stl(),
+                        fetch_pool     = lambda t, p: get_pool_config(http, t, p),
+                    )
                 return body
             elif resp.status == 412:
                 # DUR-01: num ACORDAR, 412 é o caminho esperado — quem segura o lock lê a

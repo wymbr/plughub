@@ -1605,13 +1605,10 @@ class WebhookAdapter(ChannelAdapter):
                 },
                 maxlen=500,
             )
-            # Restore status key to "active" so get_status() reflects the transition.
-            # keepttl=True preserves the existing TTL (set by persistSuspendWebhook in Fase C).
-            await self._redis.set(
-                f"{tenant_id}:session:{session_id}:status",
-                "active",
-                keepttl=True,
-            )
+            # AAS-05: a suspensão ACABOU — apaga a marca em vez de gravar "active". O SET com
+            # `keepttl` sobre chave ausente a criava SEM TTL, e "active" ficava para sempre, até
+            # depois do fim da sessão. Ativa é o que `get_status` deduz do meta.
+            await self._redis.delete(f"{tenant_id}:session:{session_id}:status")
         except Exception as _exc:
             # Non-fatal: stream write failure must not block the resume flow.
             logger.warning(
@@ -1795,25 +1792,66 @@ class WebhookAdapter(ChannelAdapter):
         self,
         session_id: str,
         tenant_id:  str,
-    ) -> dict[str, str]:
+    ) -> dict:
         """
-        Return the current status of a webhook session.
+        O estado da sessão DERIVADO DE FATOS, e `unknown` quando nenhum fato responde
+        (AAS-05; adr-a2a-server-binding D5).
 
-        Reads the session status from the Redis stream metadata key written by
-        Core.  Falls back to "closed" when the key has expired (TTL elapsed).
+        Até 2026-10-01 isto lia `{t}:session:{sid}:status` e respondia `closed` quando a chave
+        não existia. Medido: a chave só tinha dois escritores — `suspended` (bridge) e `active`
+        na retomada, com `keepttl` sobre chave muitas vezes AUSENTE, o que a criava sem TTL.
+        Então uma sessão ativa que nunca suspendeu respondia `closed`, e uma que suspendeu e
+        depois fechou respondia `active` para sempre. Ausência de chave é ausência, não conclusão.
 
-        Returns { "session_id": ..., "status": "active"|"suspended"|"closed" }.
+        Os fatos, em ordem:
+
+          1. `{t}:session:{sid}:result` (bridge, AAS-05) — fechou num `complete`: `closed`, com
+             outcome, resultado e o veredicto do contrato. É a única chave com tenant no nome.
+          2. `session:{sid}:meta` — a sessão existe; e o TENANT dela tem de ser o pedido: meta de
+             outro tenant responde `unknown`, nunca o estado de uma sessão alheia.
+          3. com meta do tenant: `session:{sid}:closed_recorded` (o fim no stream, VOZ-40) →
+             `closed` com o motivo; status `suspended` → `suspended`; senão → `active`.
+          4. sem meta: status `suspended` (chave com tenant) → `suspended`; senão → `unknown`.
         """
-        # Core writes session status at: {tenant_id}:session:{session_id}:status
-        # (a simple Redis string, TTL same as the stream)
-        status_key = f"{tenant_id}:session:{session_id}:status"
-        status     = await self._redis.get(status_key)
+        raw = await self._redis.get(f"{tenant_id}:session:{session_id}:result")
+        if raw:
+            try:
+                doc = json.loads(raw)
+            except ValueError:
+                doc = None
+                logger.warning("get_status: resultado ilegível em %s:session:%s:result", tenant_id, session_id)
+            if isinstance(doc, dict):
+                out: dict = {"session_id": session_id, "status": "closed", "closed_by": "complete",
+                             "outcome": doc.get("outcome"), "completed_at": doc.get("completed_at"),
+                             "contract": doc.get("contract")}
+                if "result" in doc:
+                    out["result"] = doc["result"]
+                if doc.get("issue_status"):
+                    out["issue_status"] = doc["issue_status"]
+                return out
 
-        if status is None:
-            # Key expired → session is closed (or never existed)
-            status = "closed"
+        meta_tenant: str | None = None
+        raw_meta = await self._redis.get(f"session:{session_id}:meta")
+        if raw_meta:
+            try:
+                meta_tenant = (json.loads(raw_meta) or {}).get("tenant_id") or None
+            except ValueError:
+                meta_tenant = None
+        status = await self._redis.get(f"{tenant_id}:session:{session_id}:status")
 
-        return {"session_id": session_id, "status": status}
+        if raw_meta and meta_tenant is not None and meta_tenant != tenant_id:
+            return {"session_id": session_id, "status": "unknown"}
+        if raw_meta and meta_tenant == tenant_id:
+            closed = await self._redis.get(f"session:{session_id}:closed_recorded")
+            if closed:
+                return {"session_id": session_id, "status": "closed", "closed_by": "session_closed",
+                        "close_reason": closed}
+            if status == "suspended":
+                return {"session_id": session_id, "status": "suspended"}
+            return {"session_id": session_id, "status": "active"}
+        if status == "suspended":
+            return {"session_id": session_id, "status": "suspended"}
+        return {"session_id": session_id, "status": "unknown"}
 
     # ──────────────────────────────────────────────────────────────────────────
     # ChannelAdapter interface — no-ops for webhook channel

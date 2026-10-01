@@ -351,6 +351,11 @@ export interface StepResult {
   park?:             ParkRequest
   /** Outcome final — apenas steps complete */
   outcome?:          string
+  /**
+   * AAS-05: o resultado terminal declarado pelo `complete` (`result_from`). `missing` quando a
+   * chave declarada não está em pipeline_state — ausência dita, nunca `{}` no lugar.
+   */
+  result?:           { from: string; value?: unknown; missing?: boolean }
 }
 
 // ─────────────────────────────────────────────

@@ -410,10 +410,11 @@ async def test_handle_delegate_dual_write_when_resumable_carries_policy(adapter)
 
 
 @pytest.mark.asyncio
-async def test_handle_resume_resets_status_key_to_active(adapter, mock_redis):
+async def test_handle_resume_clears_the_suspended_mark(adapter, mock_redis):
     """
-    Fase B: status key must be reset to "active" with keepttl=True so
-    get_status() reflects the transition without touching the existing TTL.
+    AAS-05: a retomada APAGA a marca de suspensão. Antes ela gravava "active" com
+    keepttl=True — sobre chave ausente isso criava a chave SEM TTL, e o status dizia
+    "active" para sempre, inclusive depois do fim da sessão.
     """
     mock_redis.hget.return_value = VALID_TOKEN_VALUE
 
@@ -427,11 +428,10 @@ async def test_handle_resume_resets_status_key_to_active(adapter, mock_redis):
     # conflava dois fatos — "a chave de status foi escrita assim" e "nenhum outro
     # SET aconteceu" — e só o primeiro é o assunto deste teste. O segundo fato
     # ganhou asserção PRÓPRIA logo abaixo, então a divisão não perde cobertura.
-    mock_redis.set.assert_any_call(
-        f"{TENANT_ID}:session:{SESSION_ID}:status",
-        "active",
-        keepttl=True,
-    )
+    mock_redis.delete.assert_any_call(f"{TENANT_ID}:session:{SESSION_ID}:status")
+    escritas_de_status = [c for c in mock_redis.set.call_args_list
+                          if str(c.args[0]) == f"{TENANT_ID}:session:{SESSION_ID}:status"]
+    assert escritas_de_status == [], "a retomada não grava status — ele é deduzido"
     lock_calls = [
         c for c in mock_redis.set.call_args_list
         if str(c.args[0]).startswith(f"{TENANT_ID}:resume_inflight:")
@@ -466,7 +466,7 @@ async def test_handle_resume_status_key_failure_is_non_fatal(adapter, mock_redis
     Fase B non-fatal path: status key failure must NOT block the resume flow.
     """
     mock_redis.hget.return_value = VALID_TOKEN_VALUE
-    mock_redis.set.side_effect   = RuntimeError("Redis SET failed")
+    mock_redis.delete.side_effect = RuntimeError("Redis DEL failed")
 
     result = await adapter.handle_resume(
         resume_token = RESUME_TOKEN,
@@ -512,37 +512,68 @@ async def test_handle_resume_stream_written_before_kafka(adapter, mock_redis, mo
     assert call_order.index("set")   < call_order.index("kafka")
 
 
-# ── get_status tests ──────────────────────────────────────────────────────────
+# ── get_status tests (AAS-05: deduzido de fatos; ausência é `unknown`) ────────
 
-@pytest.mark.asyncio
-async def test_get_status_returns_active(adapter, mock_redis):
-    mock_redis.get.return_value = "active"
-    result = await adapter.get_status(SESSION_ID, TENANT_ID)
-    assert result == {"session_id": SESSION_ID, "status": "active"}
+def _meta(tenant=TENANT_ID):
+    return json.dumps({"tenant_id": tenant, "channel": "webhook"})
 
 
-@pytest.mark.asyncio
-async def test_get_status_returns_suspended(adapter, mock_redis):
-    """Fase B: suspended is a valid status set by orchestrator-bridge."""
-    mock_redis.get.return_value = "suspended"
-    result = await adapter.get_status(SESSION_ID, TENANT_ID)
-    assert result == {"session_id": SESSION_ID, "status": "suspended"}
+def _redis_com(mock_redis, chaves: dict):
+    async def _get(k):
+        return chaves.get(k)
+    mock_redis.get = AsyncMock(side_effect=_get)
 
 
-@pytest.mark.asyncio
-async def test_get_status_returns_closed_when_key_expired(adapter, mock_redis):
-    mock_redis.get.return_value = None  # TTL elapsed
-    result = await adapter.get_status(SESSION_ID, TENANT_ID)
-    assert result == {"session_id": SESSION_ID, "status": "closed"}
+RESULT_KEY = f"{TENANT_ID}:session:{SESSION_ID}:result"
+META_KEY   = f"session:{SESSION_ID}:meta"
+STATUS_KEY = f"{TENANT_ID}:session:{SESSION_ID}:status"
+CLOSED_KEY = f"session:{SESSION_ID}:closed_recorded"
 
 
 @pytest.mark.asyncio
-async def test_get_status_reads_correct_key(adapter, mock_redis):
-    mock_redis.get.return_value = "active"
-    await adapter.get_status(SESSION_ID, TENANT_ID)
-    mock_redis.get.assert_called_once_with(
-        f"{TENANT_ID}:session:{SESSION_ID}:status"
-    )
+async def test_get_status_sessao_viva_que_nunca_suspendeu_e_active(adapter, mock_redis):
+    """O defeito medido: sem chave de status a resposta era `closed`."""
+    _redis_com(mock_redis, {META_KEY: _meta()})
+    assert await adapter.get_status(SESSION_ID, TENANT_ID) == {"session_id": SESSION_ID, "status": "active"}
+
+
+@pytest.mark.asyncio
+async def test_get_status_sem_fato_nenhum_e_unknown_nunca_closed(adapter, mock_redis):
+    _redis_com(mock_redis, {})
+    assert await adapter.get_status(SESSION_ID, TENANT_ID) == {"session_id": SESSION_ID, "status": "unknown"}
+
+
+@pytest.mark.asyncio
+async def test_get_status_suspended(adapter, mock_redis):
+    _redis_com(mock_redis, {META_KEY: _meta(), STATUS_KEY: "suspended"})
+    assert (await adapter.get_status(SESSION_ID, TENANT_ID))["status"] == "suspended"
+    _redis_com(mock_redis, {STATUS_KEY: "suspended"})   # meta expirada: a chave com tenant basta
+    assert (await adapter.get_status(SESSION_ID, TENANT_ID))["status"] == "suspended"
+
+
+@pytest.mark.asyncio
+async def test_get_status_fechada_pelo_stream_diz_o_motivo(adapter, mock_redis):
+    """O "active" eterno da retomada antiga não vence o fim registrado."""
+    _redis_com(mock_redis, {META_KEY: _meta(), STATUS_KEY: "active", CLOSED_KEY: "agent_done"})
+    assert await adapter.get_status(SESSION_ID, TENANT_ID) == {
+        "session_id": SESSION_ID, "status": "closed", "closed_by": "session_closed", "close_reason": "agent_done"}
+
+
+@pytest.mark.asyncio
+async def test_get_status_fechada_por_complete_traz_resultado_e_contrato(adapter, mock_redis):
+    doc = {"outcome": "resolved", "completed_at": "2026-10-01T12:00:00+00:00", "issue_status": "ok",
+           "result": {"from": "r", "value": {"linha": "1"}}, "contract": {"checked": True, "valid": True}}
+    _redis_com(mock_redis, {RESULT_KEY: json.dumps(doc)})
+    assert await adapter.get_status(SESSION_ID, TENANT_ID) == {
+        "session_id": SESSION_ID, "status": "closed", "closed_by": "complete", "outcome": "resolved",
+        "completed_at": doc["completed_at"], "contract": doc["contract"], "result": doc["result"],
+        "issue_status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_get_status_meta_de_outro_tenant_e_unknown(adapter, mock_redis):
+    _redis_com(mock_redis, {META_KEY: _meta("tenant_alheio"), CLOSED_KEY: "agent_done"})
+    assert await adapter.get_status(SESSION_ID, TENANT_ID) == {"session_id": SESSION_ID, "status": "unknown"}
 
 
 # ── Identity Resolver nível b — Thread A (cross-channel reconnect) ────────────
