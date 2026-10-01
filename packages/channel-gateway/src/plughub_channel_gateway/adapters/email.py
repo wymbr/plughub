@@ -327,8 +327,19 @@ class EmailAdapter(ChannelAdapter):
         if not attachments or self._attachment_store is None:
             return []
 
+        from ..attachment_store import normalize_mime, validate_content
+
         refs: list[dict] = []
         for att in attachments:
+            # ATT-01: tipo e nome vêm do remetente. Conferido pela mesma regra do commit; o
+            # anexo recusado não é gravado, e o motivo vai ao log com o nome do arquivo.
+            mime_type = normalize_mime(att.mime_type)
+            refusal = validate_content("webchat_attachment", mime_type, att.data)
+            if refusal:
+                logger.warning(
+                    "email attachment RECUSADO file=%r session=%s: %s", att.filename, session_id, refusal
+                )
+                continue
             try:
                 from ..attachment_store import resolve_attachment_expiry_days
                 _expiry_days = await resolve_attachment_expiry_days(
@@ -339,8 +350,8 @@ class EmailAdapter(ChannelAdapter):
                     tenant_id  = tenant_id,
                     session_id = session_id,
                     file_name  = att.filename,
-                    mime_type  = att.mime_type,
-                    size_bytes = att.size_bytes,
+                    mime_type  = mime_type,
+                    size_bytes = len(att.data),
                     expires_at = expires_at,
                 )
                 # ⚠️ VOZ-06 (2026-09-13): passava `mime_type=` (que `commit` não aceita)
@@ -354,8 +365,8 @@ class EmailAdapter(ChannelAdapter):
                 refs.append({
                     "file_id":     file_id,
                     "filename":    att.filename,
-                    "mime_type":   att.mime_type,
-                    "size_bytes":  att.size_bytes,
+                    "mime_type":   mime_type,
+                    "size_bytes":  len(att.data),
                     "serving_url": serving_url,
                 })
             except Exception as exc:

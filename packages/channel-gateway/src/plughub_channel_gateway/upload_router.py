@@ -19,9 +19,9 @@ Security:
   Serving endpoint requires no auth in phase 1 — file_id acts as an opaque
   capability token (high-entropy UUID).  Add signed URL verification in phase 2.
 
-Content-Type enforcement:
-  The actual MIME type of uploaded bytes is currently trusted from the original
-  reserve request (phase 1).  Phase 2 will add magic-byte validation.
+Content-Type enforcement (ATT-01, 2026-10-01):
+  commit() checks the class allowlist, the REAL size and the magic bytes (fail-closed) for
+  every writer. Serving adds nosniff + CSP sandbox, and only images go inline.
 """
 
 from __future__ import annotations
@@ -33,7 +33,12 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from . import main as _main_module  # for access to _attachment_store + _registry
-from .attachment_store import MIME_TO_CONTENT_TYPE
+from .attachment_store import (
+    MIME_TO_CONTENT_TYPE,
+    SERVE_SECURITY_HEADERS,
+    content_disposition,
+    served_media_type,
+)
 from .usage_emitter import emit_attachment
 
 logger = logging.getLogger("plughub.channel-gateway.upload")
@@ -151,12 +156,14 @@ async def serve_attachment(file_id: str) -> StreamingResponse:
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    media_type = served_media_type(meta.mime_type)
     return StreamingResponse(
         stream,
-        media_type = meta.mime_type,
+        media_type = media_type,
         headers    = {
-            "Content-Disposition": f'inline; filename="{meta.original_name}"',
+            "Content-Disposition": content_disposition(meta.original_name, media_type),
             "Content-Length":      str(meta.size_bytes),
             "Cache-Control":       "private, max-age=3600",
+            **SERVE_SECURITY_HEADERS,
         },
     )

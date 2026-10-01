@@ -33,6 +33,8 @@ Cron de expurgo (dois estágios):
 from __future__ import annotations
 
 import json
+import re
+from urllib.parse import quote
 import logging
 import os
 import uuid
@@ -148,11 +150,13 @@ def validate_magic_bytes(data: bytes, declared_mime: str) -> str | None:
     Retorna None se o conteúdo bater com o tipo declarado, ou uma mensagem
     de erro legível se houver divergência.
 
-    Tipos sem assinatura cadastrada são aceitos sem validação (fail-open).
+    ATT-01 (2026-10-01): tipo SEM assinatura cadastrada é RECUSADO (fail-closed). Era aceito
+    sem validação, e o WhatsApp e o e-mail gravam o MIME que o REMETENTE declara — um `text/html`
+    passava por aqui sem conferência nenhuma.
     """
     candidates = _MAGIC_SIGS.get(declared_mime)
     if candidates is None:
-        return None  # tipo sem assinatura cadastrada — aceita
+        return f"tipo sem assinatura conhecida: {declared_mime}"
 
     for candidate in candidates:
         if all(
@@ -163,6 +167,91 @@ def validate_magic_bytes(data: bytes, declared_mime: str) -> str | None:
             return None  # pelo menos um candidato bateu
 
     return f"conteúdo não corresponde ao tipo declarado: {declared_mime}"
+
+
+# ─── Allowlist por CLASSE de artefato (ATT-01) ───────────────────────────────
+#
+# O que pode ser gravado depende de QUEM grava: anexo de contato (webchat, WhatsApp, e-mail)
+# segue a allowlist do cliente; gravação de chamada é só o áudio do egress. Classe desconhecida
+# não grava nada — tabela nova entra aqui junto com o escritor dela.
+
+# Anexo de CONTATO = o que o upload do webchat aceita (`MIME_LIMITS`, que segue sendo a tabela
+# dele) + a nota de voz que o WhatsApp entrega (`audio/ogg; codecs=opus`). Outros áudios
+# (mpeg, mp4, amr) ficam recusados até haver quem os consuma.
+CONTACT_MIME_LIMITS: dict[str, int] = {
+    **MIME_LIMITS,
+    "audio/ogg": 16 * 1024 * 1024,
+}
+
+CLASS_MIME_LIMITS: dict[str, dict[str, int]] = {
+    "webchat_attachment": CONTACT_MIME_LIMITS,
+    "call_recording":     {"audio/ogg": 1024 * 1024 * 1024},   # 1 GB por parte
+}
+
+# O que a porta pública pode servir INLINE: só imagem. O resto vai como download, para nenhum
+# documento ser renderizado pelo navegador na origem do gateway.
+INLINE_MIMES: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp", "image/gif"})
+
+
+# ── Cabeçalhos da porta pública (ATT-01) ──────────────────────────────────────
+#
+# A porta serve, na ORIGEM do gateway, um arquivo cujo nome e conteúdo vieram de fora. Três
+# coisas impedem que ele vire página: o navegador não adivinha tipo (`nosniff`), o documento
+# não executa nada nem carrega nada (`sandbox` + `default-src 'none'`), e só imagem é exibida
+# inline — o resto é download. Tipo fora da allowlist (linha antiga) sai como bytes opacos.
+
+SERVE_SECURITY_HEADERS = {
+    "X-Content-Type-Options":  "nosniff",
+    "Content-Security-Policy": "sandbox; default-src 'none'",
+}
+
+_UNSAFE_FILENAME_CHARS = re.compile(r'[^A-Za-z0-9._ -]')
+
+
+def content_disposition(original_name: str | None, mime_type: str) -> str:
+    """`inline` só para imagem; nome em ASCII seguro + `filename*` (RFC 5987) para o original.
+
+    O nome é do remetente (o e-mail o traz no anexo): aspas, `;` e quebra de linha dentro dele
+    reescreviam o cabeçalho quando ele entrava cru entre aspas.
+    """
+    disposition = "inline" if mime_type in INLINE_MIMES else "attachment"
+    name  = original_name or ""
+    ascii_name = _UNSAFE_FILENAME_CHARS.sub("_", name).strip() or "attachment"
+    if not name:
+        return f'{disposition}; filename="{ascii_name}"'
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+def served_media_type(mime_type: str | None) -> str:
+    """O tipo que a porta declara: o gravado se está na allowlist; senão, bytes opacos."""
+    return mime_type if mime_type in CONTACT_MIME_LIMITS else "application/octet-stream"
+
+
+def normalize_mime(mime_type: str | None) -> str:
+    """`"Image/JPEG; charset=x"` → `"image/jpeg"`. O provedor manda parâmetros (o WhatsApp
+    declara `audio/ogg; codecs=opus`); a allowlist compara o tipo, nunca a string crua."""
+    return (mime_type or "").split(";", 1)[0].strip().lower()
+
+
+def validate_content(artifact_class: str | None, mime_type: str, data: bytes) -> str | None:
+    """A conferência que TODO commit faz, em qualquer backend e para qualquer escritor.
+
+    Classe conhecida, tipo na allowlist da classe, tamanho REAL (não o declarado no reserve)
+    dentro do teto, e assinatura batendo. Devolve o motivo da recusa, ou None.
+    """
+    klass  = artifact_class or "webchat_attachment"
+    limits = CLASS_MIME_LIMITS.get(klass)
+    if not limits:
+        return f"classe de artefato desconhecida: {klass}"
+    limit = limits.get(mime_type)
+    if not limit:
+        return f"mime_type não aceito para {klass}: {mime_type}"
+    size = len(data)
+    if size <= 0:
+        return "conteúdo vazio"
+    if size > limit:
+        return f"arquivo muito grande: {size} > {limit} bytes"
+    return validate_magic_bytes(data, mime_type)
 
 
 # ─── Modelos de dados ─────────────────────────────────────────────────────────
@@ -605,7 +694,7 @@ class FilesystemAttachmentStore:
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT session_id, original_name, mime_type, expires_at
+                SELECT session_id, original_name, mime_type, expires_at, artifact_class
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2 AND status = 'pending'
                 """,
@@ -620,10 +709,10 @@ class FilesystemAttachmentStore:
         mime_type     = row["mime_type"]
         expires_at    = row["expires_at"]
 
-        # Valida magic bytes (fase 2)
-        magic_error = validate_magic_bytes(data, mime_type)
-        if magic_error:
-            raise ValueError(magic_error)
+        # ATT-01: allowlist da classe, tamanho real e assinatura — o mesmo para todo escritor
+        content_error = validate_content(row.get("artifact_class"), mime_type, data)
+        if content_error:
+            raise ValueError(content_error)
 
         # Calcula path date-sharded
         now       = datetime.now(timezone.utc)
@@ -919,7 +1008,7 @@ class S3AttachmentStore:
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT session_id, original_name, mime_type, expires_at
+                SELECT session_id, original_name, mime_type, expires_at, artifact_class
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2 AND status = 'pending'
                 """,
@@ -934,10 +1023,10 @@ class S3AttachmentStore:
         mime_type     = row["mime_type"]
         expires_at    = row["expires_at"]
 
-        # Valida magic bytes
-        magic_error = validate_magic_bytes(data, mime_type)
-        if magic_error:
-            raise ValueError(magic_error)
+        # ATT-01: allowlist da classe, tamanho real e assinatura — o mesmo para todo escritor
+        content_error = validate_content(row.get("artifact_class"), mime_type, data)
+        if content_error:
+            raise ValueError(content_error)
 
         # Envia para o S3
         key = self._object_key(tenant_id, session_id, file_id, mime_type)

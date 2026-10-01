@@ -176,9 +176,9 @@ class TestValidateMagicBytes:
         err = validate_magic_bytes(b"\x00\x00\x00\x00XXXX" + b"\x00" * 16, "video/mp4")
         assert err is not None
 
-    def test_unknown_mime_is_accepted_fail_open(self):
-        # Types not in _MAGIC_SIGS should pass without validation
-        assert validate_magic_bytes(b"anything", "application/octet-stream") is None
+    def test_unknown_mime_is_refused_fail_closed(self):
+        # ATT-01: types not in _MAGIC_SIGS are REFUSED (was fail-open)
+        assert validate_magic_bytes(b"anything", "application/octet-stream") is not None
 
     def test_too_short_data_returns_error(self):
         # Only 2 bytes — can't match any signature

@@ -632,3 +632,9 @@ antes de a tarefa fechar — e a mudanca so e conferivel se o destino ja estiver
 |---|---|---|---|
 | DUR-01 | **A espera do `menu` ESTACIONA em vez de bloquear no executor**: o `/execute` volta `awaiting_input` depois do prompt e a resposta acorda a conversa, sem requisição, conexão Redis, lock nem processo presos enquanto o cliente pensa. F1 engine · F2 bridge e varredura de prazo · F3 tópico `menu.wake` (Console, agente de fila) e estacionamento de fila, retomada webhook e especialista · F4 `park` como modo de toda ativação que o bridge sabe acordar, campo `pool.menu_wait` removido. Bloqueio sobra dentro de `begin_transaction` e em dois chamadores que não sabem acordar (delegação `assist`, fallback YAML), nomeados. A licença de IA NÃO é liberada por isto (é SET de sessão) | 2026-09-28 | `CHANGELOG.md` § 2026-09-28 (4), (5), (6) e (7) |
 | PRD-03 | O `/execute` do bridge sai do conector compartilhado (teto padrão de 100, sem timeout nem log) para uma sessão HTTP própria sem teto; quem limita conversas é a admissão. Conversas em voo contadas no log. Paliativo: a espera do `menu` continua na requisição aberta até a `DUR-01` | 2026-09-28 | `CHANGELOG.md` § 2026-09-28 (3) |
+
+## `docs/adr/adr-a2a-server-binding.md` — PlugHub como servidor A2A
+
+| id | tarefa | data | ancora |
+|---|---|---|---|
+| ATT-01 | Todo `commit` de anexo confere allowlist da CLASSE, tamanho real e assinatura (fail-closed) — WhatsApp e e-mail incluídos, nota de voz `audio/ogg` aceita; a porta pública manda `nosniff` + CSP `sandbox`, só exibe imagem inline e não deixa o nome reescrever o cabeçalho | 2026-10-01 | `CHANGELOG.md` § 2026-10-01 (3) |

@@ -334,7 +334,16 @@ class WhatsAppAdapter(ChannelAdapter):
             return
 
         file_id: str | None = None
-        if self._attachment_store is not None:
+        # ATT-01: o MIME é o que o REMETENTE declarou à Meta. Conferido aqui, antes do reserve,
+        # pela mesma regra do commit — a mensagem segue sem arquivo, e o motivo vai ao log.
+        from ..attachment_store import normalize_mime, validate_content
+        mime_type = normalize_mime(mime_type)
+        refusal = validate_content("webchat_attachment", mime_type, raw_bytes)
+        if refusal:
+            logger.warning(
+                "whatsapp media RECUSADA media_id=%s session=%s: %s", media_id, session_id, refusal
+            )
+        if self._attachment_store is not None and not refusal:
             try:
                 from datetime import timedelta
                 from ..attachment_store import resolve_attachment_expiry_days

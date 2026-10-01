@@ -1,5 +1,54 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (3) — ATT-01: o tipo que o remetente escolhe não é gravado, e a porta de anexos não serve página
+
+**O risco era de hoje e não dependia do A2A** (achado na revisão 2 do ADR A2A, 2026-09-30). Medido:
+WhatsApp e e-mail gravavam mídia **sem `validate_mime`**, com o MIME e o tamanho que o REMETENTE
+declarava; `validate_magic_bytes` **aceitava tipo sem assinatura**; e a porta pública
+`GET /webchat/v1/attachments/{file_id}` servia `inline`, com o MIME gravado, o nome cru entre aspas,
+sem `nosniff` e sem CSP. Somado: um documento `text/html` recebido pelo WhatsApp saía renderizável na
+origem do gateway, e um nome de arquivo de e-mail com aspas e CRLF reescrevia o cabeçalho.
+
+**O que passou a ser verdade:**
+- **Uma regra, um lugar:** `attachment_store.validate_content`, chamado pelo `commit` dos DOIS
+  backends. A allowlist é por **classe de artefato** (`webchat_attachment` = a tabela do webchat +
+  `audio/ogg`; `call_recording` = `audio/ogg`); classe desconhecida não grava nada; tamanho é o dos
+  **bytes recebidos**, nunca o declarado; magic bytes **fail-closed**.
+- WhatsApp e e-mail **normalizam** o MIME (`audio/ogg; codecs=opus` → `audio/ogg`) e conferem
+  **antes** do `reserve`, sem deixar slot pendente órfão. A mensagem do WhatsApp segue sem arquivo
+  (`file_id: null`); o anexo de e-mail recusado sai da lista; o motivo vai ao log em `WARNING`.
+- A porta manda `X-Content-Type-Options: nosniff` e `Content-Security-Policy: sandbox;
+  default-src 'none'`, só exibe **imagem** inline (PDF e vídeo viram download), leva nome ASCII
+  seguro + `filename*` (RFC 5987) e serve tipo fora da allowlist como `application/octet-stream`.
+
+**Decisão tomada na medição — a nota de voz.** A allowlist do cliente não tinha áudio, e fechar sem
+tratar isso recusaria toda nota de voz do WhatsApp. `audio/ogg` entrou só na classe de anexo de
+CONTATO (com assinatura `OggS`); o upload do webchat segue sem áudio. Outros áudios (`audio/mpeg`,
+`audio/mp4`, `audio/amr`) ficam **recusados** até haver quem os consuma.
+
+**Efeito visível:** o link "abrir" do Console (VOZ-28) passa a **baixar** o PDF em vez de abri-lo numa
+aba. Miniatura (`<img>`) e vídeo (`<video>`) não mudam: a disposição só vale para navegação.
+
+**População medida antes de fechar:** 49 linhas em `session_attachments` (31 gravações `audio/ogg`,
+18 anexos de webchat JPEG/PNG/PDF), **todas** dentro da allowlist — nenhuma veio de WhatsApp ou de
+e-mail. Fechar não recusa nada que já existia.
+
+**Gates:**
+- `probe_att01_attachment_door.sh` (ao vivo, store REAL, amostra própria expirada ao final):
+  W0/W3 controles positivos · W1 `text/html` e W2 JPEG com bytes de HTML recusados · S1 imagem
+  inline + `nosniff` + `sandbox` · S2 PDF como download · S3 nome hostil não injeta cabeçalho ·
+  C1 censo de linhas servíveis fora da allowlist da classe. VERDE.
+- `mut_att01_attachment_door.sh`: M0 verde; M1 (regra fora do commit), M2 (sem cabeçalhos) e
+  M3 (tudo inline) **todas pegas**. A primeira rodada achou um defeito do próprio censo: o M1 grava
+  de fato o HTML, a limpeza o expira, e o C1 contava linha expirada (que responde 410). O C1
+  passou a medir o que a porta pode SERVIR.
+- `test_att01_attachment_content.py`: 29 casos, cada recusa com o controle positivo ao lado. Suíte do
+  gateway: **1533 passed**, com a árvore montada sobre a imagem.
+
+**Deixou para a ATT-02:** URL assinada no lugar do `file_id` como credencial, porta interna com
+capacidade e `audit.access`, antivírus com quarentena, re-codificação de imagem (EXIF), retenção como
+classe do namespace `retention`.
+
 ## 2026-10-01 (2) — VOZ-28: o anexo do cliente vira fato da conversa, e sobe com a chamada aberta
 
 **Reescopo com o dono:** provar o upload DURANTE a chamada do chat (a chamada é meio do contato de
