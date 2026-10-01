@@ -114,18 +114,13 @@
 </head>
 <body>
 
-<!-- ================= AVISO DE CORREÇÃO — 2026-08-19 ================= -->
-<div style="border:2px solid #DC2626;background:#FEF2F2;color:#3E434D;padding:5mm 6mm;margin:6mm auto;
-            max-width:186mm;border-radius:2mm;font-size:9.5pt;line-height:1.45">
-  <strong style="color:#DC2626">⚠️ Correção de 2026-08-19 — medido.</strong>
-  Este material afirma voz/PSTN e WebRTC como capacidades entregues.
-  <strong>Nenhum dos dois canais de áudio funciona hoje</strong>: o adapter de voz levanta
-  <code>AttributeError</code> no caminho de entrada (cinco métodos inexistentes, mockados no teste) e o
-  WebRTC não tem SFU provisionado em ambiente algum — a sinalização roda, a mídia não. O discador está
-  <strong>bloqueado</strong>, não planejado. <strong>Não usar estes trechos em proposta comercial</strong>
-  até a reconstrução (<code>docs/adr/adr-voice-media-plane.md</code>) entregar a fase V-F2.
-  Os canais de texto (webchat, WhatsApp, SMS, e-mail, Instagram, Telegram) e o webhook seguem em operação.
-</div>
+<!--
+  Revisão de 2026-10-01 — sincronizada com o deck (plughub-descritivo-tecnico.pptx) e com ênfase na
+  fronteira para agentes de automação (canal a2a, ADR adr-a2a-server-binding rev. 2).
+  · Saiu o aviso de 2026-08-19: o plano de mídia foi reconstruído (VOZ-01/02/04/06/32). O estado atual
+    do áudio está na página de canais e em "Onde estamos".
+  · Cada afirmação sobre A2A e MCP traz selo de estado; a fonte é o ADR e o ledger (AAS-*, CAP-*).
+-->
 
 <!-- ================= 1 · CAPA ================= -->
 <section class="page cover">
@@ -149,15 +144,83 @@
         <p>Pessoas e IA na mesma unidade de concorrência. Sem cobrança por token, por ação ou por resolução.</p></div>
     </div>
     <div style="height:14mm"></div>
-    <p style="font-size:9.5pt;color:#C9CDD4;max-width:130mm">
+    <p style="font-size:9.5pt;color:#C9CDD4;max-width:140mm">
       Atendimento receptivo e ativo, automação de processos, pesquisa, qualidade e conformidade
-      em uma plataforma única — com pessoas e inteligência artificial na mesma conversa.
+      em uma plataforma única — com pessoas e inteligência artificial na mesma conversa. E a mesma
+      operação atende quem chega por um canal e quem chega <strong>pelo agente de automação</strong> do
+      cliente ou do parceiro, por protocolo aberto.
     </p>
     <div class="foot"><span>PlugHub · descritivo técnico resumido</span><span>2026</span></div>
   </div>
 </section>
 
-<!-- ================= 2 · A HERANÇA ================= -->
+<!-- ================= 2 · AS PERGUNTAS ================= -->
+<section class="page">
+  <div class="kicker">As perguntas</div>
+  <h2>Oito perguntas sobre o curso natural de um atendimento</h2>
+  <p style="max-width:172mm;margin-bottom:2mm">
+    Nenhuma é sobre funcionalidade faltando. Todas descrevem algo que a operação aprendeu a contornar — e o
+    contorno virou processo, treinamento e indicador. A última ainda não virou contorno porque é nova, e é
+    nela que este material se demora.
+  </p>
+
+  <div class="q">
+    <div class="ask">“Trazer um especialista exige transferir o cliente?”</div>
+    <p>Não é falta de roteamento por competência, que existe desde os anos 90: é que a competência mora em
+    <em>outra fila</em>, e alcançá-la significa passar o cliente adiante — histórico repetido, nova espera,
+    risco de perder a conversa no caminho.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“A necessidade do cliente sempre termina em um atendimento?”</div>
+    <p>Quase nunca. Ela começa num contato e se resolve dias depois, muitas vezes em outro canal. Mas o sistema
+    só registra contatos — então quatro conversas sobre o mesmo caso viram quatro registros e três falhas de FCR.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Se a resposta não existe agora, como se dá continuidade?”</div>
+    <p>Protocolo que o cliente guarda, retorno anotado numa planilha, ou campanha montada depois por extração. O
+    caso fica parado esperando alguém lembrar dele — e quem faz o retorno raramente sabe o que aconteceu antes.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Por que se disca para centenas de pessoas tudo junto? Quantas vezes já entramos em contato? Estamos incomodando?”</div>
+    <p>Boa parte dessas ligações só entrega uma informação — aprovado, agendado, vencido — que poderia chegar
+    sozinha, no canal que a pessoa usa. E ninguém soma entre discador, SMS e WhatsApp: cada um sabe se falou com
+    aquele registro, nenhum sabe quanto aquela <em>pessoa</em> recebeu.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Como cada agente visualizou os dados sensíveis?”</div>
+    <p>A pergunta sobre quem <em>vê</em> o dado é antiga. A que quase nunca tem resposta é a nova: quais sistemas
+    um agente de IA consultou naquele atendimento, sob que permissão, com que registro — e o que impede alguém de
+    induzi-lo a consultar outra coisa.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Como você compara uma pessoa e uma IA que fazem o mesmo trabalho?”</div>
+    <p>Contenção do bot de um lado; TMA, monitoria e pesquisa do outro. Universos separados, em sistemas
+    diferentes — e, sem carimbo da versão que estava rodando, nem sobre a própria IA se responde se a qualidade
+    caiu depois da última mudança.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Quantos contatos foram necessários para resolver o problema?”</div>
+    <p>Relatórios e estatísticas são de contatos, não se ligam ao problema do cliente. O custo de resolver um
+    caso do início ao fim não existe como número.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Quando quem procura você for o agente do seu cliente — ou o do seu parceiro —, quem atende, e com que garantias?”</div>
+    <p>Assistentes corporativos e pessoais já agem em nome de gente. Hoje eles chegam de dois jeitos, ambos ruins:
+    pelo webchat ou pelo telefone, <strong>se passando por cliente</strong>, e contaminando a métrica; ou por uma
+    integração feita sob medida, que pula fila, SLA, auditoria e avaliação. Nenhum dos dois diz quem chamou, em
+    nome de quem, com que autorização — nem deixa uma pessoa assumir quando a automação não deve decidir.</p>
+  </div>
+
+  <div class="hinge" style="margin-top:4mm;margin-bottom:0">
+    <div class="kicker pale">A pergunta que vira o documento</div>
+    <p style="font-family:var(--hfont);font-size:12pt;color:#fff;line-height:1.35">Como seria o atendimento se ele
+    seguisse o curso natural da necessidade do cliente — chegue ela por uma pessoa ou pelo agente dela —, e não o
+    que a ferramenta permite?</p>
+  </div>
+  <div class="foot"><span>Introdução · as perguntas</span><span>2</span></div>
+</section>
+
+<!-- ================= 3 · A HERANÇA ================= -->
 <section class="page">
   <div class="kicker">A herança</div>
   <h2>Por que as plataformas de atendimento são do jeito que são</h2>
@@ -219,86 +282,72 @@
       conector.
     </p>
   </div>
-  <div class="foot"><span>Introdução · a herança</span><span>2</span></div>
+  <div class="foot"><span>Introdução · a herança</span><span>3</span></div>
 </section>
 
-<!-- ================= 3 · AS PERGUNTAS ================= -->
+<!-- ================= 4 · A EVIDÊNCIA DE MERCADO ================= -->
 <section class="page">
-  <div class="kicker">As perguntas</div>
-  <h2>Sete perguntas sobre o curso natural de um atendimento</h2>
-  <p style="max-width:172mm;margin-bottom:2mm">
-    Nenhuma é sobre funcionalidade faltando. Todas descrevem algo que a operação aprendeu a contornar — e o
-    contorno virou processo, treinamento e indicador.
+  <div class="kicker">A evidência de mercado</div>
+  <h2>A adoção já aconteceu. A orquestração, não.</h2>
+  <p style="max-width:172mm">
+    Pesquisa Infobip em seis países, Brasil incluído: automação e IA agêntica já são maioria — e param onde o
+    atendimento precisaria resolver. A página anterior chega a isso por dedução; esta mostra o mesmo com dado de
+    fora.
   </p>
 
-  <div class="q">
-    <div class="ask">“Trazer um especialista para dentro do atendimento exige transferir o cliente?”</div>
-    <p>Hoje sim — e não por falta de roteamento por competência, que existe desde os anos 90. É que a competência
-    mora em <em>outra fila</em>, e a única forma de alcançá-la é passar o cliente adiante: histórico repetido, nova
-    espera, risco de perder a conversa no caminho. A pergunta não é se há especialistas; é por que eles não podem
-    entrar na conversa que já está acontecendo.</p>
+  <div class="grid3" style="margin-top:5mm">
+    <div class="card dark">
+      <div class="kicker pale" style="margin-bottom:1.5mm">O que já foi adotado</div>
+      <p style="font-family:var(--hfont);font-size:26pt;color:#fff;line-height:1">96%</p>
+      <p style="margin-bottom:3mm">das empresas já usam ferramentas de automação.</p>
+      <p style="font-family:var(--hfont);font-size:26pt;color:#fff;line-height:1">53%</p>
+      <p>já adotaram inteligência artificial agêntica.</p>
+    </div>
+    <div class="card cherry">
+      <div class="kicker pale" style="margin-bottom:1.5mm">Onde a adoção para</div>
+      <p style="font-family:var(--hfont);font-size:26pt;color:#fff;line-height:1">12%</p>
+      <p style="margin-bottom:3mm">dos chatbots resolvem o atendimento do início ao fim, sem intervenção humana.</p>
+      <p style="font-family:var(--hfont);font-size:26pt;color:#fff;line-height:1">42%</p>
+      <p>enfrentam gargalos porque os canais digitais operam isolados uns dos outros.</p>
+    </div>
+    <div class="card teal">
+      <div class="kicker pale" style="margin-bottom:1.5mm;color:#BFE0E0">O que falta — e tem nome</div>
+      <p style="font-family:var(--hfont);font-size:26pt;color:#fff;line-height:1">27%</p>
+      <p style="margin-bottom:3mm">das organizações usam uma plataforma de orquestração de comunicação.</p>
+      <p style="font-family:var(--hfont);font-size:26pt;color:#fff;line-height:1">40%</p>
+      <p>das organizações não têm o dado do cliente em armazenamento centralizado.</p>
+    </div>
   </div>
-  <div class="q">
-    <div class="ask">“A necessidade do cliente sempre termina em um atendimento?”</div>
-    <p>Quase nunca. Ela começa num contato e se resolve dias depois, muitas vezes em outro canal e às vezes sem
-    contato nenhum. Mas o sistema só sabe registrar contatos — então quatro conversas sobre o mesmo caso viram
-    quatro registros e três falhas de FCR, e ninguém consegue dizer quanto custou resolver aquilo do início ao
-    fim.</p>
+
+  <div class="band" style="margin-top:5mm">
+    <div class="kicker pale" style="margin-bottom:2mm">A causa que a pesquisa nomeia é a camada de baixo — e é onde o PlugHub foi construído</div>
+    <p>O fator principal apontado é a fragmentação de dados e a desconexão entre sistemas internos. É por isso que
+    acoplar IA agêntica a uma plataforma herdada não vira resolução: o agente novo herda os canais isolados, a
+    identidade partida e a medição em dois universos. Orquestrar exige um substrato em que canal, identidade,
+    processo, agente — humano ou de IA — e registro sejam a mesma coisa. É esse substrato que este documento
+    descreve.</p>
   </div>
-  <div class="q">
-    <div class="ask">“Se a resposta não existe agora, como se dá continuidade?”</div>
-    <p>Protocolo que o cliente precisa guardar, retorno anotado numa planilha, ou uma campanha montada depois por
-    extração. O caso fica parado esperando alguém lembrar dele — e quem faz o retorno raramente sabe o que
-    aconteceu no contato de origem.</p>
+
+  <div class="card" style="margin-top:4mm">
+    <h4>E o mesmo vale para o agente que vem de fora</h4>
+    <p>A pesquisa mede a IA que a empresa adota <em>dentro</em> de casa. A próxima onda é a de fora: o assistente
+    corporativo do parceiro e o assistente pessoal do consumidor, agindo em nome de alguém. Se a camada de baixo
+    está fragmentada, esse agente também chega a um canal isolado, sem identidade e sem medição — e a fragmentação
+    ganha mais uma porta. As páginas 15 a 18 tratam dessa porta.</p>
   </div>
-  <div class="q">
-    <div class="ask">“Por que se disca para milhares de pessoas para falar de algo que elas não esperam — e quem soma quanta pressão cada uma já recebeu?”</div>
-    <p>Discar é a única forma que a plataforma tem de alcançar alguém. Boa parte dessas ligações apenas entrega
-    uma informação — aprovado, agendado, disponível, vencido — que poderia ter chegado sozinha, no canal que a
-    pessoa usa, no instante em que o fato aconteceu. E a soma ninguém faz: o discador tem uma lista, o SMS costuma
-    ser outro sistema, o WhatsApp é um terceiro. Cada um sabe se falou com aquele registro; nenhum sabe quanto
-    aquela <em>pessoa</em> recebeu — e a pesquisa de satisfação, que quase nunca conta como abordagem, chega por
-    cima de tudo isso.</p>
-  </div>
-  <div class="q">
-    <div class="ask">“Quando quem atende é uma IA, você consegue dizer o que ela consultou e com que autorização?”</div>
-    <p>São duas perguntas, e a segunda é a nova. A primeira — quem <em>vê</em> o dado sensível — a operação
-    resolve transferindo para a URA, pausando a gravação ou deixando o atendente ouvir, e cada uma dessas saídas
-    tem um preço conhecido. A segunda quase nunca tem resposta: quais sistemas o agente de IA consultou naquele
-    atendimento, sob que permissão, com que registro — e o que impede alguém de induzi-lo a consultar outra
-    coisa.</p>
-  </div>
-  <div class="q">
-    <div class="ask">“Como você compara uma pessoa e uma IA que fazem o mesmo trabalho?”</div>
-    <p>Hoje não se compara. Taxa de contenção do bot de um lado; TMA, nota de monitoria e pesquisa do outro —
-    universos separados, em sistemas diferentes e muitas vezes sob times diferentes. Some-se a base: a monitoria
-    olha de 2 a 5% das interações, com avaliação subjetiva e contestação resolvida em reunião, sem trilha. E, sem
-    carimbo da versão que estava rodando, <strong>nem sobre a própria IA</strong> se responde se a qualidade caiu
-    depois da última mudança.</p>
-  </div>
-  <div class="q">
-    <div class="ask">“Quanto vai custar colocar mais IA na sua operação no mês que vem?”</div>
-    <p>A cobrança costuma ser por ação, por conversa, por resolução ou por token — o que produz duas coisas ruins
-    ao mesmo tempo: fatura imprevisível e incentivo invertido, porque quanto melhor a IA fica, mais o cliente
-    paga. E como o assento humano e o consumo de IA são cobrados em moedas diferentes, dimensionar a operação
-    vira uma soma de unidades que não se somam.</p>
-  </div>
-  <div class="foot"><span>Introdução · as perguntas</span><span>3</span></div>
+
+  <p style="margin-top:4mm;font-size:7.8pt;color:var(--muted);max-width:172mm">
+    Fonte: Infobip — Relatório de Maturidade em CX 2026 (release de 13 de maio de 2026), com empresas de seis
+    países, Brasil incluído. Percentuais sobre o total de marcas pesquisadas; os 40% são o complemento dos 60% que
+    declaram armazenamento centralizado do dado do cliente. No release original, “27% usam plataforma de
+    orquestração” e “50% das marcas dizem ter ferramentas totalmente prontas para API” são números independentes
+    sobre a mesma base.
+  </p>
+  <div class="foot"><span>Introdução · a evidência de mercado</span><span>4</span></div>
 </section>
 
 <!-- ================= 4 · O QUE É ================= -->
 <section class="page">
-  <div class="hinge">
-    <div class="kicker pale">A dobradiça</div>
-    <h2>Como seria o atendimento se ele seguisse o curso natural da necessidade do cliente, e não o que a ferramenta permite?</h2>
-    <p>O cliente pediria uma coisa e a conversa continuaria até resolver — mudando de canal quando fosse
-    conveniente para ele, parando quando dependesse de terceiros e retomando sozinha quando a resposta chegasse.
-    A competência necessária entraria na conversa, em vez de o cliente ser mandado atrás dela. Nada disso é
-    exótico: é o que qualquer pessoa descreveria se perguntássemos como o atendimento <em>deveria</em> funcionar.</p>
-    <p><strong>É esse desenho que a plataforma persegue — e as decisões de arquitetura das próximas páginas
-    existem para permiti-lo.</strong></p>
-  </div>
-
   <div class="kicker">O que é</div>
   <h2>Plataforma única de atendimento e processos, feita para agentes — humanos e de IA</h2>
   <p style="max-width:172mm">
@@ -319,6 +368,9 @@
     capacidade é construída duas vezes — copilot para a pessoa de um lado, fluxo de bot do outro, dois artefatos,
     dois times, dois roadmaps. Aqui é construída uma vez e rende nos dois: automação e produtividade deixam de ser
     projetos separados.</p>
+    <p style="margin-top:2.2mm">Com ocupante único por contato, a IA só pode ser etapa antes ou painel ao lado —
+    nunca participante da mesma sala. É por isso que acoplar IA a uma plataforma herdada não produz a mesma
+    coisa.</p>
   </div>
 
   <div class="grid3" style="margin-top:4mm">
@@ -334,11 +386,31 @@
       do cliente no mesmo eixo, e <strong>uma pessoa ao lado de um agente de IA</strong>.</p></div>
   </div>
 
-  <p style="margin-top:4mm;font-size:8.5pt;color:var(--muted)">
-    O estágio do produto, os limites conhecidos e o que é roadmap declarado estão reunidos na última página, sem
-    espalhamento pelo documento.
+  <div class="kicker" style="margin-top:6mm">Dois públicos, um pool</div>
+  <h2>Quem chega pode ser uma pessoa — ou o agente de automação dela</h2>
+  <p style="max-width:172mm">
+    A mesma operação que atende o cliente pelos canais atende também o <strong>agente de automação</strong> que
+    age em nome dele ou de um parceiro: o assistente corporativo, o orquestrador do ERP, o assistente pessoal do
+    consumidor. Ele não entra pelo webchat fingindo ser gente, nem por uma API sob medida que pula a fila: entra
+    por um <strong>canal dedicado</strong>, de protocolo aberto, e encontra o mesmo pool — com fila, capacidade,
+    SLA, avaliação e auditoria.
   </p>
-  <div class="foot"><span>O que é</span><span>4</span></div>
+  <div class="grid3" style="margin-top:3mm">
+    <div class="card"><h4>Pessoas, pelos canais</h4>
+      <p>Webchat, WhatsApp, SMS, e-mail, voz, WebRTC, redes sociais. O cliente fala com uma IA, uma pessoa ou as
+      duas na mesma sala. <span class="seal" style="margin-left:0">em operação</span></p></div>
+    <div class="card teal"><h4>Agentes corporativos, por A2A</h4>
+      <p>O pool aparece como um agente com cartão próprio. Atrás da tarefa pode haver uma IA, uma pessoa ou uma
+      conferência — o chamador vê um agente e um contrato. <span class="seal pale" style="margin-left:0">canal criado · execução em roadmap</span></p></div>
+    <div class="card dark"><h4>Assistentes pessoais, por MCP</h4>
+      <p>Assistentes de consumo alcançam terceiros por MCP, não por A2A. O mesmo pool ganha uma segunda face, com a
+      mesma identidade, prova e mandato. <span class="seal pale" style="margin-left:0">direção</span></p></div>
+  </div>
+  <p style="margin-top:3mm;font-size:8.5pt;color:var(--muted)">
+    O desenho dessa fronteira está nas páginas 15 a 18. O estágio do produto, os limites conhecidos e o que é
+    roadmap declarado estão reunidos na última página, sem espalhamento pelo documento.
+  </p>
+  <div class="foot"><span>O que é</span><span>5</span></div>
 </section>
 
 <!-- ================= 5 · COMO É ================= -->
@@ -401,16 +473,16 @@
       <p><span class="mono">primary</span> · <span class="mono">specialist</span> · <span class="mono">supervisor</span> ·
       <span class="mono">evaluator</span> · <span class="mono">reviewer</span>. O papel é fato do par (participante,
       sessão) — a mesma instância é primária numa sessão e especialista em outra, ao mesmo tempo.</p></div>
-    <div class="card"><h4>Propósito do agente</h4>
-      <p><span class="mono">executor</span> · <span class="mono">orchestrator</span> · <span class="mono">evaluator</span>.
-      É fato do artefato, declarado no registro e lido na autenticação — nunca informado pelo próprio agente. É
-      entrada de autorização, não de configuração.</p></div>
+    <div class="card"><h4>O endereço é o pool</h4>
+      <p>Canal, gatilho de processo, agenda e — no canal de agentes — o cartão publicado apontam para um
+      <strong>pool</strong>, nunca para um fluxo. Qual fluxo e qual versão rodam é detalhe interno do deploy daquele
+      pool, e muda sem que quem chama perceba.</p></div>
     <div class="card"><h4>Visibilidade por mensagem</h4>
       <p>Todos (inclui o cliente), só agentes (nota interna) ou lista explícita de participantes — supervisor
       falando com um agente específico, sem que os demais vejam.</p></div>
   </div>
 
-  <div class="foot"><span>Como é</span><span>5</span></div>
+  <div class="foot"><span>Como é</span><span>6</span></div>
 </section>
 
 <!-- ================= 6 · O DIAL DO ANTEPARO ================= -->
@@ -473,7 +545,7 @@
     Por isso ele anda por etapa — um trecho de cada vez, no ritmo que a evidência permitir — em vez de andar por
     projeto.
   </p>
-  <div class="foot"><span>O dial do anteparo</span><span>6</span></div>
+  <div class="foot"><span>O dial do anteparo</span><span>7</span></div>
 </section>
 
 <!-- ================= 6 · CASO PONTA A PONTA ================= -->
@@ -553,7 +625,7 @@
     alcançar alguém abrindo um canal ao vivo <strong>precisa</strong> de discador para fazer o mesmo trabalho, e
     paga por isso em custo, em taxa de abandono e em paciência do cliente.</p>
   </div>
-  <div class="foot"><span>Um caso inteiro</span><span>7</span></div>
+  <div class="foot"><span>Um caso inteiro</span><span>8</span></div>
 </section>
 
 <!-- ================= 7 · ARQUITETURA — CAMADAS ================= -->
@@ -684,7 +756,7 @@
       vence o ambiente. Há verificação automatizada que falha o build em violação nova.</p>
     </div>
   </div>
-  <div class="foot"><span>Arquitetura · mapa</span><span>8</span></div>
+  <div class="foot"><span>Arquitetura · mapa</span><span>9</span></div>
 </section>
 
 <!-- ================= 8 · CAMADAS 1 e 2 ================= -->
@@ -701,8 +773,8 @@
     <tr><th style="width:32%">Família de tópico</th><th>Conteúdo</th></tr>
     <tr><td class="k">Conversa</td><td>Entrada normalizada, roteada, enfileirada, abandonada, mensagem enviada, participantes, sessão aberta e fechada</td></tr>
     <tr><td class="k">Ciclo de vida do agente</td><td>Login, pronto, ocupado, pausa com motivo, conclusão com desfecho e status de tratativa</td></tr>
-    <tr><td class="k">Fluxo e processo</td><td>Eventos de workflow, coleta assíncrona, união de jornadas, sinais de cliente</td></tr>
-    <tr><td class="k">Governança</td><td>Auditoria de cada chamada de ferramenta, alteração de registro, alteração de configuração</td></tr>
+    <tr><td class="k">Fluxo e processo</td><td>Despertar de passo que aguarda resposta, união de jornadas, sinais de cliente, escalação por regra no meio da conversa</td></tr>
+    <tr><td class="k">Governança</td><td>Auditoria de cada chamada de ferramenta, trilha de acesso a dado pessoal, alteração de registro, alteração de configuração</td></tr>
     <tr><td class="k">Qualidade e consumo</td><td>Avaliação solicitada, concluída e finalizada; calibração; medição de uso por dimensão</td></tr>
     <tr><td class="k">Operação</td><td>Sinal de vida de gateway, posição de fila, ocupação de pool, eventos de negócio publicados pelo agente</td></tr>
   </table>
@@ -749,19 +821,20 @@
     <span class="chip mono">receive</span><span class="chip mono">loop</span><span class="chip mono">begin/end_transaction</span>
   </div>
   <p style="margin-top:2.5mm">
-    Dois perfis de execução com conjuntos de passos <strong>mutuamente exclusivos</strong>, validados na análise do
-    fluxo e no motor: o perfil de <em>workflow</em> pode suspender e coletar, mas não pode falar diretamente com o
-    cliente; o perfil de <em>agente</em> pode falar, mas não pode suspender. Um fluxo não consegue, por construção,
-    virar as duas coisas — que é como nascem os processos impossíveis de auditar.
+    Dois perfis de execução com conjuntos de passos <strong>mutuamente exclusivos</strong>, recusados no
+    <em>deploy</em> — porque o perfil é fato do pool onde o fluxo vai rodar, não do fluxo: o perfil de
+    <em>workflow</em> pode suspender e coletar, mas não fala diretamente com o cliente; o perfil de
+    <em>agente</em> fala, mas não suspende — e alcança o processo longo delegando a um pool de workflow. Um deploy
+    não consegue, por construção, virar as duas coisas — que é como nascem os processos impossíveis de auditar. O
+    canal de agentes de automação roda no perfil de agente.
   </p>
-  <div class="foot"><span>Arquitetura · bus e fluxos</span><span>9</span></div>
+  <div class="foot"><span>Arquitetura · bus e fluxos</span><span>10</span></div>
 </section>
 
 <!-- ================= 9 · CAMADA 3 — CANAIS ================= -->
 <section class="page">
   <div class="kicker">Camada 3</div>
-  <h2>Abstração de canais — receptivo e ativo <span class="seal">em operação (texto)</span>
-    <span class="seal" style="border-color:#DC2626;color:#DC2626">áudio em reconstrução</span></h2>
+  <h2>Abstração de canais — receptivo e ativo, para pessoas e para agentes</h2>
   <p style="max-width:172mm">
     Adaptadores concentram todo o conhecimento específico de canal: normalização de entrada, renderização de saída
     e degradação de interação. Nenhuma lógica de canal existe no motor de fluxo. Um menu com botões vira lista
@@ -769,26 +842,27 @@
   </p>
   <div class="chips" style="margin-bottom:3mm">
     <span class="chip">webchat</span><span class="chip">WhatsApp</span><span class="chip">SMS</span>
-    <span class="chip">e-mail</span>
-    <span class="chip" style="background:#FEF2F2;color:#DC2626;border:1px solid #DC2626">voz (PSTN) — em reconstrução</span>
-    <span class="chip" style="background:#FEF2F2;color:#DC2626;border:1px solid #DC2626">WebRTC / SFU — em reconstrução</span>
+    <span class="chip">e-mail</span><span class="chip">voz (tronco SIP)</span><span class="chip">WebRTC (SFU)</span>
     <span class="chip">Instagram</span><span class="chip">Telegram</span><span class="chip">webhook</span>
+    <span class="chip" style="background:#fff;border:1px dashed var(--teal);color:var(--teal)">a2a — agentes de automação</span>
   </div>
-  <div style="border-left:3px solid #DC2626;background:#FEF2F2;padding:3mm 4mm;margin-bottom:3mm;font-size:8.6pt">
-    <strong style="color:#DC2626">⚠️ Medido em 2026-08-19 —</strong> os dois canais de <strong>áudio</strong> não
-    estão entregues. O adaptador de voz levanta erro no caminho de entrada (cinco métodos inexistentes, mockados no
-    teste) e nada chega ao barramento de contatos; o WebRTC tem sinalização, mas <strong>nenhum SFU provisionado</strong>
-    em ambiente algum — sem LiveKit em compose, sem SDK no pacote, com token e sala devolvidos por um modo de
-    desenvolvimento. A abstração de canal descrita abaixo é real e vale para os canais de texto; o áudio está em
-    reconstrução sob <code>docs/adr/adr-voice-media-plane.md</code>.
+  <div style="border-left:3px solid var(--teal);background:var(--offwhite);padding:3mm 4mm;margin-bottom:3mm;font-size:8.6pt;color:var(--graphite2)">
+    <strong style="color:var(--teal)">Áudio, no estado de hoje.</strong> O plano de mídia foi reconstruído sobre um SFU
+    auto-hospedado: chamada pelo navegador e chamada telefônica <strong>entrante</strong> pelo tronco SIP entram na
+    mesma sala, com transcrição e voz de IA dentro dela, gravação ligada por política do pool e coleta de dado
+    protegido por teclado com pausa de mídia. Validado com pessoas, em ambiente controlado; chamada
+    <strong>sainte</strong> ainda não existe.
+    <br><strong style="color:var(--teal)">Agentes de automação.</strong> O canal <span class="mono">a2a</span> existe no
+    registro e o pool só o expõe com contrato; o adaptador é roadmap (páginas 15 a 18).
   </div>
   <div class="grid2">
     <div class="card">
       <h4>Canal × meio</h4>
-      <p><em>Canal</em> é filtro duro de roteamento — casamento obrigatório. <em>Meio</em> (voz, vídeo, mensagem,
-      e-mail) é fator de score, ajuste fino. Em WebRTC o meio é negociado em tempo real, de vídeo para voz e para
-      texto, sem trocar de sessão — <strong style="color:#DC2626">desenho, não capacidade entregue</strong>: sem SFU
-      provisionado, a negociação de meio com áudio e vídeo não roda em ambiente algum (medido 2026-08-19).</p>
+      <p><em>Canal</em> é filtro duro de roteamento — casamento obrigatório, e por isso também é o
+      <strong>opt-in</strong>: pool que não declara o canal de agentes não atende agente de fora. <em>Meio</em> (voz,
+      vídeo, mensagem, e-mail) é fator de score, ajuste fino. Numa chamada, a mídia é fato de cada participante: o
+      teto do cliente é a política do pool cruzada com o que os atendentes consomem, e câmera desligada é escolha,
+      não degradação. Chamada é meio de um contato de chat: cair a chamada não encerra o contato.</p>
     </div>
     <div class="card">
       <h4>Ativo pelo mesmo motor</h4>
@@ -818,9 +892,8 @@
     <p style="margin-top:2.2mm"><strong>O limite, dito com clareza:</strong> a inversão não cobre tudo. Cobrança
     de valor relevante, prospecção fria e urgência regulatória continuam exigindo voz ativa em volume, e aí
     <strong>não temos discador preditivo</strong> — pacing power, progressivo e preview, guarda de taxa de abandono
-    e listas restritivas são roadmap. <strong>Correção de 2026-08-19:</strong> o discador não está apenas ausente,
-    está <strong>bloqueado</strong> — depende de um plano de mídia que hoje não existe (canal de voz quebrado no
-    caminho de entrada, WebRTC sem SFU provisionado). Um modelo que começa por mensagem também pressupõe letramento
+    e listas restritivas são roadmap, e antes deles vem a chamada sainte, que o plano de mídia ainda não
+    faz. Um modelo que começa por mensagem também pressupõe letramento
     digital, que nem toda base tem. Onde a inversão não serve, os incumbentes entregam hoje e nós não.</p>
   </div>
 
@@ -834,7 +907,7 @@
     das campanhas comerciais: convite para avaliar conta como abordagem, e o cliente já saturado não recebe mais
     um. É a diferença entre medir satisfação e corroer o dado que se pretende coletar.</p>
   </div>
-  <div class="foot"><span>Arquitetura · canais</span><span>10</span></div>
+  <div class="foot"><span>Arquitetura · canais</span><span>11</span></div>
 </section>
 
 <!-- ================= 10 · CAMADA 4 — IDENTIFICAÇÃO ================= -->
@@ -862,6 +935,14 @@
       diretamente. Libera retomada cross-canal e exibição de contexto — ainda mascarado.</td>
     </tr>
     <tr>
+      <td class="k">Comprovada — por login federado</td><td>IdP do tenant ou login social <span class="seal road" style="margin-left:0">roadmap</span></td>
+      <td>O login do portal ou app do próprio tenant liga a pessoa ao cadastro e é a âncora mais forte do desenho. O
+      login social (Google, Apple, Microsoft; Facebook por último) prova <strong>posse de um e-mail</strong>, não de
+      telefone, e só vale como o OTP quando o e-mail vem verificado <em>e</em> já é âncora cadastrada do cliente —
+      não é identidade civil e não cria cadastro. A plataforma valida e descarta os tokens: não age na conta da
+      pessoa.</td>
+    </tr>
+    <tr>
       <td class="k">Inerente — o que ele é</td><td>biometria <span class="seal road" style="margin-left:0">roadmap</span></td>
       <td>Biometria de voz ou comportamental entra como <strong>terceira classe</strong>, com confiança e validade
       próprias. A plataforma <em>consome o veredito</em> de um provedor especializado e o registra com proveniência
@@ -870,6 +951,11 @@
     </tr>
     <tr><td class="k">Pendências por cliente</td><td>—</td><td>O que aquele cliente tem em aberto, consultável de qualquer canal — retomar no webchat o que começou na voz. Gated pela classe de evidência.</td></tr>
     <tr><td class="k">Política de retomada</td><td>—</td><td>Declarada no passo do fluxo: oferecer ao cliente ou retomar automaticamente. A prévia do contexto é exibida mascarada.</td></tr>
+    <tr><td class="k">Quando quem fala é um agente</td><td>link fora de banda <span class="seal road" style="margin-left:0">roadmap</span></td>
+      <td>Identidade dita por um agente de automação pesa o mesmo que a do cliente digitando: é
+      <strong>alegada</strong>, nunca mais. Se o fluxo exige prova, a tarefa pede autenticação e devolve um link; a
+      <em>pessoa</em> prova no navegador (código ou login federado) e o agente só vê o resultado — nunca o código.
+      É o mesmo mecanismo de evidência, com outro transporte (página 17).</td></tr>
   </table>
 
   <div class="grid2" style="margin-top:3.5mm">
@@ -888,7 +974,7 @@
       roadmap.</p>
     </div>
   </div>
-  <div class="foot"><span>Arquitetura · identidade</span><span>11</span></div>
+  <div class="foot"><span>Arquitetura · identidade</span><span>12</span></div>
 </section>
 
 <!-- ================= 11 · CAMADAS 5 e 6 ================= -->
@@ -940,19 +1026,22 @@
   <p style="max-width:172mm">
     O contrato de ciclo de vida é o mesmo para humano e IA: autenticar → pronto → ocupado → concluir, com desfecho
     e status de tratativa <strong>obrigatórios</strong> na conclusão. Nenhum agente acessa sistema de negócio
-    diretamente: toda chamada passa por servidores de ferramenta autorizados.
+    diretamente: a integração passa por servidores de ferramenta no protocolo aberto MCP — que é também o único
+    protocolo de integração <em>entre</em> os componentes da plataforma.
   </p>
   <table>
-    <tr><th style="width:30%">Tipo de agente</th><th>Mecanismo de interceptação</th><th style="width:22%">Salto de rede</th></tr>
-    <tr><td class="k">Nativo (SDK da plataforma)</td><td>Interceptador dentro do próprio processo</td><td>nenhum</td></tr>
-    <tr><td class="k">Externo (framework de terceiro)</td><td>Sidecar de proxy local</td><td>apenas loopback</td></tr>
+    <tr><th style="width:30%">Caminho da chamada de ferramenta</th><th>Onde é interceptada</th><th style="width:20%">Estado</th></tr>
+    <tr><td class="k">Ferramenta de domínio chamada por um agente</td><td>No servidor MCP da plataforma, do lado do servidor: o agente não escolhe passar pelo portão</td><td><span class="seal" style="margin-left:0">em vigor</span></td></tr>
+    <tr><td class="k">Fluxo nativo chamando servidor de ferramenta</td><td>Ainda direto, sem o portão. A proposta é uma borda única no servidor MCP, com a exigência de que o servidor de domínio não seja alcançável por fora dela</td><td><span class="seal road" style="margin-left:0">em ADR</span></td></tr>
+    <tr><td class="k">Agente de terceiro rodando aqui dentro</td><td>Fora de escopo por decisão de produto (página 18)</td><td>—</td></tr>
   </table>
   <p style="margin-top:2.5mm">
-    Em cada chamada, abaixo de um milissegundo: <strong>validação de permissão</strong> — a lista de ferramentas
-    enviada ao modelo já vem filtrada pelo perfil —, <strong>guarda de injeção</strong> por heurística e
-    <strong>registro de auditoria</strong>. A política de auditoria é declarada <em>na ferramenta</em>, não na
-    chamada: o chamador não pode optar por sair. É o que sustenta a alegação de governança para agentes que não
-    escrevemos — e é a resposta à segunda metade da pergunta “essas informações estão seguras?”.
+    No portão, abaixo de um milissegundo: <strong>permissão</strong> — a lista de ferramentas declarada no fluxo
+    viaja <em>assinada</em> no token de sessão, nunca como argumento da chamada, que seria o chamador declarando a
+    própria autorização —, <strong>guarda de injeção</strong> por heurística e <strong>registro de
+    auditoria</strong> nos três desfechos: permitida, negada e bloqueada. A política de auditoria é declarada
+    <em>na ferramenta</em>, não na chamada: o chamador não pode optar por sair. É a resposta à pergunta sobre como
+    cada agente acessou o dado sensível, e com que autorização.
   </p>
   <div class="card cherry" style="margin-top:3mm">
     <h4>Inferência agnóstica de modelo</h4>
@@ -961,63 +1050,7 @@
     equilibrado, potente, avaliação) são configuração por tenant, e a carga de avaliação roda isolada da de
     atendimento. Sem lock-in de fornecedor de modelo.</p>
   </div>
-  <div class="foot"><span>Arquitetura · roteamento e agentes</span><span>12</span></div>
-</section>
-
-<!-- ================= 12 · FRONTEIRA ABERTA ================= -->
-<section class="page">
-  <div class="kicker">Fronteira</div>
-  <h2>Agentes externos, portabilidade e convivência com o que já existe</h2>
-  <p style="max-width:172mm">
-    Uma plataforma que se propõe a orquestrar agentes não pode presumir que todos os agentes sejam dela. A
-    fronteira é aberta nas duas direções: <strong>incorporar</strong> agentes construídos fora e
-    <strong>derivar</strong> atendimento, dado e lógica para fora — inclusive para a plataforma que o cliente já
-    tem.
-  </p>
-
-  <div class="grid2" style="margin-top:3mm">
-    <div class="card dark">
-      <h4>Incorporar agentes de terceiros</h4>
-      <p>Um agente escrito em outro framework participa como <strong>participante de primeira classe</strong> da
-      mesma sessão: entra pelo mesmo roteador, ocupa vaga do mesmo pool, produz segmento e é avaliado pelo mesmo
-      formulário. O que ele não escolhe é a governança — as ferramentas chegam por sidecar de proxy local, e cada
-      chamada passa pela mesma validação de permissão, guarda de injeção e auditoria não-optável de um agente
-      nativo. <em>Adotar um agente externo não abre buraco de conformidade.</em></p>
-    </div>
-    <div class="card">
-      <h4>Derivar para sistemas externos</h4>
-      <p>Na direção oposta, o webhook é canal de primeira classe: um processo da plataforma aciona sistemas do
-      cliente e <em>é acionado</em> por eles com o mesmo modelo de sessão, suspendendo e retomando por token. A
-      integração com o negócio é sempre mediada por servidores de ferramenta — o que significa que a mesma
-      capacidade fica disponível para o agente de IA, para o fluxo e para o Console, com uma única trilha de
-      auditoria.</p>
-    </div>
-    <div class="card teal">
-      <h4>Conviver com a plataforma instalada</h4>
-      <p>O histórico de atendimento de outro contact center entra no pipeline de qualidade por um leitor plugável:
-      um fluxo de eventos canônicos, com mascaramento aplicado na entrada, que reidrata sessão, segmento e
-      transcrição como se tivessem nascido aqui. Serve para avaliar a operação atual antes de migrar qualquer
-      tráfego. O caminho inverso também existe: o histórico interno pode ser reexportado e reavaliado com um
-      formulário novo, sem contaminar a medição de produção — todo dado carrega a procedência.</p>
-    </div>
-    <div class="card">
-      <h4>Não aprisionar</h4>
-      <p>A lógica de atendimento é declarativa e portável, não código proprietário: extraível, versionada e
-      verificável por linha de comando quanto a contrato de execução e a isolamento de dependências. Os modelos são
-      trocáveis por configuração, as operadoras e provedores de canal são adaptadores, e o dado é exportável.
-      <strong>O custo de sair é uma decisão de projeto, não uma consequência.</strong></p>
-    </div>
-  </div>
-
-  <div class="band" style="margin-top:4mm">
-    <div class="kicker pale" style="margin-bottom:2mm">Por que isto importa mais em 2026 do que importava em 2023</div>
-    <p>O protocolo aberto de ferramentas deixou de ser diferencial — virou infraestrutura, com milhares de
-    servidores disponíveis. O que <strong>não</strong> virou commodity é a governança por chamada: permissão,
-    guarda de injeção e auditoria obrigatória, válidas igualmente para o agente que você escreveu, o que comprou e
-    o que baixou. É exatamente aí que os projetos de IA agêntica travam na passagem para produção — identidade,
-    auditabilidade e lock-in —, e é o ponto em que a regulação europeia passa a cobrar evidência.</p>
-  </div>
-  <div class="foot"><span>Arquitetura · fronteira aberta</span><span>13</span></div>
+  <div class="foot"><span>Arquitetura · roteamento e agentes</span><span>13</span></div>
 </section>
 
 <!-- ================= 13 · CAMADA 7 ================= -->
@@ -1027,7 +1060,7 @@
   <p style="max-width:172mm">
     Três grãos, com identidade e métrica próprias. É o que permite responder “quanto custou resolver a
     portabilidade do início ao fim” e “quanto tempo <em>este</em> participante levou” com o mesmo dado — e é o
-    registro que sobra do caso da página 7.
+    registro que sobra do caso da página 8.
   </p>
 
   <svg viewBox="0 0 760 214" xmlns="http://www.w3.org/2000/svg" style="margin:4mm 0">
@@ -1089,13 +1122,327 @@
   <div class="foot"><span>Arquitetura · grãos de contato</span><span>14</span></div>
 </section>
 
+<!-- ================= 15 · FRONTEIRA — DOIS PÚBLICOS, UM POOL ================= -->
+<section class="page">
+  <div class="kicker">Fronteira · agentes de automação</div>
+  <h2>O pool atende quem chega por um canal — e o agente que chega em nome de alguém</h2>
+  <p style="max-width:172mm">
+    A resposta comum do mercado é <strong>hospedar</strong> o agente do outro: trazer código de terceiro para dentro
+    e prometer, sobre ele, as mesmas garantias. Fazemos o inverso. O agente de automação do seu cliente ou do seu
+    parceiro continua onde está, e o que atravessa a fronteira é <strong>contrato</strong>, em protocolo aberto. Do
+    lado de cá, ele encontra o mesmo pool que atende as pessoas.
+  </p>
+
+  <svg viewBox="0 0 760 318" xmlns="http://www.w3.org/2000/svg" style="margin-top:4mm">
+    <defs>
+      <marker id="f1" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+        <path d="M0,0 L8,3.2 L0,6.4 z" fill="#6B7280"/>
+      </marker>
+    </defs>
+    <text x="6" y="14" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#6B7280" letter-spacing="1.2">QUEM CHAMA</text>
+    <text x="300" y="14" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#990011" letter-spacing="1.2">O ENDEREÇO</text>
+    <text x="540" y="14" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#6B7280" letter-spacing="1.2">ATRÁS DO ENDPOINT</text>
+
+    <!-- chamadores -->
+    <rect x="6" y="26" width="200" height="74" rx="7" fill="#2E3138"/>
+    <text x="18" y="48" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">o cliente</text>
+    <text x="18" y="65" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">webchat · WhatsApp · voz · e-mail</text>
+    <text x="18" y="88" font-family="Calibri,Arial" font-size="9" font-weight="700" fill="#8FB8B8">EM OPERAÇÃO</text>
+
+    <rect x="6" y="118" width="200" height="82" rx="7" fill="#046A6A"/>
+    <text x="18" y="140" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">agente corporativo</text>
+    <text x="18" y="156" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">do tenant ou do parceiro: ERP,</text>
+    <text x="18" y="169" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">Copilot Studio, Gemini Enterprise…</text>
+    <text x="18" y="190" font-family="Calibri,Arial" font-size="9" font-weight="700" fill="#BFE0E0">CANAL CRIADO · EXECUÇÃO ROADMAP</text>
+
+    <rect x="6" y="218" width="200" height="82" rx="7" fill="#fff" stroke="#3E434D" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text x="18" y="240" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#2E3138">assistente pessoal</text>
+    <text x="18" y="256" font-family="Calibri,Arial" font-size="9.5" fill="#3E434D">do consumidor, com token que a</text>
+    <text x="18" y="269" font-family="Calibri,Arial" font-size="9.5" fill="#3E434D">própria pessoa gera após provar</text>
+    <text x="18" y="290" font-family="Calibri,Arial" font-size="9" font-weight="700" fill="#6B7280">DIREÇÃO · ADR PRÓPRIO</text>
+
+    <!-- setas com protocolo -->
+    <line x1="208" y1="63" x2="292" y2="110" stroke="#6B7280" stroke-width="1.6" marker-end="url(#f1)"/>
+    <text x="236" y="76" font-family="Calibri,Arial" font-size="9.5" font-style="italic" fill="#6B7280">canais</text>
+    <line x1="208" y1="159" x2="292" y2="159" stroke="#046A6A" stroke-width="2.4" marker-end="url(#f1)"/>
+    <text x="250" y="152" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#046A6A">A2A</text>
+    <line x1="208" y1="259" x2="292" y2="210" stroke="#6B7280" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#f1)"/>
+    <text x="252" y="252" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#3E434D">MCP</text>
+
+    <!-- pool -->
+    <rect x="296" y="26" width="208" height="274" rx="9" fill="#990011"/>
+    <text x="400" y="56" text-anchor="middle" font-family="Cambria,Georgia" font-size="20" font-weight="700" fill="#fff">POOL</text>
+    <text x="400" y="74" text-anchor="middle" font-family="Calibri,Arial" font-size="10" fill="#FBE4E7">a unidade endereçável</text>
+    <line x1="316" y1="86" x2="484" y2="86" stroke="#C4566A"/>
+    <text x="314" y="108" font-family="Calibri,Arial" font-size="10.5" fill="#fff">· cartão do agente = projeção</text>
+    <text x="324" y="122" font-family="Calibri,Arial" font-size="10.5" fill="#FBE4E7">do registro, nunca escrito à mão</text>
+    <text x="314" y="144" font-family="Calibri,Arial" font-size="10.5" fill="#fff">· versão = o deploy promovido</text>
+    <text x="314" y="166" font-family="Calibri,Arial" font-size="10.5" fill="#fff">· fila · capacidade · SLA</text>
+    <text x="314" y="188" font-family="Calibri,Arial" font-size="10.5" fill="#fff">· identidade e prova do titular</text>
+    <text x="314" y="210" font-family="Calibri,Arial" font-size="10.5" fill="#fff">· mascaramento por padrão</text>
+    <text x="314" y="232" font-family="Calibri,Arial" font-size="10.5" fill="#fff">· auditoria · avaliação</text>
+    <text x="400" y="272" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-style="italic" fill="#FBE4E7">o mesmo para os três</text>
+    <text x="400" y="286" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-style="italic" fill="#FBE4E7">chamadores</text>
+
+    <line x1="506" y1="163" x2="532" y2="163" stroke="#6B7280" stroke-width="1.6" marker-end="url(#f1)"/>
+
+    <!-- atrás do endpoint -->
+    <rect x="536" y="26" width="218" height="74" rx="7" fill="#046A6A"/>
+    <text x="548" y="50" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">uma IA</text>
+    <text x="548" y="67" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">fluxo de agente, na versão que</text>
+    <text x="548" y="80" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">o pool tem promovida</text>
+
+    <rect x="536" y="118" width="218" height="82" rx="7" fill="#3E434D"/>
+    <text x="548" y="142" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">uma pessoa</text>
+    <text x="548" y="159" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">na fila de gente, pelo Console,</text>
+    <text x="548" y="172" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">com capacidade e SLA do pool</text>
+    <text x="548" y="190" font-family="Calibri,Arial" font-size="9" font-weight="700" fill="#8FB8B8">ROADMAP · DEPOIS DO ADAPTADOR</text>
+
+    <rect x="536" y="218" width="218" height="82" rx="7" fill="#2E3138"/>
+    <text x="548" y="242" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">uma conferência</text>
+    <text x="548" y="259" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">a IA conduz e convoca a pessoa</text>
+    <text x="548" y="272" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">para o trecho que não deve decidir</text>
+    <text x="548" y="289" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">— o chamador nem percebe</text>
+  </svg>
+
+  <div class="grid3" style="margin-top:4mm">
+    <div class="card">
+      <h4>Por que é um canal, e não uma API</h4>
+      <p>Canal é filtro duro de roteamento, então declarar o canal <span class="mono">a2a</span> é o
+      <strong>opt-in</strong>: pool que não o declara não atende agente de fora. A métrica não se mistura — o
+      contato de agente aparece com o próprio canal em toda bancada — e traduzir um menu para o que o chamador
+      consegue exibir é lógica de canal, que mora no adaptador. Processo longo continua num pool de workflow,
+      alcançado por delegação interna: o endereço público é um só.</p>
+    </div>
+    <div class="card">
+      <h4>O cartão é projeção do registro</h4>
+      <p>O cartão do agente é montado na hora a partir do pool, do deploy promovido e do <strong>descritor</strong>
+      declarado no pool — o que ele faz, o esquema de entrada e de saída, as competências. A versão do cartão é o
+      momento do <em>promote</em>, a mesma carimbada em cada segmento. O cartão público lista só os pools marcados
+      como descobríveis; o estendido, só os que <em>aquele</em> chamador alcança. Os modos de mídia são derivados:
+      pool de IA não promete imagem que ninguém consome.</p>
+    </div>
+    <div class="card teal">
+      <h4>Atrás do endpoint pode haver um time</h4>
+      <p>A tarefa entra no pool e percorre fila, capacidade, SLA, auditoria e amostragem de qualidade como qualquer
+      contato. Quando a IA não deve decidir sozinha, ela convoca uma pessoa para dentro da mesma sessão. Sem
+      recurso, vale a política do pool: recusar com aviso de quando tentar de novo, ou aceitar e esperar até o teto
+      que o descritor publica.</p>
+    </div>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">O protocolo virou catálogo — o fosso é o que está atrás dele</div>
+    <p>O A2A chegou à versão 1.0, entrou numa fundação aberta em agosto de 2026 e já aparece em gateways de API e em
+    plataformas concorrentes. Ter A2A não diferencia ninguém. O que diferencia é o que o endpoint alcança: fila de
+    pessoas, capacidade, SLA, qualidade medida e auditoria que o chamador não desliga.
+    <strong>Atrás do endpoint deles há um agente; atrás deste pode haver um time — e o contrato não muda.</strong></p>
+  </div>
+  <div class="foot"><span>Fronteira · dois públicos, um pool</span><span>15</span></div>
+</section>
+
+<!-- ================= 16 · FRONTEIRA — O CONTRATO ================= -->
+<section class="page">
+  <div class="kicker">Fronteira · o contrato</div>
+  <h2>O modelo de tarefa do A2A já existe aqui, com outro nome</h2>
+  <p style="max-width:172mm">
+    Por isso o canal de agentes é <strong>representação externa de superfície que já existe</strong>, e não um motor
+    novo. Roteador, motor de fluxo, admissão, capacidade e o modelo de sessão não mudam de comportamento, e não se
+    cria entidade nem ciclo de vida de “tarefa” à parte.
+  </p>
+
+  <table>
+    <tr><th style="width:27%">A2A</th><th style="width:33%">PlugHub</th><th>Consequência</th></tr>
+    <tr><td class="k">Cartão do agente</td><td>pool + deploy promovido + descritor</td><td>Editar o cartão é editar o pool; o contrato versiona junto com o deploy.</td></tr>
+    <tr><td class="k">Tarefa</td><td>sessão</td><td>Auditoria, cota, qualidade e cobrança já são da sessão.</td></tr>
+    <tr><td class="k">Contexto</td><td>jornada (raiz das sessões)</td><td>Continuar o assunto dias depois é sessão nova na mesma jornada (30 dias, publicado).</td></tr>
+    <tr><td class="k">Mensagem</td><td>entrada no stream canônico</td><td>O que o agente recebe é o que o cliente receberia: conteúdo mascarado.</td></tr>
+    <tr><td class="k">Pede dado ao chamador</td><td>passo de menu aguardando resposta</td><td>O menu vira pedido estruturado, interface declarativa ou texto numerado — conforme o que o chamador aceita.</td></tr>
+    <tr><td class="k">Pede autenticação</td><td>fluxo exige evidência que a sessão não tem</td><td>Link fora de banda; a pessoa prova, o agente vê o resultado (página 17).</td></tr>
+    <tr><td class="k">Concluída / falhou</td><td>sessão encerrada com desfecho / motivo</td><td>Domínio fechado de motivos; cancelamento pelo chamador ganha motivo próprio e não infla o abandono.</td></tr>
+    <tr><td class="k">Streaming</td><td>leitura do stream da sessão</td><td>Posição de fila pode ir como mensagem de status, sem extensão proprietária.</td></tr>
+  </table>
+
+  <div class="grid2" style="margin-top:4mm">
+    <div class="card cherry">
+      <h4>O que é novo de verdade é o artefato, não o protocolo</h4>
+      <p>O caminho programático de hoje nasceu para chamador interno, que lê o resultado por dentro: ele devolve só
+      o identificador, e a consulta de estado responde “encerrada” para uma sessão que nunca existiu. Num contrato
+      externo isso é valor plausível escondendo ausência. Antes do adaptador vêm duas coisas: o passo de conclusão
+      grava o <strong>resultado terminal validado contra o esquema de saída</strong> do descritor, e “não sei” passa
+      a ser diferente de “terminou”.</p>
+    </div>
+    <div class="card">
+      <h4>Espera e indisponibilidade, no vocabulário do protocolo</h4>
+      <ul>
+        <li>Enfileirada → <em>submitted</em>; atendendo → <em>working</em>.</li>
+        <li>Sem recurso e política de recusa → recusa na criação, com aviso de quando tentar.</li>
+        <li>Teto de espera excedido → <em>failed</em> (aceita e depois expirou), nunca <em>rejected</em>.</li>
+        <li>Cota do chamador esgotada → a tarefa nem nasce.</li>
+        <li>O teto de espera é do <strong>pool</strong>, publicado — não parâmetro de chamada.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="kicker" style="margin-top:5mm">A mesma portabilidade da página 8, pedida por um agente</div>
+  <table>
+    <tr><th style="width:18%">Passo</th><th>O que acontece</th></tr>
+    <tr><td class="when">Pedido</td><td>O assistente do cliente pede a portabilidade ao cartão do pool. A tarefa nasce como sessão; uma IA conduz.</td></tr>
+    <tr><td class="when">Prova</td><td>A tarefa pede autenticação e devolve um link; o cliente prova no navegador. O agente nunca recebe o código.</td></tr>
+    <tr><td class="when">Dado protegido</td><td>Documento e dado de conta não trafegam pelo agente: entrada mascarada é sempre por link fora de banda.</td></tr>
+    <tr><td class="when">Dia 3</td><td>A doadora responde e o processo retoma; o assistente recebe o artefato no esquema declarado. Se houve exceção, uma pessoa negociou dentro da sessão — para o assistente, a tarefa só ficou mais longa.</td></tr>
+  </table>
+  <div class="foot"><span>Fronteira · o contrato</span><span>16</span></div>
+</section>
+
+<!-- ================= 17 · FRONTEIRA — QUEM CHAMA, EM NOME DE QUEM ================= -->
+<section class="page">
+  <div class="kicker">Fronteira · identidade e governança</div>
+  <h2>Quem chama, em nome de quem — e com que mandato</h2>
+  <p style="max-width:172mm">
+    Toda chamada de agente carrega <strong>dois fatos que nunca dividem um campo</strong>. Confundi-los é como um
+    agente acaba herdando a conversa de outra pessoa, ou um parceiro acaba falando por um cliente que nunca o
+    autorizou.
+  </p>
+  <table>
+    <tr><th style="width:22%">Fato</th><th style="width:40%">Pergunta</th><th>Onde mora</th></tr>
+    <tr><td class="k">Principal chamador</td><td>Que software chama, com que cota, para quais pools?</td><td>Na credencial do agente — um único cadastro de principais de máquina, o mesmo dos agentes de dentro.</td></tr>
+    <tr><td class="k">Titular</td><td>Em nome de qual cliente, com que prova?</td><td>Na sessão, pelo mesmo mecanismo de evidência dos canais (página 12).</td></tr>
+  </table>
+
+  <div class="grid2" style="margin-top:4mm">
+    <div class="card teal">
+      <h4>Principal de parceiro</h4>
+      <p>Emitido pelo administrador do tenant para o ERP, o orquestrador ou o parceiro, com a lista de pools que pode
+      alcançar. Não tem titular fixo: um cliente declarado por ele é sempre <strong>alegado</strong>, e o fluxo que
+      exige prova a pede à pessoa. É o caso do assistente corporativo.</p>
+    </div>
+    <div class="card dark">
+      <h4>Principal do agente do cliente</h4>
+      <p>Emitido <strong>ao próprio cliente</strong>, por autosserviço, depois de uma prova: token pessoal,
+      revogável, de validade curta e cota baixa, preso ao cliente com o nível e a idade da prova — OTP ou login
+      federado (página 12). Ele o entrega ao assistente dele. O titular vem do token, e ninguém do tenant precisa
+      cadastrar nada.</p>
+    </div>
+  </div>
+
+  <div class="grid3" style="margin-top:4mm">
+    <div class="card">
+      <h4>Tenant só da credencial</h4>
+      <p>Nunca do corpo da chamada. Na rota programática interna de hoje o tenant ainda vem do corpo — aceitável
+      enquanto ela é interna, e uma porta entre tenants no instante em que ficasse pública. Por isso o principal
+      vem <strong>antes</strong> do adaptador, sem negociação.</p>
+    </div>
+    <div class="card">
+      <h4>Mascarado, sem opção</h4>
+      <p>O agente de fora não entra no rol de quem vê o conteúdo original, nem por configuração. Bloco de entrada
+      mascarada nunca atravessa: dado de cartão ou senha vai por link, e o agente só vê o resultado. Anexo que o
+      cliente enviou não volta por esse canal.</p>
+    </div>
+    <div class="card">
+      <h4>Mandato e confirmação</h4>
+      <p>O token do agente do cliente diz o que ele pode fazer — <em>consultar</em> sem <em>contratar</em> ou
+      <em>cancelar</em>. Ação de risco, declarada no fluxo, pede confirmação da pessoa pelo mesmo link. A
+      plataforma nunca presume que a pessoa autorizou o que o agente dela decidiu.</p>
+    </div>
+    <div class="card">
+      <h4>Cota por principal</h4>
+      <p>Um agente não abandona a fila por tédio: reenvia, de graça, em loop. A cota do chamador é obrigatória para
+      o agente de consumidor — muitos chamadores, um pool — e menor que a capacidade do pool, com recusa explícita
+      e aviso de quando tentar de novo.</p>
+    </div>
+    <div class="card">
+      <h4>Contexto só de quem o recebeu</h4>
+      <p>Um contexto enviado pelo chamador só é aceito se foi emitido por nós, para o mesmo principal e o mesmo
+      titular. Fora disso é recusado, nunca adotado: sem essa regra, um agente penduraria a tarefa dele na conversa
+      de outra pessoa.</p>
+    </div>
+    <div class="card">
+      <h4>Rastro de cada chamada</h4>
+      <p>O principal vai no segmento e no registro de auditoria. A sessão é produção e entra na amostragem de
+      qualidade como qualquer contato: o pool é avaliado pelo que faz para agentes também.</p>
+    </div>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">E a segunda face do mesmo pool: MCP, para assistentes de consumo</div>
+    <p>Os assistentes corporativos chamam A2A. Os de consumo chegam a terceiros por <strong>MCP</strong>. O mesmo pool
+    ganha então uma segunda representação pública — um servidor MCP remoto —, com o mesmo principal, a mesma prova
+    do titular e o mesmo mandato, como webchat e WhatsApp são dois canais da mesma sessão. Não é o servidor MCP
+    interno da plataforma, que exige credencial de serviço e continua interno: é superfície de borda nova, com
+    decisão própria. <span class="seal pale">direção</span></p>
+  </div>
+  <div class="foot"><span>Fronteira · identidade e governança</span><span>17</span></div>
+</section>
+
+<!-- ================= 18 · FRONTEIRA — FERRAMENTAS E CONVIVÊNCIA ================= -->
+<section class="page">
+  <div class="kicker">Fronteira · ferramentas e convivência</div>
+  <h2>A fronteira se padroniza — ela não se dissolve</h2>
+  <p style="max-width:172mm">
+    As páginas anteriores tratam de agentes que <em>chamam</em> a plataforma. Esta trata do resto da fronteira: os
+    sistemas que a plataforma chama, o agente que não vamos hospedar, a plataforma que o cliente já tem e o custo de
+    sair.
+  </p>
+
+  <div class="grid2" style="margin-top:3mm">
+    <div class="card dark">
+      <h4>Ferramentas de negócio, por MCP <span class="seal pale">portão em vigor</span></h4>
+      <p>A integração com o negócio é sempre mediada por servidores de ferramenta MCP, governados pelo portão da
+      página 13 — permissão assinada, guarda de injeção, auditoria nos três desfechos. A mesma capacidade fica
+      disponível para o agente de IA, para o fluxo e para o Console, com uma trilha só. O servidor MCP interno
+      <strong>não</strong> é publicado a terceiros: ele exige credencial de serviço. Ao agente de fora se publica o
+      <em>pool</em>, nunca as ferramentas cruas.</p>
+    </div>
+    <div class="card cherry">
+      <h4>Por que não hospedamos o seu agente</h4>
+      <p>Rodar código de terceiro como pool pediria à plataforma que garantisse capacidade, sinal de vida, pausa,
+      contrato de conclusão e auditoria não-optável <strong>sobre código que ela não controla</strong> — e isso
+      corrói a camada de governança que é o diferencial. A decisão é de produto, não de custo. O seu agente fica
+      onde está e fala com o pool pela fronteira; se precisar de uma pessoa, a pessoa está atrás do mesmo endpoint.</p>
+    </div>
+    <div class="card">
+      <h4>Derivar para sistemas externos <span class="seal">em operação</span></h4>
+      <p>O webhook é canal de primeira classe: um processo da plataforma aciona sistemas do cliente e <em>é
+      acionado</em> por eles com o mesmo modelo de sessão, suspendendo e retomando por token. O gatilho aponta para
+      um pool, que confere a existência do destino antes de criar a sessão.</p>
+    </div>
+    <div class="card teal">
+      <h4>Medir antes de migrar <span class="seal pale">em operação</span></h4>
+      <p>O histórico de outro contact center entra no pipeline de qualidade por um leitor plugável: eventos
+      canônicos, mascaramento na entrada, sessão, segmento e transcrição reidratados como se tivessem nascido aqui.
+      O investimento já feito vira linha de base, não perda — sem reescrever o seu orquestrador, migrar canal ou
+      trocar o contact center instalado.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:4mm">
+    <h4>Não aprisionar</h4>
+    <p>A lógica de atendimento é declarativa e portável, não código proprietário: extraível, versionada e
+    verificável por linha de comando quanto a contrato de execução e isolamento de dependências. Os modelos são
+    trocáveis por configuração, as operadoras e provedores de canal são adaptadores, e o dado é exportável. Uma
+    distinção que vale fazer: <strong>A2A torna os agentes alcançáveis, não extraíveis</strong> — a portabilidade é
+    outra garantia, e continua separada. O custo de sair é uma decisão de projeto, não uma consequência.</p>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">Por que isto importa mais em 2026 do que importava em 2023</div>
+    <p>Os protocolos abertos — MCP para ferramentas, A2A para agentes — deixaram de ser diferencial e viraram
+    infraestrutura. O que <strong>não</strong> virou commodity é o que fica atrás deles: identidade de quem chama e
+    de quem é atendido, permissão e auditoria que o chamador não desliga, e uma operação de pessoas e IA medida na
+    mesma régua. É exatamente aí que os projetos de IA agêntica travam na passagem para produção — identidade,
+    auditabilidade e lock-in —, e é o ponto em que a regulação passa a cobrar evidência.</p>
+  </div>
+  <div class="foot"><span>Fronteira · ferramentas e convivência</span><span>18</span></div>
+</section>
+
 <!-- ================= 14 · MÓDULOS — FIGURA ================= -->
 <section class="page">
   <div class="kicker">Módulos</div>
   <h2>Como os módulos se relacionam — e o mesmo contato entre eles</h2>
   <p style="max-width:172mm">
     O monorepo tem cerca de trinta serviços com dependências explícitas e sem ciclos. A figura mantém a numeração
-    da trilha da página 8: o mesmo contato, agora atravessando serviços em vez de camadas.
+    da trilha da página 9: o mesmo contato, agora atravessando serviços em vez de camadas.
   </p>
 
   <svg viewBox="0 0 760 500" xmlns="http://www.w3.org/2000/svg" style="margin-top:3mm">
@@ -1110,8 +1457,8 @@
 
     <rect x="6" y="26" width="96" height="52" rx="6" fill="#2E3138"/>
     <text x="54" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">canais</text>
-    <text x="54" y="60" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">chat · WA · SMS</text>
-    <text x="54" y="72" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">e-mail · webhook</text>
+    <text x="54" y="60" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">chat · WA · voz</text>
+    <text x="54" y="72" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">webhook · a2a</text>
 
     <line x1="104" y1="52" x2="124" y2="52" stroke="#990011" stroke-width="2" marker-end="url(#b1)"/>
     <circle cx="114" cy="34" r="10" fill="#990011"/><text x="114" y="38" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">1</text>
@@ -1165,7 +1512,7 @@
 
     <rect x="550" y="92" width="204" height="46" rx="6" fill="#0E4E4E"/>
     <text x="652" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">ferramentas MCP · gateway de IA · base vetorial</text>
-    <text x="652" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CDE3E3">permissão · guarda de injeção · auditoria em toda chamada</text>
+    <text x="652" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CDE3E3">portão: permissão · injeção · auditoria</text>
     <line x1="652" y1="90" x2="652" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
     <circle cx="700" cy="100" r="10" fill="#990011"/><text x="700" y="104" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">5</text>
 
@@ -1181,7 +1528,7 @@
 
     <rect x="156" y="230" width="142" height="54" rx="6" fill="#2E3138"/>
     <text x="227" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">PostgreSQL</text>
-    <text x="227" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">registro · auth · workflow</text>
+    <text x="227" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">registro · auth · diálogo</text>
     <text x="227" y="276" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">identidade · campanha</text>
 
     <rect x="306" y="230" width="142" height="54" rx="6" fill="#3E434D"/>
@@ -1234,41 +1581,11 @@
     <text x="24" y="428" font-family="Calibri,Arial" font-size="10" fill="#3E434D">jornada → sessão → segmento, com versão de deploy carimbada — é o que fecha o laço de volta para Qualidade, Bancada e Survey</text>
 
     <rect x="6" y="450" width="748" height="42" rx="6" fill="#2E3138"/>
-    <text x="24" y="468" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">Fronteira aberta</text>
-    <text x="24" y="484" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">agente externo entra pelo sidecar de proxy com a mesma governança · histórico de outra plataforma entra pelo leitor plugável e reidrata sessão e transcrição</text>
+    <text x="24" y="468" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">Fronteira padronizada</text>
+    <text x="24" y="484" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">agente de automação chega pelo canal a2a ao mesmo roteador e pool · ferramentas pelo portão MCP · histórico de outra plataforma pelo leitor plugável</text>
   </svg>
 
-  <div class="foot"><span>Módulos · relacionamento</span><span>15</span></div>
-</section>
-
-<!-- ================= 15 · MÓDULOS POR CAMADA ================= -->
-<section class="page">
-  <div class="kicker">Módulos</div>
-  <h2>Onde cada serviço se encaixa nas camadas</h2>
-  <table>
-    <tr><th style="width:22%">Camada</th><th>Serviços e superfícies</th></tr>
-    <tr><td class="k">1 · Bus e sessão</td><td>Núcleo de sessão e ferramentas (runtime de agente) · escritor de conversa · motor de regras pós-roteamento · ponte de orquestração e reconciliação de instâncias</td></tr>
-    <tr><td class="k">2 · Fluxos</td><td>Interpretador de fluxo · registro de agentes, pools, skills e slots de deploy · ciclo de vida de workflow · motor de calendário · formulários de diálogo · agenda</td></tr>
-    <tr><td class="k">3 · Canais</td><td>Gateway de canais com adaptadores · audiência, campanha e entrega · política de fadiga de contato</td></tr>
-    <tr><td class="k">4 · Identificação</td><td>Módulo de identidade no gateway de canais: resolução, âncoras, posse de canal, pendências</td></tr>
-    <tr><td class="k">5 · Roteamento</td><td>Motor de roteamento: filas, score, despacho push e pull, capacidade, motivos de encerramento</td></tr>
-    <tr><td class="k">6 · Agentes</td><td>Gateway de IA · base de conhecimento vetorial · SDK com interceptador e sidecar de proxy · autenticação, perfis e controle de acesso</td></tr>
-    <tr><td class="k">7 · Contato e dados</td><td>Analytics · consumidor de ingestão · replayer de sessão · avaliação de qualidade · leitor e exportador de histórico · medição de uso · faturamento por capacidade · configuração por namespace · interface de operação</td></tr>
-  </table>
-
-  <div class="grid3" style="margin-top:5mm">
-    <div class="card"><h4>Multi-tenant</h4>
-      <p>Isolamento por tenant em chaves de estado, esquemas de banco, escopo de pools no token e segredos — a
-      fundação é pervasiva e atravessa todos os serviços.</p></div>
-    <div class="card"><h4>Controle de acesso</h4>
-      <p>Perfis (operação, supervisão, administração, desenvolvimento, negócio) somados a controle por atributo:
-      oito módulos, cada campo com nível de acesso e escopo. Grupos de agentes são organograma, ortogonais aos
-      pools de roteamento.</p></div>
-    <div class="card"><h4>Configuração</h4>
-      <p>Todo parâmetro operacional é editável na interface, por namespace e por tenant, com recarga a quente.
-      Campo que só existe em arquivo é dívida declarada — e há verificação automatizada disso.</p></div>
-  </div>
-  <div class="foot"><span>Módulos · mapa</span><span>16</span></div>
+  <div class="foot"><span>Módulos · relacionamento</span><span>19</span></div>
 </section>
 
 <!-- ================= 16 · MÓDULOS DE OPERAÇÃO ================= -->
@@ -1331,7 +1648,68 @@
       que o dimensionamento passa a incluir agentes de IA na mesma conta de concorrência.</p>
     </div>
   </div>
-  <div class="foot"><span>Módulos · operação</span><span>17</span></div>
+  <div class="foot"><span>Módulos · operação</span><span>20</span></div>
+</section>
+
+<!-- ================= 21 · DA MÉTRICA À INTERPRETAÇÃO ================= -->
+<section class="page">
+  <div class="kicker">Análise <span class="seal road">roadmap</span></div>
+  <h2>Da métrica à interpretação — a análise que chega pronta</h2>
+  <p style="max-width:172mm">
+    Relatório entrega número; quem decide precisa de leitura. O caminho é o mesmo que a qualidade já usa: um
+    agente de IA lê a sessão e entrega uma nota <em>com evidência</em>, não a transcrição crua. Aqui, agentes leem os
+    indicadores e as conversas e entregam a conclusão — sempre mostrando de onde ela veio.
+  </p>
+
+  <div class="card dark" style="margin-top:3mm">
+    <h4>O que já existe por baixo <span class="seal pale">em operação</span></h4>
+    <p>Um <strong>catálogo de KPIs</strong> com definição única por indicador — fórmula, população, exclusões e fonte
+    declaradas —; a <strong>versão do deploy</strong> carimbada em cada segmento; a <strong>trajetória real</strong> de cada
+    fluxo persistida; e o <strong>desfecho declarado pela IA</strong> chegando ao segmento, sem o qual resolução e
+    contenção de IA seriam número errado. É esse substrato que torna uma interpretação conferível.</p>
+  </div>
+
+  <div class="grid2" style="margin-top:4mm">
+    <div class="card">
+      <h4>Perguntas em linguagem natural</h4>
+      <p>A pergunta vira consulta sobre sessões, segmentos e transcrições, <strong>no mesmo escopo</strong> das rotas de
+      relatório de quem pergunta — nunca mais largo. A resposta traz a consulta executada e a população contada, para
+      ser conferida e não só lida.</p>
+    </div>
+    <div class="card">
+      <h4>Briefing periódico</h4>
+      <p>A variação dos indicadores por pool, com os marcadores de deploy que já existem, uma hipótese de causa e os
+      links para as conversas de evidência — análise que chega sem ninguém pedir. Espera o recontato e o FCR
+      medidos: hipótese sobre número errado é pior que número nenhum.</p>
+    </div>
+    <div class="card">
+      <h4>Diagnóstico de causa</h4>
+      <p>Agrupa sessões escaladas, transferidas ou mal avaliadas e aponta a causa: a folha de roteamento, o step de
+      qual versão, a lacuna de conhecimento ou a ferramenta que faltou. Por cima, a mineração do caminho real sobre
+      o fluxo desenhado — ramo morto, desvio frequente, onde se perde cliente.</p>
+    </div>
+    <div class="card">
+      <h4>Motivos fora da taxonomia</h4>
+      <p>Agrupa os contatos cujo motivo não cai em nenhuma folha declarada e acompanha o volume de cada grupo, com
+      amostras das conversas. Um grupo que cresce vira proposta de folha nova. A transcrição passa pelo mascaramento
+      antes de ir a qualquer modelo.</p>
+    </div>
+  </div>
+
+  <div class="card teal" style="margin-top:4mm">
+    <h4>E uma análise que só existe aqui: a colaboração na sessão</h4>
+    <p>Em contatos conduzidos por IA, quantos chamaram uma pessoa, por qual motivo, por quanto tempo, e se
+    resolveram. O mercado não publica isso porque só é medível onde humano e IA dividem a mesma sala.</p>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">Interpretar número errado é pior que entregar o número</div>
+    <p>Por isso as regras vêm antes do agente: <strong>uma definição por indicador</strong>, a <strong>população
+    declarada</strong> e mostrada, o <strong>escopo de quem pergunta</strong> e nunca mais que ele, <strong>hipótese
+    sempre com evidência ligada</strong> e nunca conclusão solta, e dado pessoal mascarado antes de chegar a qualquer
+    modelo. A interpretação é auditável do mesmo jeito que a avaliação de qualidade já é.</p>
+  </div>
+  <div class="foot"><span>Análise · da métrica à interpretação</span><span>21</span></div>
 </section>
 
 <!-- ================= 17 · COMPONENTES ================= -->
@@ -1347,19 +1725,20 @@
     <tr><th style="width:20%">Componente</th><th style="width:26%">Papel</th><th>O que guarda</th></tr>
     <tr>
       <td class="k">Kafka</td><td>Bus de mensagens e eventos</td>
-      <td>Conversa, ciclo de vida de agente, workflow e coleta, união de jornadas, sinais de cliente, auditoria de
-      ferramentas, alterações de registro e configuração, avaliação e calibração, medição de uso, ocupação e fila,
-      eventos de negócio. Consumidores críticos com retry e fila de mensagens mortas.</td>
+      <td>Conversa, ciclo de vida de agente, união de jornadas, sinais de cliente, auditoria de ferramentas e de
+      acesso a dado pessoal, alterações de registro e configuração, avaliação e calibração, medição de uso,
+      ocupação e fila, eventos de negócio, escalação por regra. Consumidores críticos com retry e fila de mensagens
+      mortas.</td>
     </tr>
     <tr>
       <td class="k">Redis</td><td>Estado de tempo real</td>
       <td>Stream canônico da sessão, contexto de sessão, de segmento e de jornada, estado do fluxo persistido a
       cada transição, filas ordenadas por chegada, semáforo de capacidade, reservas e prazos da caixa de trabalho,
-      sinais de vida, tokens de retomada, trilha de sentimento durante a sessão.</td>
+      sinais de vida, tokens de retomada, sentimento medido do cliente.</td>
     </tr>
     <tr>
       <td class="k">PostgreSQL</td><td>Registro durável e relacional</td>
-      <td>Registro de agentes, pools, skills e deploys; autenticação, perfis e grupos; workflow; formulários de
+      <td>Registro de pools, skills, deploys e descritores de agente; autenticação, perfis e grupos; formulários de
       diálogo; identidade e âncoras; agenda; audiência e campanhas; avaliação, contestação e calibração; histórico
       persistido do stream de sessão.</td>
     </tr>
@@ -1376,10 +1755,9 @@
     </tr>
     <tr>
       <td class="k">Object storage</td><td>Mídia</td>
-      <td>Anexos de webchat com expiração em duas fases.
-      <strong style="color:#DC2626">⚠️ Gravação de voz e WebRTC não está entregue</strong> (medido 2026-08-19): os
-      dois canais de áudio não rodam — o adaptador de voz levanta erro no caminho de entrada e o WebRTC não tem SFU
-      provisionado. A gravação é fase da reconstrução do plano de mídia, não capacidade em operação.</td>
+      <td>Anexos de contato de qualquer canal — conferidos na entrada (classe, tamanho real, assinatura, antivírus
+      com quarentena, imagem re-codificada sem metadado) e expirados por retenção. Gravações de áudio da chamada,
+      quando a política do pool as liga, em partes e sem o trecho de dado protegido.</td>
     </tr>
   </table>
 
@@ -1399,7 +1777,7 @@
       <strong>sem contaminar</strong> a medição operacional.</p>
     </div>
   </div>
-  <div class="foot"><span>Componentes</span><span>18</span></div>
+  <div class="foot"><span>Componentes</span><span>22</span></div>
 </section>
 
 <!-- ================= 18 · LIMITES E PRÓXIMO PASSO ================= -->
@@ -1415,32 +1793,40 @@
   <table>
     <tr><th style="width:24%">Item</th><th>Situação</th></tr>
     <tr>
-      <td class="k">Estágio do produto</td>
-      <td>Pronto em arquitetura e funcionalidade, validado em ambiente controlado, com parte das capacidades
-      validada em atendimento real. <strong>Ainda não está em produção em cliente</strong>, e não há deployment
-      enterprise.</td>
+      <td class="k">Estágio e certificações</td>
+      <td>Pronto em arquitetura e funcionalidade, validado em ambiente controlado e parte em atendimento real.
+      <strong>Sem produção em cliente</strong> e sem certificação emitida — em andamento, com a evidência técnica
+      já produzida pela arquitetura (auditoria por chamada, trilha de acesso a dado sensível, mascaramento por
+      papel).</td>
     </tr>
     <tr>
-      <td class="k">Certificações</td>
-      <td>Nenhuma emitida. Estão em andamento, e a arquitetura já produz a evidência técnica que elas exigem —
-      trilha de auditoria por chamada, registro imutável de acesso a dado sensível e mascaramento por papel.</td>
+      <td class="k">Canal para agentes de automação (A2A)</td>
+      <td><strong>Roadmap, com a fundação feita</strong>: canal e contrato do pool no registro desde 2026-10-01.
+      <strong>Hoje nenhum agente de fora executa tarefa por esse canal.</strong> A ordem é fixa: credencial antes de
+      execução, prova do titular antes do agente do consumidor.
+      <div class="chips" style="margin-top:2mm">
+        <span class="chip" style="background:var(--teal);color:#fff">A0 canal e contrato ✓</span>
+        <span class="chip">A1 cartão</span><span class="chip">A2 credencial de parceiro</span>
+        <span class="chip">A3 artefato</span><span class="chip">A4 adaptador</span>
+        <span class="chip">A5 streaming</span><span class="chip">A6 validação com clientes reais</span>
+        <span class="chip">B1–B2 agente do consumidor</span><span class="chip">B3 pessoas atrás do canal</span>
+      </div></td>
     </tr>
     <tr>
-      <td class="k" style="color:#DC2626">Canais de áudio — voz/PSTN e WebRTC</td>
-      <td><strong>Não estão entregues</strong> (medido em 2026-08-19). O adaptador de voz levanta erro no caminho de
-      entrada — cinco métodos inexistentes, mockados no teste — e nada é publicado no barramento de contatos. O
-      WebRTC tem sinalização funcional, mas <strong>nenhum SFU provisionado em ambiente algum</strong>: sem LiveKit
-      em compose, sem o SDK como dependência do gateway de canais, com token e sala devolvidos por um modo de
-      desenvolvimento. Em reconstrução sob <code>docs/adr/adr-voice-media-plane.md</code>. Os canais de texto e o
-      webhook seguem em operação.</td>
+      <td class="k">Ferramentas por MCP</td>
+      <td>Portão em vigor no servidor MCP para a ferramenta de domínio, ainda <strong>sem tráfego de
+      terceiro</strong>; os fluxos nativos não passam por ele (borda única proposta em ADR). A face MCP pública do
+      pool é direção.</td>
+    </tr>
+    <tr>
+      <td class="k">Áudio</td>
+      <td>Navegador e telefone <strong>entrante</strong> (tronco SIP), com transcrição, voz de IA e gravação, validados
+      com pessoas em ambiente controlado. Faltam chamada <strong>sainte</strong> e transferência para ramal externo.</td>
     </tr>
     <tr>
       <td class="k">Discador preditivo</td>
-      <td>Não existe — e está <strong>bloqueado</strong>, não meramente fora do roadmap: depende do plano de mídia
-      da linha acima, que hoje está em zero. Pacing power, progressivo e preview, guarda de taxa de abandono e
-      listas restritivas regulatórias são fases posteriores. Para voz ativa em massa — venda fria, negociação,
-      urgência —, os incumbentes entregam hoje e nós não. O que a plataforma substitui é a discagem
-      <em>de entrega de informação</em> (página 10).</td>
+      <td>Não existe; antes dele vem a chamada sainte. Para voz ativa em massa os incumbentes entregam hoje e nós
+      não. O que a plataforma substitui é a discagem <em>de entrega de informação</em> (página 11).</td>
     </tr>
     <tr>
       <td class="k">Isolamento multi-tenant</td>
@@ -1448,53 +1834,44 @@
       em produção, <strong>é o item nº 1 a validar em prova de conceito</strong>.</td>
     </tr>
     <tr>
-      <td class="k">Biometria</td>
-      <td>Roadmap. A camada de identificação já tem a escala de evidência que a acomoda como terceira classe; o
-      custo pendente é de conformidade (dado sensível, base legal, retenção), não de código.</td>
+      <td class="k">Login federado e análise</td>
+      <td>Roadmap. Login do tenant e login social como prova de identidade, pelo mesmo mecanismo de evidência; e a
+      camada de interpretação sobre os KPIs (página 21), cujo catálogo e cuja base já existem.</td>
     </tr>
     <tr>
-      <td class="k">WFM</td>
-      <td>Roadmap. O substrato de dados está construído — chegada, abandono, TMA limpo de pós-atendimento, pausas,
-      picos por transição e capacidade por tipo de licença. Faltam os motores de previsão e de simulação.</td>
+      <td class="k">Biometria e WFM</td>
+      <td>Roadmap nos dois casos, com o substrato construído: escala de evidência na identidade (o custo pendente
+      da biometria é de conformidade, não de código), e série de fila, TMA e ocupação para o dimensionamento.</td>
     </tr>
     <tr>
       <td class="k">Fusão de cadastros</td>
-      <td>Parcial. Resolução de identidade, âncoras progressivas e posse de canal estão em operação; referência
-      externa a CRM e fusão de clientes são a fase seguinte.</td>
+      <td>Parcial: resolução, âncoras e posse de canal em operação; referência a CRM e fusão são a fase seguinte.</td>
     </tr>
   </table>
 
   <div class="grid2" style="margin-top:5mm">
     <div class="card dark">
       <h4>Quem somos</h4>
-      <p>Profissionais com mais de vinte anos em soluções e serviços de contact center. Não é um time de tecnologia
-      que descobriu o setor: é gente que operou, implantou e conviveu com essas plataformas — e construiu esta a
-      partir das dores que conhece de perto.</p>
+      <p>Mais de vinte anos em soluções e serviços de contact center: gente que operou, implantou e conviveu com
+      essas plataformas — e construiu esta a partir das dores que conhece de perto.</p>
     </div>
     <div class="card teal">
       <h4>O que oferecemos a quem entra agora</h4>
-      <p>Preço de fundador, prioridade de roadmap e acesso direto a quem constrói. A imaturidade de estágio é
-      real, e a contrapartida também: influência sobre o produto que não se compra de um fornecedor
-      estabelecido.</p>
+      <p>Preço de fundador, prioridade de roadmap — inclusive na ordem do canal de agentes — e acesso direto a quem
+      constrói. A imaturidade de estágio é real, e a contrapartida também.</p>
     </div>
   </div>
 
-  <div class="card" style="margin-top:4mm">
-    <h4>Um princípio de projeto, para fechar</h4>
-    <p>Quando a conveniência de quem contata e a de quem é contatado entram em conflito — e no atendimento elas
-    entram —, a plataforma <strong>expõe a escolha em vez de escondê-la</strong>. A política continua sendo do
-    cliente: os tetos de abordagem, a janela, o que é transacional, quem enxerga dado sensível. O que a plataforma
-    garante é que a regra seja explícita, que cada decisão <em>nomeie</em> qual regra a produziu e que fique
-    trilha. Responsabilidade de quem opera, evidência de quem fornece.</p>
+  <div class="note" style="border-color:var(--cherry);margin-top:4mm">
+    <h3>Um princípio de projeto, e o próximo passo</h3>
+    <p>Quando a conveniência de quem contata e a de quem é contatado entram em conflito, a plataforma
+    <strong>expõe a escolha em vez de escondê-la</strong>: a política é do cliente; a regra explícita, nomeada em cada
+    decisão e com trilha, é da plataforma. O próximo passo é uma sessão técnica com o seu time de arquitetura e de
+    operação, sem custo — e, se agentes de automação estão no seu plano, com os seus casos de chamada na mesa.
+    Saímos dela com escopo, pontos a validar em prova de conceito e números, ou com a conclusão honesta de que não
+    é o momento.</p>
   </div>
-
-  <div class="note" style="border-color:var(--cherry)">
-    <h3>Próximo passo</h3>
-    <p>Uma sessão técnica com o seu time de arquitetura e de operação, sem custo e sem compromisso. Saímos dela com
-    um escopo possível, a lista de pontos a validar em prova de conceito e números — ou com a conclusão honesta de
-    que não é o momento.</p>
-  </div>
-  <div class="foot"><span>PlugHub · limites e próximo passo</span><span>19</span></div>
+  <div class="foot"><span>PlugHub · limites e próximo passo</span><span>23</span></div>
 </section>
 
 </body>
