@@ -25,6 +25,10 @@ interface WebChatConfig {
   upload_limits_mb:       UploadLimits
 }
 
+// ATT-07: o teto da PLATAFORMA (`attachment_store.MIME_LIMITS`, em MB). O valor do tenant só o
+// abaixa — o gateway corta o que vier acima e diz no log —, então a tela não oferece mais que isto.
+const PLATFORM_MAX_MB: UploadLimits = { image: 16, pdf: 100, video: 512 }
+
 const DEFAULTS: WebChatConfig = {
   auth_timeout_s:         30,
   upload_limits_mb:       { image: 16, pdf: 100, video: 512 },
@@ -144,30 +148,33 @@ const WebChatConfigPage: React.FC = () => {
 
       {/* ── 2. Attachments ── */}
       <section className="bg-white border border-border rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-dark mb-1">Attachment Policy</h3>
+        <h3 className="text-sm font-semibold text-dark mb-1">{t('webchat.attachmentPolicy')}</h3>
         {/* ATT-04: o prazo do anexo é classe de retenção, com as outras — não mora mais aqui */}
         <p className="text-xs text-muted mb-4">{t('webchat.attachmentRetentionMoved')}</p>
 
         {/* Upload limits */}
-        <label className="text-xs font-medium text-dark block mb-2">Upload limits (MB)</label>
+        <label className="text-xs font-medium text-dark block mb-1">{t('webchat.uploadLimits')}</label>
+        <p className="text-xs text-muted mb-2">{t('webchat.uploadLimitsHint')}</p>
         <div className="grid grid-cols-3 gap-4 mb-4">
           {(
             [
-              { key: 'image' as const, label: 'Image',  hint: 'JPEG / PNG / WebP / GIF' },
-              { key: 'pdf'   as const, label: 'PDF',     hint: 'application/pdf' },
-              { key: 'video' as const, label: 'Video',   hint: 'MP4 / WebM' },
+              { key: 'image' as const, label: t('webchat.uploadKindImage'), hint: 'JPEG / PNG / WebP / GIF' },
+              { key: 'pdf'   as const, label: t('webchat.uploadKindPdf'),   hint: 'application/pdf' },
+              { key: 'video' as const, label: t('webchat.uploadKindVideo'), hint: 'MP4 / WebM' },
             ]
           ).map(({ key, label, hint }) => (
             <div key={key}>
               <label className="text-xs font-medium text-dark block mb-0.5">{label}</label>
-              <p className="text-2xs text-muted-light mb-1">{hint}</p>
+              <p className="text-2xs text-muted-light mb-1">
+                {hint} · {t('webchat.uploadPlatformMax', { mb: PLATFORM_MAX_MB[key] })}
+              </p>
               <input
                 type="number"
-                min={1} max={2048} step={1}
+                min={1} max={PLATFORM_MAX_MB[key]} step={1}
                 value={cfg.upload_limits_mb[key]}
                 onChange={e => update('upload_limits_mb', {
                   ...cfg.upload_limits_mb,
-                  [key]: parseInt(e.target.value) || DEFAULTS.upload_limits_mb[key],
+                  [key]: Math.min(parseInt(e.target.value) || DEFAULTS.upload_limits_mb[key], PLATFORM_MAX_MB[key]),
                 })}
                 className="w-full text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
               />
@@ -179,7 +186,7 @@ const WebChatConfigPage: React.FC = () => {
           onClick={() => saveKey('upload_limits_mb')}
           saving={saving === 'upload_limits_mb'}
           disabled={!adminToken}
-          label="Save attachment policy"
+          label={t('webchat.saveAttachmentPolicy')}
         />
       </section>
 

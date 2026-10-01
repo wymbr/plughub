@@ -25,7 +25,8 @@ ok()    { echo "  ✓ $1"; }
 bad()   { echo "  ✗ $1"; FAIL=1; }
 incon() { echo "  ? $1"; INC=1; }
 ADMIN=$(docker exec "$CFG" printenv PLUGHUB_CONFIG_ADMIN_TOKEN 2>/dev/null)
-put() { docker exec -i -e MODE=put -e VALUE="$1" -e ADMIN="$ADMIN" "$GW" python - < infra/test/_att04_retention.py 2>/dev/null | tail -1; }
+# ATT-07: a escrita mantém a descrição gravada — a versão anterior a apagava a cada rodada
+put() { docker exec -i -e NS=retention -e KEY=attachment_days -e VALUE="$1" -e ADMIN="$ADMIN" "$GW" python - < infra/test/_config_put.py 2>/dev/null | tail -1; }
 fim() {
   [ -n "$ORIG" ] && put "$ORIG" >/dev/null
   echo

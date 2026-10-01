@@ -38,12 +38,14 @@ from .attachment_store import (
     SERVE_SECURITY_HEADERS,
     content_disposition,
     AttachmentInfected,
+    webchat_upload_limit,
     serve_refusal,
     served_media_type,
     sign_attachment_url,
     verify_attachment_signature,
 )
 from .usage_emitter import emit_attachment
+from .webchat_config import webchat_config
 
 logger = logging.getLogger("plughub.channel-gateway.upload")
 
@@ -79,6 +81,15 @@ async def upload_file(file_id: str, request: Request) -> Response:
     data = await request.body()
     if not data:
         raise HTTPException(status_code=400, detail="empty body")
+
+    # ATT-07: o tamanho REAL contra o teto do tenant — o do reserve é só o declarado pelo cliente.
+    # O teto da plataforma o commit confere de qualquer jeito (validate_content).
+    slot = await store.resolve(file_id=file_id, tenant_id=settings.tenant_id)
+    if slot is not None:
+        limite = webchat_upload_limit(slot.mime_type, webchat_config.get("upload_limits_mb"))
+        if limite is not None and len(data) > limite:
+            raise HTTPException(status_code=413,
+                                detail=f"arquivo muito grande: {len(data)} > {limite} bytes")
 
     try:
         meta = await store.commit(

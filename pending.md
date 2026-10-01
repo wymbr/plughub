@@ -745,7 +745,6 @@ FED-01 não o duplica.
 
 | id | tarefa | estado | evidência |
 |---|---|---|---|
-| ATT-07 | **Configuração de anexo que a tela oferece e ninguém lê.** `webchat.upload_limits_mb` (imagem, PDF, vídeo) é editável na `WebChatConfigPage` e **nenhum código do gateway o lê** — os limites reais são fixos em `MIME_LIMITS` (`attachment_store.py`), então mudar na tela não muda nada. Decidir: ligar o leitor (teto por tipo dentro da allowlist da classe, ATT-01) ou tirar o campo. De passagem: `config-recursos/ChannelsPage.tsx` é órfã (nenhum import) e cita chaves que não existem (`ws_auth_timeout_s`, `serving_base_url`) | `aberto` | `WebChatConfigPage.tsx`; `attachment_store.py` `MIME_LIMITS`; CHANGELOG 2026-10-01 (6) |
 | AAS-01 | **Fase A0 — canal `a2a` e descritor.** `a2a` no `ChannelSchema` (`medium: message`), mapeado para o perfil `agent` em `skill-profile.ts`; bloco `a2a` no `PoolRegistrationSchema`, obrigatório quando `channel_types` contém `a2a` e proibido quando não; campos na tela do pool | `aberto` | ADR D1, D3 |
 | AAS-02 | **Renomear o uso interno de "A2A" para "delegação"** nos docs (`task` step, `assist`/`transfer`) antes do card público, senão os docs passam a ter dois A2A | `aberto` | ADR § 7 |
 | AAS-03 | **Fase A1 — AgentCard read-only.** Card público (`/.well-known/agent-card.json`, só pools `discoverable`) e estendido (pools que o principal alcança); `version` = `set_at` do slot `current`; modos de mídia DERIVADOS do pool; `securitySchemes` dos tipos de principal; linha no `probe_edge_surface.sh` | `bloqueado` por AAS-01 | ADR D2, D14.3 |
@@ -763,6 +762,12 @@ FED-01 não o duplica.
 | SSO-01 | **Login de OPERADOR por SSO corporativo** (Entra, Google Workspace, OIDC/SAML) no auth-api. Separado da identidade do cliente por decisão de 2026-09-30 | `adiado` — gatilho: primeiro tenant que exija SSO de operador | ADR § 8 |
 
 ---
+
+## `docs/arcos/config-consolidation.md` — configuração com uma casa por fato
+
+| id | tarefa | status | âncora |
+|---|---|---|---|
+| CFG-01 | **Salvar uma chave pela tela APAGA a descrição dela.** O `PUT /config/{ns}/{key}` grava a `description` que recebe (`db_set`: `description = EXCLUDED.description`, com default `""` no `PutConfigBody`), nenhuma rota de leitura a devolve, e o `putConfig` da UI manda `''` — **17 chamadores** em `platform-ui/src`. Medido em 2026-10-01: **5 de 93** chaves com descrição vazia (`masking.context_map`, `masking.context_rules`, `audit_policy.authorized_roles`, um `dashboards.template:*` e `retention.attachment_days`, esta apagada pelo probe da ATT-04 e restaurada pela API na ATT-07). Decidir: `""` no PUT mantém a gravada (um `COALESCE(NULLIF(...))` no upsert, sem mudar chamador) **ou** a UI reenvia a descrição (exige rota que a devolva). Depois, restaurar as quatro restantes pelo texto da semente, onde houver | `aberto` | `config-api/router.py` `PutConfigBody`; `db.py` `db_set`; `infra/test/_config_put.py` (o contorno dos probes); CHANGELOG 2026-10-01 (9) |
 
 ## `sem-demanda` — trabalho sem decisão por trás
 

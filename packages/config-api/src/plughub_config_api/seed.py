@@ -429,8 +429,10 @@ _SEED: list[tuple[str, str, object, str]] = [
             "pdf":      100,
             "video":    512,
         },
-        "Maximum upload size in MB per content type. "
-        "MIME allowlist: image/jpeg, image/png, image/webp, image/gif, "
+        "Maximum WEBCHAT upload size in MB per content type (image, pdf, video). "
+        "It only LOWERS the platform ceiling (16 / 100 / 512 MB): a higher value is cut to "
+        "the ceiling and logged by the channel-gateway. WhatsApp and e-mail follow the "
+        "provider's limits. MIME allowlist: image/jpeg, image/png, image/webp, image/gif, "
         "application/pdf, video/mp4, video/webm."
     ),
 

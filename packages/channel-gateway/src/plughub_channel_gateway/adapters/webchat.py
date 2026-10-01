@@ -45,7 +45,13 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ..attachment_store import AttachmentStore, FilesystemAttachmentStore, sign_attachment_url
+from ..attachment_store import (
+    AttachmentStore,
+    FilesystemAttachmentStore,
+    sign_attachment_url,
+    webchat_upload_limit,
+)
+from ..webchat_config import webchat_config
 from ..config import Settings
 from ..context_reader import ContextReader
 from ..models import (
@@ -758,7 +764,9 @@ class WebchatAdapter:
             )
             return
 
-        err = FilesystemAttachmentStore.validate_mime(req.mime_type, req.size_bytes)
+        # ATT-07: o teto do tenant (`webchat.upload_limits_mb`), nunca acima do da plataforma
+        limite = webchat_upload_limit(req.mime_type, webchat_config.get("upload_limits_mb"))
+        err = FilesystemAttachmentStore.validate_mime(req.mime_type, req.size_bytes, limit=limite)
         if err is not None:
             await self._ws.send_json(
                 WsAuthError(code="upload_rejected", message=err).model_dump()

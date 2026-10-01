@@ -108,6 +108,49 @@ MIME_LIMITS: dict[str, int] = {
     "video/webm":      512 * 1024 * 1024,
 }
 
+# ─── Teto do upload do WEBCHAT por tenant (ATT-07) ────────────────────────────
+#
+# `webchat.upload_limits_mb` ({image, pdf, video}, editável na tela de WebChat) existia sem LEITOR:
+# mudar na tela não mudava nada. Ele vale só para o upload do WEBCHAT (o nome diz webchat — a lição
+# da ATT-04: WhatsApp e e-mail têm o teto do provedor) e só ABAIXA: `MIME_LIMITS` é o teto da
+# plataforma (dimensionado para o antivírus e a allowlist), e valor acima dele é cortado, dito.
+
+_UPLOAD_LIMIT_KIND = {
+    "image/jpeg": "image", "image/png": "image", "image/webp": "image", "image/gif": "image",
+    "application/pdf": "pdf",
+    "video/mp4": "video", "video/webm": "video",
+}
+_avisados: set[tuple[str, str]] = set()
+
+
+def _avisa_uma_vez(chave: str, valor: object, motivo: str) -> None:
+    marca = (chave, repr(valor))
+    if marca not in _avisados:
+        _avisados.add(marca)
+        logger.warning("ATT-07: webchat.upload_limits_mb.%s=%r %s", chave, valor, motivo)
+
+
+def webchat_upload_limit(mime_type: str, configured: object) -> int | None:
+    """Teto em bytes do upload do webchat para `mime_type`: o do tenant, nunca acima do da
+    plataforma. None = tipo fora da allowlist. Valor ausente ou inválido vale o da plataforma,
+    e o inválido é dito no log (uma vez por valor)."""
+    cap = MIME_LIMITS.get(mime_type)
+    if cap is None:
+        return None
+    kind = _UPLOAD_LIMIT_KIND[mime_type]
+    raw = configured.get(kind) if isinstance(configured, dict) else None
+    if raw is None:
+        return cap
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+        _avisa_uma_vez(kind, raw, f"inválido — vale o teto da plataforma ({cap // (1024 * 1024)} MB)")
+        return cap
+    limite = int(raw * 1024 * 1024)
+    if limite > cap:
+        _avisa_uma_vez(kind, raw, f"acima do teto da plataforma — vale {cap // (1024 * 1024)} MB")
+        return cap
+    return limite
+
+
 MIME_TO_EXT: dict[str, str] = {
     "image/jpeg":       "jpg",
     "image/png":        "png",
@@ -1035,14 +1078,15 @@ class FilesystemAttachmentStore:
     # ── Helpers utilitários ───────────────────────────────────────────────────
 
     @staticmethod
-    def validate_mime(mime_type: str, size_bytes: int) -> str | None:
+    def validate_mime(mime_type: str, size_bytes: int, limit: int | None = None) -> str | None:
         """
         Valida MIME type e tamanho.
         Retorna None se válido, ou mensagem de erro.
+        `limit` (ATT-07): o teto do tenant já resolvido; sem ele, o da plataforma.
         """
-        limit = MIME_LIMITS.get(mime_type)
-        if limit is None:
+        if mime_type not in MIME_LIMITS:
             return f"mime_type não aceito: {mime_type}"
+        limit = min(limit, MIME_LIMITS[mime_type]) if limit else MIME_LIMITS[mime_type]
         if size_bytes > limit:
             return f"arquivo muito grande: {size_bytes} > {limit} bytes"
         if size_bytes <= 0:

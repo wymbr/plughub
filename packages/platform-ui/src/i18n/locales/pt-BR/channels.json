@@ -1,7 +1,15 @@
 {
   "title": "Canais",
   "webchat": {
-    "attachmentRetentionMoved": "O prazo do anexo agora é uma classe de retenção, junto das outras: Mascaramento → Retenção → Anexos de contato."
+    "attachmentRetentionMoved": "O prazo do anexo agora é uma classe de retenção, junto das outras: Mascaramento → Retenção → Anexos de contato.",
+    "attachmentPolicy": "Política de anexos",
+    "uploadLimits": "Limites de upload (MB)",
+    "uploadLimitsHint": "Teto por tipo para o upload do webchat. Ele só ABAIXA o teto da plataforma, mostrado como máximo; WhatsApp e e-mail seguem o limite do provedor.",
+    "uploadKindImage": "Imagem",
+    "uploadKindPdf": "PDF",
+    "uploadKindVideo": "Vídeo",
+    "uploadPlatformMax": "máximo da plataforma {{mb}} MB",
+    "saveAttachmentPolicy": "Salvar política de anexos"
   },
   "tabs": {
     "webchat":  "WebChat",

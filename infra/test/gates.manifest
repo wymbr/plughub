@@ -464,6 +464,11 @@ probe_att05_ingest_pipeline.sh
 # S1 a transcricao (SSE) leva o anexo e NUNCA o link assinado · I1 variante so de servico ·
 # T1 trilha ok/ok_blurred/revealed/reveal_required. Bateria: mut_att06_attachment_view.sh.
 probe_att06_attachment_view.sh
+# ATT-07 (2026-10-01): o teto de upload que a tela de WebChat edita VALE. Grava image=1 MB pela API
+# (mantendo a descricao, `_config_put.py`), espera o config.changed e mede pelo caminho do cliente:
+# L1 reload · C1 controle imagem pequena reserva · R1 imagem declarada 2 MB recusada · R2 corpo real
+# de 2 MB → 413 · C2 controle 204 · P1 PDF de 2 MB reserva. Restaura o valor. Bateria: mut_att07.
+probe_att07_upload_limit.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro
@@ -1035,6 +1040,7 @@ smoke_wrapup_slot_handoff.sh
 =mut_att02_attachment_internal_door.sh                mutacao
 =mut_att05_ingest_pipeline.sh                         mutacao
 =mut_att06_attachment_view.sh                         mutacao
+=mut_att07_upload_limit.sh                            mutacao
 =mut_sip_edge_surface.sh                              mutacao
 =mutation_claim_lease_slot.sh                         mutacao
 =mutation_occupancy_peak.sh                           mutacao

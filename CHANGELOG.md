@@ -1,5 +1,55 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (9) — ATT-07: o teto de upload que a tela de WebChat edita passou a valer
+
+**Antes:** a `WebChatConfigPage` editava `webchat.upload_limits_mb` (imagem, PDF, vídeo, em MB), e
+**nenhum código o lia**. Os limites reais eram fixos em `MIME_LIMITS`, então mudar na tela não mudava
+nada, e o campo aceitava até 2048 MB.
+
+**Decisão: ligar o leitor**, não tirar o campo. É configuração de negócio, e todo campo de config
+tem superfície na tela (CLAUDE.md § Configuration). Semântica:
+- **Só ABAIXA.** `MIME_LIMITS` continua sendo o teto da plataforma, dimensionado para o antivírus
+  (o `clamd.conf` aceita 600 MB por stream) e para a allowlist. Valor acima do teto, zero, negativo
+  ou não numérico vale o teto, e é dito no log uma vez por valor.
+- **Só o upload do WEBCHAT.** É o que o nome diz, e é a lição da ATT-04: um nome "webchat" não
+  governa WhatsApp nem e-mail, que seguem o limite do provedor.
+- **Nos dois tamanhos:** o declarado, no `upload.request` (`upload_rejected`), e o **real**, no POST
+  (413 antes do commit). O declarado sozinho é o que o cliente diz.
+
+**Na tela:**
+- o máximo do campo é o teto da plataforma por tipo;
+- uma linha explica que o valor só abaixa e vale só para o webchat;
+- os rótulos da seção saíram de texto fixo para `t()` (en e pt-BR).
+
+A descrição da chave na semente diz o mesmo, e a descrição viva foi atualizada pela API.
+
+**De passagem:** `config-recursos/ChannelsPage.tsx` era órfã (nenhum import, nenhuma rota) e citava
+chaves que não existem. Removida; o histórico do git a guarda.
+
+**Achado no caminho — salvar pela tela apaga a descrição:**
+- **Causa:** o `PUT /config/{ns}/{key}` grava a `description` que recebe, nenhuma rota de leitura a
+  devolve, e o `putConfig` da UI manda `''`.
+- **Medido:** 5 de 93 chaves estão com descrição vazia. Uma delas, `retention.attachment_days`, foi
+  apagada pelo **meu** probe da ATT-04: ele achava que relia a descrição, mas lia o valor.
+- **Restaurada** pela API com o texto da semente. Na primeira tentativa, o script gravou o traceback
+  de um import falho como descrição: a guarda conferia o tamanho do texto, não o conteúdo. Foi
+  corrigido no minuto seguinte, desta vez a partir da semente da árvore, lida sem importar o pacote.
+- **Os probes** passaram a escrever config por `infra/test/_config_put.py`, que lê a descrição gravada
+  (só leitura) e a reenvia.
+- **O conserto da raiz** é decisão (o PUT preservar quando vier `""`, ou a UI reenviar) e ficou na
+  **CFG-01**.
+
+**Gates:**
+- `probe_att07_upload_limit.sh` VERDE ao vivo: grava `image = 1` pela API mantendo a descrição,
+  espera o `config.changed` e mede pelo caminho do cliente. Ramos: L1, C1, R1, R2 (413), C2 e P1 (o
+  teto de imagem não vaza para PDF). Restaura o valor ao final.
+- `mut_att07_upload_limit.sh`: **3/3 mutações pegas** — o reserve ignora o teto; o POST não confere
+  o real; a imagem lê a chave de PDF.
+- `probe_att04` VERDE, e a descrição sobreviveu (474 caracteres).
+- Testes: gateway **1616 passed**; typecheck do platform-ui limpo.
+
+**Deixou ficha:** CFG-01.
+
 ## 2026-10-01 (8) — ATT-06: nítido só para quem atende; os demais veem a prévia borrada, e revelar fica na trilha
 
 **Antes:** quem tinha `contacts.transcricao` sobre o pool via o original de todo anexo: o
