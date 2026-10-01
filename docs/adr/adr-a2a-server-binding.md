@@ -397,6 +397,12 @@ arquivo.
    3. **Texto com opções numeradas**: o mesmo fallback dos canais de voz.
 
    A escolha é fato do **participante**, não do canal (VOZ-09).
+
+   *(2026-10-01, AAS-07.)* O item 1 saiu da fase A5 por decisão do dono e virou a `AAS-17`. A
+   A2UI está em movimento: 0.9.1 em produção, 1.0 como candidata a release, e o MIME escrito aqui
+   (`application/json+a2ui`) é o da 0.9. Ela também depende de um catálogo de componentes negociado
+   com o cliente, e só se valida contra cliente que a renderize (`AAS-08`). Até lá valem os itens 2
+   e 3, que o adapter já entrega.
 3. **Os modos do card são derivados do pool, nunca declarados à mão.** Um pool `agent_kind: ai`
    declara `text/plain` e `application/json`, porque o ai-gateway só consome texto. `image/*` e PDF
    só aparecem em pool que tenha humano **e** Console que renderize anexo. Declarar o que ninguém
@@ -533,7 +539,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | **A2** | Principal `partner` | `agent_principals` (fusão, D6), credencial, `allowed_pools`, tenant da credencial (D7), linha no probe de borda | **bloqueia A4** · **feita em 2026-10-01 (AAS-04)**, com a porta autenticada já de pé |
 | **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera · **feita em 2026-10-01 (AAS-05)** |
 | **A4** | Adapter JSON-RPC | `message/send` (bloqueante com teto + `returnImmediately`), `tasks/get`, `tasks/cancel`, `tasks/list`; `menu` → `INPUT_REQUIRED` com `DataPart`/texto; D15 inteira | **basta para o OpenClaw** (só bearer, texto e JSON, polling) · **feita em 2026-10-01 (AAS-06)**; bloco mascarado por link = `AAS-14` |
-| **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling |
+| **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling · **streaming feito em 2026-10-01 (AAS-07)**: `SendStreamingMessage`/`SubscribeToTask`, os nomes da v1.0; A2UI = `AAS-17` |
 | **A6** | Validação | clientes de referência: SDK oficial, **OpenClaw** (o mais restrito) e **Copilot Studio ou Gemini Enterprise** (o comprador real); isolamento cross-tenant e cross-titular (D15.4); probe de borda | gate |
 | **B1** | Prova federada (ID-FED) | `princ` (PID-21) e `oidc_email` pelo escritor único; RP OIDC por tenant; cofre de segredo | **bloqueia B2** |
 | **B2** | `customer_agent` | emissão por autosserviço após prova, cota por principal (D9), `AUTH_REQUIRED` (D12), mandato (D13) | o caso do consumidor |
@@ -659,6 +665,17 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.
 - **2026-10-01, fase A2 (AAS-04).** D6 ganhou o *como ficou* do `partner`; a porta `POST /a2a/{slug}`
   existe antes da execução; o carimbo do principal no `AuditRecord` foi para a A4.
+- **2026-10-01, fase A5 (AAS-07).** Streaming sobre SSE com os nomes da v1.0
+  (`SendStreamingMessage`, `SubscribeToTask`; a tabela da § 2 usa os da 0.3). Regras conferidas
+  no texto CRU da spec:
+  - primeiro evento é o `Task`;
+  - fecha em estado terminal ou interrompido;
+  - assinar task terminal é `UnsupportedOperation`;
+  - não há campo `final`;
+  - o fechamento por teto de 600 s é publicado.
+
+  A A2UI saiu para a `AAS-17` (D14.2). Um resumo automático da spec trazia códigos de erro
+  inventados (-32098…), e o texto cru confirmou os -32001…-32005 que a A4 usa.
 - **2026-10-01, fase A4 (AAS-06).** D15 ganhou o *como ficou*: estado deduzido dos fatos, pedido
   como entrada de contrato (decisão do dono), `caller_cancel`, prazos publicados pelo executor.
   Deixou `AAS-14` (link fora de banda), `AAS-15` (pedido no stream) e `AAS-16` (principal no

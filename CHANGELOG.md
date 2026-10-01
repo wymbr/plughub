@@ -1,5 +1,50 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (16) — AAS-07: o canal `a2a` transmite a task, e o stream fecha quando ela para
+
+Fase A5 do `adr-a2a-server-binding`, só a metade de streaming: a A2UI saiu para a `AAS-17` por
+decisão do dono. A spec dela está em movimento (0.9.1 em produção, 1.0 candidata), o MIME do ADR é
+o da 0.9, os componentes vêm de um catálogo negociado com o cliente, e só se valida contra cliente
+que a renderize (`AAS-08`). Até lá, o menu sai como texto numerado + `DataPart` com JSON Schema.
+
+**A spec foi lida no texto CRU, e isso importou.** O resumo automático da página da spec respondeu
+com códigos de erro JSON-RPC inventados (`-32098`… para `TaskNotFound`); o `specification.md` do
+repositório confirma os `-32001`…`-32005` que a AAS-06 usa. Do mesmo texto saíram as regras:
+- os nomes da v1.0 são `SendStreamingMessage` e `SubscribeToTask`; os `message/stream` e
+  `tasks/resubscribe` da ficha e do ADR são da 0.3;
+- o primeiro evento é o `Task`; o stream fecha em estado terminal **ou interrompido**;
+- `SubscribeToTask` em task terminal é `UnsupportedOperation`;
+- cada `data:` é uma resposta JSON-RPC inteira;
+- **não existe campo `final`** na v1.0: quem diz "acabou" é o fechamento.
+
+**O que foi feito** (`a2a_tasks.py`, `open_stream`/`_events`; rota em `main.py`):
+- o trabalho de ANTES do stream (validar, criar ou continuar a task, conferir dono) reusa o caminho
+  do `SendMessage`, e o erro ali sai como JSON-RPC comum, sem SSE;
+- o laço acorda por `XREAD BLOCK` (1 s) no stream canônico e **relê os fatos** a cada volta, pela
+  mesma dedução do `GetTask`. O estado nunca vem do evento;
+- fala do agente no meio do trabalho sai como `statusUpdate` WORKING; o resultado, como
+  `artifactUpdate` ANTES do `statusUpdate` COMPLETED; o prompt de uma task interrompida, UMA vez,
+  no status;
+- comentário SSE de batimento a cada 15 s parado; teto de 600 s por stream, depois do qual o
+  chamador reassina. O teto vai no card (extensão `task-lifetime`), e `capabilities.streaming`
+  passou a `true` na projeção do registry;
+- as fixtures A2A foram para `infra/test/_a2a_fixture.sh`, que os probes da AAS-06 e da AAS-07
+  carregam.
+
+**Defeito que o probe ao vivo mostrou e o teste de unidade escondia:** o prompt saía DUAS vezes,
+como progresso WORKING e de novo no INPUT_REQUIRED. O `notification_send` grava o prompt no stream
+e o engine só marca `menu:waiting` logo depois. Acordado pelo prompt, o laço via uma task WORKING
+com fala nova. O teste montava as duas coisas juntas, ordem que não acontece. Agora fala nova só sai
+como progresso depois de sobreviver a um ciclo sem a task interromper (custo: até 1 s na fala que
+não é prompt). O teste novo reproduz a ordem real e ficou vermelho antes do conserto; o S1 do probe
+conta o prompt.
+
+**Medição:** gateway 1 681 · schemas 411 · agent-registry 184 · `probe_aas07_a2a_stream.sh` 6/6 ao
+vivo · bateria `mut_aas07_a2a_stream.sh` 5/5, cada uma pelo ramo declarado · `probe_aas06` segue
+verde sobre a fixture extraída.
+
+**Ficou de fora:** `AAS-17` (A2UI, bloqueada pela `AAS-08`).
+
 ## 2026-10-01 (15) — AAS-06: um agente de fora conversa com um pool pelo canal `a2a`, do pedido ao artefato
 
 Fase A4 do `adr-a2a-server-binding` (D4, D8, D14, D15). A execução entrou ATRÁS da porta da AAS-04

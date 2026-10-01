@@ -117,6 +117,12 @@ entram por `conversations.inbound` como as de qualquer canal de texto (`text_men
 no `OutboundConsumer`: a fala do agente é lida do stream canônico. É canal SÓ DE ENTRADA
 (`INBOUND_ONLY_CHANNELS`): o `collect` não o elege. Detalhe: ADR A2A § D15 *Como ficou*.
 
+**Streaming (AAS-07):** `SendStreamingMessage` e `SubscribeToTask` respondem `text/event-stream`, e
+cada `data:` é uma resposta JSON-RPC inteira. Erro ANTES do stream é JSON-RPC comum. O laço acorda
+por `XREAD BLOCK` no stream canônico e relê os fatos a cada volta. Ele nunca tira o estado do
+evento. Fala nova só sai como progresso depois de sobreviver a um ciclo, porque o prompt chega ao
+stream antes do `menu:waiting` e saía duas vezes.
+
 ## Chamada entre réplicas (WCH-12)
 
 A chamada (`webrtc`, SIP, chamada presa ao chat) vive na memória de UMA réplica. A saída do Kafka e

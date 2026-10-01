@@ -27,7 +27,7 @@ import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, HTTPException, Request, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .adapters.email import EmailAdapter
@@ -2996,12 +2996,30 @@ async def a2a_interface(slug: str, request: Request) -> JSONResponse:
     caller = a2a_tasks.Caller(sub=p.sub, kind=p.kind, tenant_id=p.tenant_id, pool_id=ep.pool_id,
                               slug=slug)
     try:
+        if isinstance(req, dict) and req.get("method") in a2a_tasks.STREAMING_METHODS:
+            # AAS-07: erro ANTES do stream é JSON-RPC comum; aberto, cada evento é um `data:` SSE
+            # com a resposta JSON-RPC inteira (spec v1.0 § 9.4.2)
+            try:
+                eventos = await _a2a_service().open_stream(caller, req)
+            except a2a_tasks.A2AError as e:
+                return JSONResponse({"jsonrpc": "2.0", "id": req.get("id"), "error": e.as_json()})
+            return StreamingResponse(_a2a_sse(eventos), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
         body = await _a2a_service().handle(caller, req)
     except a2a_tasks.A2AUnavailable as exc:
         # §9 do ADR: chamador de máquina reenvia em laço — back-pressure explícito, nunca 500.
         logger.warning("a2a: contrato do pool %s não conferido (principal %s): %s", ep.pool_id, p.sub, exc)
         return JSONResponse({"error": "unavailable"}, status_code=503, headers={"Retry-After": "5"})
     return JSONResponse(body)
+
+
+async def _a2a_sse(eventos):
+    """Serializa os eventos do adapter em SSE. `None` é batimento (comentário, sem evento)."""
+    async for ev in eventos:
+        if ev is None:
+            yield ": ping\n\n"
+        else:
+            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
 
 _a2a_svc: "a2a_tasks.A2ATaskService | None" = None

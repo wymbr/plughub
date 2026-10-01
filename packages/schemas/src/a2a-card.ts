@@ -97,7 +97,8 @@ export interface AgentCardInput {
  *
  * `extendedAgentCard: false` até o principal existir (AAS-04): o card estendido é o que um
  * principal autenticado vê, e anunciá-lo antes seria prometer uma rota que não responde.
- * `streaming`/`pushNotifications` falsos pela mesma razão (A5 e fora de escopo).
+ * `streaming: true` desde a AAS-07 (`SendStreamingMessage`/`SubscribeToTask` no adapter do
+ * gateway). `pushNotifications` segue falso pela mesma razão do estendido: fora de escopo.
  */
 export function projectAgentCard(input: AgentCardInput): AgentCard {
   const { descriptor: d } = input
@@ -113,7 +114,7 @@ export function projectAgentCard(input: AgentCardInput): AgentCard {
     }],
     version: input.deployedAt,
     capabilities: {
-      streaming:         false,
+      streaming:         true,
       pushNotifications: false,
       extendedAgentCard: false,
       extensions: [{

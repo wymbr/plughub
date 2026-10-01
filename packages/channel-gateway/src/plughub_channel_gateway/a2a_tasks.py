@@ -36,7 +36,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, UnknownType
@@ -75,6 +75,10 @@ CONTEXT_TTL_S      = 30 * 86_400        # validade do contextId = TTL da journey
 TASK_RECORD_TTL_S  = 86_400             # leitura da task depois de nascer (o resultado vive 4 h)
 SESSION_META_TTL_S = 86_400
 POLL_S             = 0.25
+STREAM_CEILING_S   = 600.0              # um stream aberto fecha aqui; o chamador reassina (publicado)
+HEARTBEAT_S        = 15.0               # comentário SSE quando nada acontece
+STREAM_BLOCK_MS    = 1000               # o XREAD acorda nisto, para reler os fatos fora do stream
+STREAMING_METHODS  = frozenset({"SendStreamingMessage", "SubscribeToTask"})
 TEXT, JSON_MT      = "text/plain", "application/json"
 OUR_MODES          = (TEXT, JSON_MT)
 LIST_PAGE_MAX      = 100
@@ -93,11 +97,13 @@ def task_lifetime_extension() -> dict:
     registry que projeta o card, porque é aqui que eles valem: uma cópia lá envelheceria calada."""
     return {
         "uri": TASK_LIFETIME_EXTENSION_URI,
-        "description": ("Prazos da tarefa: teto do SendMessage bloqueante, validade do contextId, e "
-                        "onde ler o prazo de resposta de uma tarefa em INPUT_REQUIRED."),
+        "description": ("Prazos da tarefa: teto do SendMessage bloqueante, teto de um stream aberto "
+                        "(depois dele, SubscribeToTask), validade do contextId, e onde ler o prazo de "
+                        "resposta de uma tarefa em INPUT_REQUIRED."),
         "required": False,
         "params": {
             "blocking_ceiling_s":   BLOCKING_CEILING_S,
+            "stream_ceiling_s":     STREAM_CEILING_S,
             "context_validity_s":   CONTEXT_TTL_S,
             "task_readable_s":      TASK_RECORD_TTL_S,
             "input_deadline_field": "metadata.plughub.input_deadline",
@@ -267,13 +273,17 @@ def menu_answer(payload: dict, text: str, data: Any, has_data: bool) -> Optional
 class A2ATaskService:
     def __init__(self, *, redis: Any, publish: Publisher, fetch_pool: PoolFetcher,
                  write_ctx: CtxWriter, ceiling_s: float = BLOCKING_CEILING_S,
-                 poll_s: float = POLL_S) -> None:
+                 poll_s: float = POLL_S, stream_ceiling_s: float = STREAM_CEILING_S,
+                 heartbeat_s: float = HEARTBEAT_S, block_ms: int = STREAM_BLOCK_MS) -> None:
         self._r = redis
         self._publish = publish
         self._fetch_pool = fetch_pool
         self._write_ctx = write_ctx
         self._ceiling = ceiling_s
         self._poll = poll_s
+        self._stream_ceiling = stream_ceiling_s
+        self._heartbeat = heartbeat_s
+        self._block_ms = block_ms
 
     # chaves do que NÃO é fato da sessão
     @staticmethod
@@ -326,6 +336,155 @@ class A2ATaskService:
             mark = "-"
         task = await self._settle(caller, sid, mark, return_now, want_json, history_length)
         return {"task": task}
+
+    # ── Streaming (AAS-07): SendStreamingMessage e SubscribeToTask, SSE ─────────
+    #
+    # Spec v1.0: a primeira mensagem é o `Task`; depois `statusUpdate`/`artifactUpdate`; o stream
+    # FECHA em estado terminal ou interrompido (§ 3.1.2 e § HTTP "terminal or interrupted"). A
+    # `SubscribeToTask` em task terminal é UnsupportedOperation. Não há campo `final` na v1.0:
+    # quem diz "acabou" é o fechamento.
+    #
+    # O que acorda o laço é o STREAM CANÔNICO (XREAD BLOCK no `session:{sid}:stream`): fala nova do
+    # agente chega na hora. Os fatos que NÃO estão no stream (resultado, `menu:waiting`, meta) são
+    # relidos a cada volta, então aparecem em até um bloqueio (1 s). O estado nunca vem do evento —
+    # é sempre o `_facts`, a mesma dedução do `GetTask`.
+
+    async def open_stream(self, caller: Caller, req: Any) -> AsyncIterator[Optional[dict]]:
+        """Faz o trabalho de ANTES do stream (validar, criar/continuar a task) e devolve o gerador
+        de eventos. Erro aqui levanta `A2AError` — a porta responde JSON-RPC comum, sem SSE."""
+        if not isinstance(req, dict) or req.get("jsonrpc") != "2.0" or not isinstance(req.get("method"), str):
+            raise A2AError(INVALID_REQUEST, "Invalid Request")
+        rid = req.get("id")
+        params = req.get("params") if isinstance(req.get("params"), dict) else {}
+        if req["method"] == "SendStreamingMessage":
+            message = params.get("message")
+            text, data, has_data = read_parts(message)
+            configuration = params.get("configuration") if isinstance(params.get("configuration"), dict) else {}
+            want_json = accepts_json(configuration)
+            history_length = configuration.get("historyLength")
+            task_id = message.get("taskId") if isinstance(message, dict) else None
+            if task_id:
+                sid, mark = await self._continue(caller, str(task_id), message, text, data, has_data)
+            else:
+                sid, mark = await self._create(caller, message, text, data, has_data), "-"
+        elif req["method"] == "SubscribeToTask":
+            sid = str(params.get("id") or "")
+            if not sid:
+                raise A2AError(INVALID_PARAMS, "id ausente")
+            rec = await self._record(caller, sid)
+            view = await self._facts(caller.tenant_id, sid, rec)
+            if view["state"] in TERMINAL:
+                raise A2AError(UNSUPPORTED, "UnsupportedOperationError",
+                               {"detail": f"a task já terminou ({view['state']}); use GetTask"})
+            # já interrompida: o Task é o primeiro evento e o stream fecha logo — é o estado que
+            # pede ação do chamador, não há o que esperar do lado de cá
+            mark, want_json, history_length = "-", True, params.get("historyLength")
+        else:
+            raise A2AError(METHOD_NOT_FOUND, "Method not found", {"method": req["method"]})
+        rec = await self._record(caller, sid)
+        return self._events(caller, rid, sid, rec, mark, want_json, history_length)
+
+    async def _events(self, caller: Caller, rid: Any, sid: str, rec: dict, mark: str, want_json: bool,
+                      history_length: Any) -> AsyncIterator[Optional[dict]]:
+        t = caller.tenant_id
+
+        def wrap(result: dict) -> dict:
+            return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+        def fecha(v: dict) -> bool:
+            novo = mark == "-" or v["last_stream_id"] != mark
+            return v["state"] in TERMINAL or (v["state"] in INTERRUPTED and novo)
+
+        cursor = await self._stream_cursor(sid)
+        view = await self._facts(t, sid, rec)
+        yield wrap({"task": self._task_json(sid, rec, view, want_json, history_length)})
+        enviados = {m["id"] for m in view["agent_msgs"]}
+        vistos: set[str] = set()                   # fala nova vista num ciclo, à espera de sair
+        estado = view["state"]
+        if fecha(view):
+            return
+        inicio = ultimo = time.monotonic()
+        while True:
+            if time.monotonic() - inicio >= self._stream_ceiling:
+                # o chamador reassina (`SubscribeToTask`); fechar no teto é publicado no card
+                logger.info("a2a: stream da task %s fechado no teto de %.0fs (estado %s)",
+                            sid, self._stream_ceiling, estado)
+                return
+            cursor = await self._wait(sid, cursor)
+            view = await self._facts(t, sid, rec)
+            task = self._task_json(sid, rec, view, want_json, None)
+            final = fecha(view)
+            emitiu = False
+            novos = [m for m in view["agent_msgs"] if m["id"] not in enviados]
+            if final and view["state"] in INTERRUPTED and novos:
+                # a última fala de uma task INTERROMPIDA é o prompt, que vai NO status — não duas vezes
+                novos = novos[:-1]
+            elif not final:
+                # Fala nova só sai como progresso depois de SOBREVIVER a um ciclo sem a task
+                # interromper. Medido ao vivo: o `notification_send` grava o prompt no stream e o
+                # engine só marca `menu:waiting` logo depois; acordado pelo prompt, o laço via a task
+                # WORKING com fala nova e o mandava como progresso — e de novo no INPUT_REQUIRED.
+                # Custo: até um bloqueio (1 s) de atraso na fala que NÃO é prompt.
+                prontos = [m for m in novos if m["id"] in vistos]
+                vistos.update(m["id"] for m in novos)
+                novos = prontos
+            for m in novos:
+                yield wrap({"statusUpdate": {
+                    "taskId": sid, "contextId": rec["context_id"],
+                    "status": {"state": WORKING, "timestamp": _now(),
+                               "message": self._agent_message(sid, rec, m, want_json)}}})
+                enviados.add(m["id"])
+                emitiu = True
+            if final and view["state"] == COMPLETED and task.get("artifacts"):
+                for art in task["artifacts"]:
+                    yield wrap({"artifactUpdate": {"taskId": sid, "contextId": rec["context_id"],
+                                                   "artifact": art, "append": False, "lastChunk": True}})
+                emitiu = True
+            if final or view["state"] != estado:
+                yield wrap({"statusUpdate": {"taskId": sid, "contextId": rec["context_id"],
+                                             "status": task["status"], "metadata": task["metadata"]}})
+                enviados.update(m["id"] for m in view["agent_msgs"])
+                estado = view["state"]
+                emitiu = True
+            if final:
+                return
+            if emitiu:
+                ultimo = time.monotonic()
+            elif time.monotonic() - ultimo >= self._heartbeat:
+                yield None                                  # comentário SSE: mantém proxy acordado
+                ultimo = time.monotonic()
+
+    async def _stream_cursor(self, sid: str) -> str:
+        try:
+            ult = await self._r.xrevrange(f"session:{sid}:stream", "+", "-", count=1)
+        except Exception:                                   # noqa: BLE001 — sem cursor, lê do começo
+            ult = []
+        return _s(ult[0][0]) if ult else "0-0"
+
+    async def _wait(self, sid: str, cursor: str) -> str:
+        """Bloqueia até entrada nova no stream canônico ou o fim do bloqueio. Devolve o cursor."""
+        try:
+            res = await self._r.xread({f"session:{sid}:stream": cursor}, block=self._block_ms, count=100)
+        except Exception as exc:                            # noqa: BLE001 — degrada para sondagem, dito
+            logger.warning("a2a: XREAD do stream da task %s falhou (%s) — sondando", sid, exc)
+            await asyncio.sleep(self._poll)
+            return cursor
+        if res:
+            entries = res[0][1]
+            if entries:
+                return _s(entries[-1][0])
+        return cursor
+
+    def _agent_message(self, sid: str, rec: dict, m: dict, want_json: bool) -> dict:
+        parts: list[dict] = [{"text": m["text"]}] if m["kind"] == "text" else [{"text": render_prompt(m["payload"])}]
+        if m["kind"] == "menu":
+            schema = response_schema(m["payload"])
+            if want_json and schema is not None:
+                parts.append({"data": {"menu_id": m["payload"].get("menu_id"),
+                                       "interaction": m["payload"].get("interaction"),
+                                       "response_schema": schema}, "mediaType": JSON_MT})
+        return {"messageId": m["id"], "contextId": rec["context_id"], "taskId": sid,
+                "role": "ROLE_AGENT", "parts": parts}
 
     async def _create(self, caller: Caller, message: dict, text: str, data: Any, has_data: bool) -> str:
         t = caller.tenant_id

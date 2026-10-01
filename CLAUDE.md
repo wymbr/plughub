@@ -1021,8 +1021,9 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   **tenant é o da credencial** — nunca de corpo, query ou header (ADR A2A, D7). A porta
   `POST /a2a/{slug}` autentica ANTES de revelar o slug e confere `allowed_pools`; a execução
   (AAS-06, `a2a_tasks.py`) entra ATRÁS dela, e task e `contextId` são do principal que os criou
-  (alheio e inexistente têm a mesma resposta). Gates: `probe_aas04_a2a_principal.sh`,
-  `probe_aas06_a2a_tasks.sh`.
+  (alheio e inexistente têm a mesma resposta). Desde a AAS-07 também por SSE
+  (`SendStreamingMessage`/`SubscribeToTask`, fecha em terminal ou interrompido). Gates:
+  `probe_aas04_a2a_principal.sh`, `probe_aas06_a2a_tasks.sh`, `probe_aas07_a2a_stream.sh`.
 - **Toda rota de serviço Python tem UMA linha em `infra/test/route_credential_baseline.tsv`** (AUT-58):
   `fechada`, `guard_corpo:<g>` (conferido no código), `isenta` com motivo, ou `divida:<ficha>`. Quem
   mede é uma varredura ANÔNIMA ao vivo, não a leitura do código — o código não mostra guard que falha
