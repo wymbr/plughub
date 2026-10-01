@@ -483,12 +483,16 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         # daqui vai à dona.
         self._relay: Any | None = None
         self._owned: set[str]   = set()
+        # VOZ-11: a conexão do cliente com a chamada, para refazer teto e degradação quando a
+        # mudança chega por fora do laço dela (capacidade do atendente, trilha do SFU).
+        self._customer_ws: dict[str, Any] = {}
 
     # ── WCH-12: posse da chamada entre réplicas ───────────────────────────────
 
     def attach_relay(self, relay: Any) -> None:
         self._relay = relay
         relay.on("livekit", self._livekit_forwarded)
+        relay.on("media_changed", self._media_changed_forwarded)
 
     def holds_call(self, session_id: str) -> bool:
         """Esta instância segura a chamada da sessão (sala, bot leg, fila de fala)."""
@@ -514,6 +518,32 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
     async def _renew_call(self, session_id: str) -> None:
         if self._relay is not None and session_id in self._owned:
             await self._relay.renew(session_id)
+
+    async def _media_changed_forwarded(self, envelope: dict) -> None:
+        await self._media_changed(envelope.get("session_id", ""), envelope.get("reason", ""),
+                                  forwarded=True)
+
+    async def _media_changed(self, session_id: str, reason: str, *, forwarded: bool = False) -> None:
+        """VOZ-11 — algo mudou fora do laço da chamada (a capacidade do atendente): refaz teto e
+        degradação na réplica que SEGURA a conexão do cliente. Sem chamada viva, nada a aplicar —
+        o próximo cálculo (entrada de atendente, início da chamada) já lê o estado novo."""
+        if not session_id:
+            return
+        ws = self._customer_ws.get(session_id)
+        if session_id in self._owned and ws is not None:
+            state = await self._load_media_state(session_id)
+            await self._apply_customer_ceiling(ws, session_id, state, reason)
+            return
+        if forwarded or self._relay is None:
+            logger.info("webrtc media: %s sem chamada viva nesta replica (session=%s) — aplica no "
+                        "proximo calculo", reason, session_id)
+            return
+        dona = await self._relay.owner(session_id)
+        if dona and dona != self._relay.instance_id:
+            await self._relay.forward(dona, session_id, {"kind": "media_changed", "reason": reason})
+        else:
+            logger.info("webrtc media: %s sem chamada viva (session=%s) — aplica no proximo calculo",
+                        reason, session_id)
 
     async def _livekit_forwarded(self, envelope: dict) -> None:
         await self.on_livekit_event(envelope.get("event", ""), envelope.get("room", ""),
@@ -1458,6 +1488,12 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         state["customer"] = self._customer_state(
             state, publish, f"attendant_joined:{record['framework'] or 'unknown'}", session_id,
         )
+        # VOZ-11 (fatia d): a primeira atribuição não passa por `_apply_customer_ceiling` — sem
+        # isto, a IA SOZINHA numa chamada (o caso mais comum de degradação) nunca seria dita.
+        # O aviso ao cliente sai DEPOIS do `webrtc.ready`: antes dele o cliente leria "seu vídeo
+        # não é recebido" de uma chamada que ainda não existe.
+        self._customer_ws[session_id] = ws
+        avisos = await self._reconcile_degradations(ws, session_id, state, publish, defer_notice=True)
         # A decisão da VOZ vem ANTES de `_customer_media`, sem `await` entre as duas: a primeira
         # fala da IA chega junto desta atribuição (fatia 3), e ao ver `_customer_media` sem a
         # decisão ela a lia como "sem voz" e era descartada. Medido ao vivo na fatia 4: aviso e
@@ -1484,6 +1520,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                 disparar(self._start_voice(session_id, room_name),
                          nome=f"webrtc-voz-start-{session_id[:8]}")
             self._recording_follow(session_id, state)
+            for d in avisos:
+                await self._notify_customer(ws, session_id, d)
             return
         try:
             await self._provider.create_room(room_name)
@@ -1510,6 +1548,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             "webrtc ready: session=%s publish=%s sources=%s room=%s",
             session_id, state["customer"]["publish"], state["customer"]["policy_sources"], room_name,
         )
+        for d in avisos:
+            await self._notify_customer(ws, session_id, d)
 
         if self._bot_leg_should_run(state, publish):
             disparar(
@@ -1612,6 +1652,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         publish = self._ceiling(state, session_id)
         previous = (state.get("customer") or {}).get("publish")
         new_list = media_policy.kinds_list(publish)
+        self._customer_ws[session_id] = ws
+        await self._reconcile_degradations(ws, session_id, state, publish)
         self._recording_follow(session_id, state)
         # O bot leg segue os ATENDENTES, não o teto: entra com o primeiro atendente de áudio e
         # sai quando não resta nenhum.
@@ -1837,6 +1879,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         session_id: str,
         role:       str,   # "agent" | "supervisor"
         identity:   str,   # agent_type_id or human agent user ID
+        capable:    str | None = None,
     ) -> dict[str, str] | None:
         """
         Issue a LiveKit token for an agent or supervisor joining an active session.
@@ -1865,6 +1908,16 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             return None
 
         state = await self._load_media_state(session_id)
+        capacity = media_policy.parse_capacity(capable)
+        inst = f"human-{identity}"
+        if (role == "agent" and capacity is not None and isinstance(state["attendants"].get(inst), dict)
+                and state["attendants"][inst].get("capacity") != capacity):
+            # VOZ-11 (fatia c): fato do LOGIN (do dispositivo deste turno), nunca do cadastro.
+            state["attendants"][inst]["capacity"] = capacity
+            await self._save_media_state(session_id, state)
+            logger.info("webrtc media: capacidade de %s = %s (session=%s)", inst, capacity, session_id)
+            await self._media_changed(session_id, "attendant_capacity:human")
+            state = await self._load_media_state(session_id)
         if role == "supervisor":
             policy = media_policy.role_policy(media_policy.SUPERVISOR)
             publish, subscribe, hidden = policy.publish, policy.subscribe, policy.hidden
@@ -1921,7 +1974,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         return call.room if call is not None else build_room_name(session_id)
 
     async def on_livekit_event(self, event: str, room: str, participant: dict | None,
-                               *, forwarded: bool = False) -> None:
+                               *, forwarded: bool = False, track: dict | None = None) -> None:
         """Um evento da sala, já com a assinatura conferida pela rota — ou encaminhado pela réplica
         que o recebeu (WCH-12): a chamada SIP vive na memória de quem a abriu."""
         if (not forwarded and self._relay is not None and room not in self._sip_by_room
@@ -1931,6 +1984,9 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                          and parse_sip_participant(room, participant) is not None)):
             if await self._forward_livekit(event, room, participant):
                 return
+        if event in ("track_published", "track_unpublished"):
+            await self._on_track(room, participant, track, event == "track_published")
+            return
         if event == "room_started":
             await self.police_room(room)
         elif event == "participant_joined" and participant:
@@ -1955,6 +2011,178 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             sid = self._sip_by_room.get(room)
             if sid:
                 await self._sip_hangup(sid, "a sala da chamada terminou")
+
+    # ── VOZ-11 (fatia b): o estado REAL de câmera e microfone ─────────────────
+    #
+    # Desligar DESPUBLICA (decisão do dono, 2026-09-30): o webhook do SFU é a fonte única, e o
+    # que o servidor sabe é o que está fluindo — nunca o que o cliente diz. Vale em qualquer
+    # réplica: o estado vai ao Redis e ao stream, nada em memória de chamada.
+
+    _TRACK_SOURCES = {"CAMERA": "video", "MICROPHONE": "audio"}
+
+    async def _session_of_room(self, room: str) -> str:
+        sid = self._sip_by_room.get(room)
+        if sid:
+            return sid
+        if room.startswith("plughub-"):
+            return room[len("plughub-"):]
+        try:
+            sid = str(await self._redis.get(f"channel:sip:room:{room}") or "")
+        except Exception:  # noqa: BLE001
+            sid = ""
+        return "" if sid == "abrindo" else sid
+
+    @staticmethod
+    def _track_role(identity: str, kind: str) -> str:
+        if identity.startswith(CUSTOMER_PREFIXES):
+            return "customer"
+        if identity.startswith("agent-"):
+            return "agent"
+        if identity.startswith("supervisor-"):
+            return "supervisor"
+        if kind.upper() in ("EGRESS", "3"):
+            return ""
+        # A voz da IA é o ATENDENTE falando: conta como mídia do lado do agente. A *linha* da perna
+        # SIP (VOZ-35) é trilha MUDA — não é mídia que fluiu, e contá-la diria "o agente falou" em
+        # toda chamada telefônica. O ouvinte (`bot-`) não publica.
+        if identity.startswith("voz-"):
+            return "agent"
+        if identity.startswith("linha-"):
+            return ""
+        return "bot"
+
+    async def _on_track(self, room: str, participant: dict | None, track: dict | None,
+                        published: bool) -> None:
+        if not participant or not track:
+            return
+        kind = self._TRACK_SOURCES.get(str(track.get("source") or ""))
+        if kind is None:
+            return   # compartilhamento de tela e afins: fora do modelo de câmera/microfone
+        identity = str(participant.get("identity") or "")
+        role = self._track_role(identity, str(participant.get("kind") or ""))
+        session_id = await self._session_of_room(room)
+        if not role or not session_id:
+            if not session_id:
+                logger.info("webrtc trilha: sala %s sem sessao conhecida — %s de %s ignorado",
+                            room, "publicacao" if published else "retirada", identity)
+            return
+        ttl = self._settings.session_ttl_seconds
+        live_key, flowed_key = f"channel:webrtc:{session_id}:live", f"channel:webrtc:{session_id}:flowed"
+        try:
+            raw = await self._redis.hget(live_key, identity)
+            cur = json.loads(raw) if raw else {"role": role, "audio": False, "video": False}
+            cur[kind] = published
+            await self._redis.hset(live_key, identity, json.dumps(cur))
+            await self._redis.expire(live_key, ttl)
+            if published:
+                await self._redis.sadd(flowed_key, f"{role}:{kind}")
+                await self._redis.expire(flowed_key, ttl)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc trilha: estado vivo NAO gravado (session=%s %s %s): %s",
+                           session_id, identity, kind, exc)
+        try:
+            await self._redis.xadd(f"session:{session_id}:stream", {
+                "type":        "media.track",
+                "event_id":    str(uuid.uuid4()),
+                "timestamp":   datetime.now(timezone.utc).isoformat(),
+                "visibility":  "agents_only",
+                "author_id":   "channel-gateway",
+                "author":      json.dumps({"participant_id": "channel-gateway", "role": "system"}),
+                "payload":     json.dumps({"identity": identity, "role": role, "kind": kind,
+                                           "state": "on" if published else "off"}),
+            }, maxlen=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc trilha: media.track NAO foi ao stream (session=%s): %s", session_id, exc)
+
+    async def media_flowed(self, session_id: str) -> dict[str, list[str]]:
+        """O que FLUIU na chamada, por papel — lido pelo registro de fim de chamada (analytics)."""
+        try:
+            members = await self._redis.smembers(f"channel:webrtc:{session_id}:flowed")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc trilha: midia que fluiu ILEGIVEL (session=%s): %s", session_id, exc)
+            return {}
+        out: dict[str, set[str]] = {}
+        for m in members or ():
+            m = m.decode() if isinstance(m, bytes) else str(m)
+            role, _, kind = m.partition(":")
+            if role and kind:
+                out.setdefault(role, set()).add(kind)
+        return {r: sorted(k) for r, k in out.items()}
+
+    # ── VOZ-11 (fatia d): degradação por incapacidade, nomeada ────────────────
+
+    async def _reconcile_degradations(self, ws: Any, session_id: str, state: dict,
+                                      ceiling: frozenset[str], *, defer_notice: bool = False) -> list[dict]:
+        """Compara as degradações de AGORA com as já ditas: a nova vira `media.degraded` no stream
+        (agentes) e, se muda o que o cliente vive, aviso ao cliente; a que acabou vira
+        `media.restored`. Só por INCAPACIDADE — escolha não passa por aqui."""
+        atual = media_policy.degradations(state["attendants"], bot_leg_audio=self._convert_available())
+        antes = {k: d for k, d in ((media_policy.degradation_key(d), d) for d in state.get("degraded") or [])}
+        agora = {media_policy.degradation_key(d): d for d in atual}
+        state["degraded"] = atual
+        adiados: list[dict] = []
+        for key in sorted(agora.keys() - antes.keys()):
+            d = agora[key]
+            await self._record_media_event(session_id, "media.degraded", d)
+            if media_policy.customer_feels(d, state["attendants"], ceiling):
+                # No início da chamada o aviso sai DEPOIS do `webrtc.ready`: antes dele o cliente
+                # leria "seu vídeo não é recebido" de uma chamada que ainda não existe.
+                if defer_notice:
+                    adiados.append(d)
+                else:
+                    await self._notify_customer(ws, session_id, d)
+        for key in sorted(antes.keys() - agora.keys()):
+            # Só quem SEGUE na chamada "voltou a servir"; a degradação de quem saiu some com ele.
+            if antes[key].get("participant") in state["attendants"]:
+                await self._record_media_event(session_id, "media.restored", antes[key])
+        return adiados
+
+    async def _record_media_event(self, session_id: str, kind: str, d: dict) -> None:
+        logger.info("webrtc media: %s %s (session=%s)", kind, d, session_id)
+        try:
+            await self._redis.xadd(f"session:{session_id}:stream", {
+                "type":       kind,
+                "event_id":   str(uuid.uuid4()),
+                "timestamp":  datetime.now(timezone.utc).isoformat(),
+                "visibility": "agents_only",
+                "author_id":  "channel-gateway",
+                "author":     json.dumps({"participant_id": "channel-gateway", "role": "system"}),
+                "payload":    json.dumps(d),
+            }, maxlen=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc media: %s NAO foi ao stream (session=%s): %s", kind, session_id, exc)
+        try:
+            await self._redis.publish(f"agent:events:{session_id}", json.dumps(
+                {"type": kind, "session_id": session_id, **d}))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc media: %s NAO chegou ao Console (session=%s): %s", kind, session_id, exc)
+
+    async def _notify_customer(self, ws: Any, session_id: str, d: dict) -> None:
+        text = media_policy.CUSTOMER_NOTICE.get((d.get("direction", ""), d.get("kind", "")))
+        if not text:
+            return
+        message_id = str(uuid.uuid4())
+        await self._ws_send(ws, {"type": "webrtc.notice", "reason": d.get("reason"),
+                                 "kind": d.get("kind"), "text": text})
+        # O aviso também é fato do stream (o histórico do Console é projeção dele, ALW-18).
+        try:
+            await self._redis.xadd(f"session:{session_id}:stream", {
+                "event_id":    message_id,
+                "type":        "system_notice",
+                "timestamp":   datetime.now(timezone.utc).isoformat(),
+                "author_id":   "channel-gateway",
+                "author_role": "system",
+                "author":      json.dumps({"participant_id": "channel-gateway",
+                                           "instance_id": "channel-gateway", "role": "system"}),
+                "visibility":  json.dumps("all"),
+                "segment_id":  "",
+                "payload":     json.dumps({"message_id": message_id,
+                                           "content": {"type": "text", "text": text}},
+                                          ensure_ascii=False),
+            }, maxlen=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("webrtc media: aviso ao cliente NAO foi ao stream (session=%s): %s",
+                           session_id, exc)
 
     async def police_room(self, room: str) -> bool:
         """CONTROLE COMPENSATÓRIO do `auto_create` (VOZ-02, decisão do dono em 2026-09-18).
@@ -2134,6 +2362,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._close_fired.add(session_id)
         self._end_collect(session_id, "sessao encerrada", "session_closed")
         info = self._sessions.pop(session_id, {})
+        self._customer_ws.pop(session_id, None)
         self._menu_masked.pop(session_id, None)
         self._menu_plans.pop(session_id, None)
         self._screen_invalids.pop(session_id, None)

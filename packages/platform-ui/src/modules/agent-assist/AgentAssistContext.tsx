@@ -576,6 +576,16 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return;
     }
 
+    // ── VOZ-11 (fatia d): degradação de mídia por incapacidade, dita ─────
+    if (event.type === "media.degraded" || event.type === "media.restored") {
+      const kind = t(`mediaDegradation.kind.${event.kind}`);
+      const msg = event.type === "media.degraded"
+        ? t(`mediaDegradation.${event.reason}`, { kind, participant: event.participant })
+        : t("mediaDegradation.restored", { kind, participant: event.participant });
+      addToast(msg, event.type === "media.degraded" ? "warning" : "info");
+      return;
+    }
+
     // ── AI typing indicator ───────────────────────────────────────────────
     if (event.type === "agent.typing" && event.author_type === "agent_ai") {
       const sid = (event as unknown as Record<string, unknown>)["session_id"] as string | undefined;

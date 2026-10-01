@@ -190,6 +190,77 @@ def agent_ceiling(attendants: dict[str, dict]) -> frozenset[str]:
     return frozenset(k for k in out if k in KINDS)
 
 
+# VOZ-11 (fatia d) — degradação por INCAPACIDADE, nunca por escolha.
+#
+# Câmera e microfone desligados são ESCOLHA do participante (modelo de videoconferência, decisão do
+# dono em 2026-09-30) e não aparecem aqui: esta regra só compara o que a POLÍTICA oferece com o que
+# o atendente CONSEGUE. Dois sentidos:
+#   to_attendant — o cliente poderia mandar a mídia (o pool oferece), e ESTA perna não a consome:
+#                  IA de texto numa chamada de vídeo, ou IA sem bot leg numa chamada de áudio.
+#   to_customer  — o pool oferece ao humano publicar a mídia, e o dispositivo dele não tem
+#                  (capacidade DEDUZIDA no navegador, `capacity`; ausente = não sabido, sem queixa).
+REASON_CANNOT_CONSUME = "attendant_cannot_consume"
+REASON_BOT_LEG        = "bot_leg_unavailable"
+REASON_NO_DEVICE      = "attendant_no_device"
+TO_ATTENDANT = "to_attendant"
+TO_CUSTOMER  = "to_customer"
+
+
+def degradations(attendants: dict[str, dict], bot_leg_audio: bool = False) -> list[dict]:
+    """Cada perna que não serve uma mídia que a política oferece — ordenado e sem repetição."""
+    out: list[dict] = []
+    for inst in sorted(attendants):
+        a = attendants[inst] if isinstance(attendants[inst], dict) else {}
+        fw = a.get("framework", "")
+        consumes = attendant_consumes(fw, bot_leg_audio)
+        for kind in KINDS:
+            if kind in (a.get("customer_publish") or []) and kind not in consumes:
+                reason = (REASON_BOT_LEG if kind == AUDIO and fw in AI_FRAMEWORKS and not bot_leg_audio
+                          else REASON_CANNOT_CONSUME)
+                out.append({"participant": inst, "framework": fw, "kind": kind,
+                            "direction": TO_ATTENDANT, "reason": reason})
+        capacity = a.get("capacity")
+        if fw == "human" and isinstance(capacity, list):
+            for kind in KINDS:
+                if kind in (a.get("agent_publish") or []) and kind not in capacity:
+                    out.append({"participant": inst, "framework": fw, "kind": kind,
+                                "direction": TO_CUSTOMER, "reason": REASON_NO_DEVICE})
+    return out
+
+
+def degradation_key(d: dict) -> str:
+    return f"{d.get('participant')}|{d.get('direction')}|{d.get('kind')}"
+
+
+def customer_feels(d: dict, attendants: dict[str, dict], ceiling: frozenset[str]) -> bool:
+    """A degradação muda o que o CLIENTE vive? Só aí ele é avisado (decisão do dono: agentes e
+    cliente). A perna de IA que não vê o vídeo, com um humano que vê, não tira nada do cliente."""
+    if d.get("direction") == TO_ATTENDANT:
+        return d.get("kind") not in ceiling
+    others = [x for i, x in attendants.items()
+              if i != d.get("participant") and isinstance(x, dict) and x.get("framework") == "human"
+              and d.get("kind") in (x.get("agent_publish") or [])
+              and d.get("kind") in (x.get("capacity") or [])]
+    return not others
+
+
+# Texto da PLATAFORMA ao cliente — neutro, nunca inventado por fluxo. Por sentido e mídia.
+CUSTOMER_NOTICE: dict[tuple[str, str], str] = {
+    (TO_ATTENDANT, VIDEO): "Seu vídeo não é recebido neste atendimento. A conversa segue pelo que estiver disponível.",
+    (TO_ATTENDANT, AUDIO): "Sua voz não é recebida neste atendimento. Continue pelo chat.",
+    (TO_CUSTOMER, VIDEO):  "O atendente está sem câmera. A conversa segue por áudio.",
+    (TO_CUSTOMER, AUDIO):  "O atendente está sem microfone. A conversa segue por texto.",
+}
+
+
+def parse_capacity(raw: str | None) -> list[str] | None:
+    """`capable` da rota de token: o que o NAVEGADOR do atendente achou de dispositivo.
+    Ausente → None (cliente antigo: não sabido, nenhuma queixa); presente → só tipos conhecidos."""
+    if raw is None:
+        return None
+    return sorted({k.strip() for k in raw.split(",") if k.strip() in KINDS})
+
+
 def policy_sources(attendants: dict[str, dict]) -> list[str]:
     """Procedência de cada atendente, ordenada — para o estado e para a mensagem."""
     return sorted({a.get("policy_source", "") for a in attendants.values() if a.get("policy_source")})

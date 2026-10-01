@@ -1,5 +1,78 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (1) — VOZ-11 fatias b, c e d: o estado real de mídia vem do SFU, e só a incapacidade é dita
+
+**O modelo, decidido com o dono em 2026-09-30:** videoconferência. Câmera e microfone desligados são
+**escolha** do participante, inclusive do cliente, e nunca viram degradação. O que se nomeia é a
+**incapacidade**. Três camadas: **teto** (política do pool ∩ o que os atendentes consomem, imposto no
+SFU), **escolha** (o que cada um liga dentro do teto) e **estado real** (o que está fluindo).
+
+**(b) Estado real pelo SFU.**
+- **Desligar DESPUBLICA** (decisão do dono): o SFU não avisa mute, então o que o servidor sabe tem de
+  ser o que flui. Vale no Console (`toggleKind`) e nos dois widgets de demo.
+- O webhook `/v1/livekit/webhook` passou a levar a trilha (`source`), e `_on_track` grava:
+  - `channel:webrtc:{sid}:live`, o agora por identidade;
+  - `channel:webrtc:{sid}:flowed`, o que fluiu alguma vez;
+  - `media.track` no stream (`agents_only`).
+- Tela e gravador ficam fora. A voz da IA conta como o atendente falando; a *linha* muda da perna SIP
+  não conta. Sem isso, toda chamada telefônica diria "o agente falou".
+- O fim da chamada do chat leva `customer_flowed`/`agent_flowed` a `media.calls` →
+  `call_intervals`, com a migração aditiva aplicada ao vivo.
+
+**(c) Capacidade do humano, deduzida no navegador.**
+- O Console enumera os dispositivos e manda `capable` no pedido de token. O gateway grava no atendente
+  e recalcula.
+- Ausente (Console antigo) significa **não sabido**, e nenhuma queixa nasce daí.
+- **Defeito achado:** o Console criava câmera e microfone **juntos**, e um navegador sem câmera recusava
+  os dois. O atendente não entrava na chamada nem por áudio. Hoje é uma trilha por vez. O widget avulso
+  ganhou o mesmo recuo para só áudio.
+
+**(d) Incapacidade dita.**
+- `media_policy.degradations` compara o que o pool oferece com o que cada atendente consegue:
+  - IA não consome vídeo;
+  - IA sem bot leg não ouve;
+  - humano sem o dispositivo.
+- A diferença para o já dito vira `media.degraded`/`media.restored` (stream `agents_only` e toast no
+  Console). Quem **saiu** não "volta a servir".
+- O cliente só é avisado quando a chamada **dele** muda, isto é, quando nenhum outro atendente cobre
+  a mídia. O aviso vai por `webrtc.notice` com texto neutro e por `system_notice` no stream (o
+  histórico).
+- **Ordem:** o aviso sai **depois** do `webrtc.ready`. Antes dele, o cliente leria "seu vídeo não é
+  recebido" de uma chamada que ainda não existia. Foi o vermelho de dois testes antigos de sequência,
+  e o conserto foi a ordem, não o teste.
+
+**Ao vivo** (`probe_voz11_media_degradation.sh`, novo, no manifesto), pool de IA que oferece vídeo:
+- `webrtc.notice` de vídeo no frame seguinte ao `webrtc.ready`;
+- `media.degraded` de vídeo `agents_only` e `system_notice` no stream;
+- o microfone publicado pelo cliente virou `media.track` customer/audio/on pelo webhook;
+- **controle** em pool só-áudio: zero avisos e zero `media.degraded`, com `media.track` lidos como
+  testemunha de que o stream foi lido;
+- fora do probe, uma verificação de fala agendada registrou `media.track` do cliente e da voz, com
+  `live` e `flowed` preenchidos.
+
+**Testes e verificação:**
+- **Testes:** channel-gateway 1502, analytics-api 897; o build do platform-ui (tsc) passou.
+- **Contraprovas**, todas vermelhas:
+  - capacidade humana ignorada;
+  - compartilhar tela contado como câmera;
+  - aviso antes do `ready`;
+  - "voltou a servir" para quem saiu;
+  - fim de chamada sem o que fluiu.
+- **Gates verdes:** `probe_wch01_chat_call`, `probe_webrtc_media_plane`, `probe_i18n_duplicate_keys`,
+  `probe_ui_color_scale_classes`, `probe_task_ledger`.
+
+**Um falso alarme medido, que vale registrar:** o `probe_voz39_recording_badge` ficou vermelho em
+ramos diferentes a cada rodada. O watcher de gravação não disparava e o contato não fechava. Um A/B
+contra a imagem do HEAD passou. A causa estava fora do código: o log do gateway **e** o do
+routing-engine têm as mesmas lacunas (15 min, 37 min, 5 h), e era a máquina suspensa enquanto o
+probe rodava em segundo plano. Com a máquina acordada, o resultado foi igual ao do HEAD. O B0
+INCONCLUSIVO do modo "aborta" acontece **também no HEAD** e foi anotado na `VOZ-52`.
+
+**Fora desta entrega (fichas):**
+- gravação e avaliação lerem o que fluiu: `VOZ-53`;
+- bot leg que cai com a chamada de pé: `VOZ-54`;
+- preferência de mídia no roteamento: `VOZ-51`.
+
 ## 2026-09-30 (19) — VOZ-11 fatia a: a saída do atendente é reconhecida, e a IA passa a sair do conjunto de mídia
 
 **Redesenho com o dono antes de codar.** A VOZ-11 foi repensada no modelo de videoconferência:

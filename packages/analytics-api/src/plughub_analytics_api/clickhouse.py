@@ -1184,6 +1184,8 @@ CREATE TABLE IF NOT EXISTS {db}.call_intervals
     ended_at         Nullable(DateTime64(3, 'UTC')),
     duration_ms      Nullable(UInt64),
     end_reason       Nullable(String),
+    customer_flowed  Array(String),
+    agent_flowed     Array(String),
     row_version      DateTime64(3, 'UTC') DEFAULT coalesce(ended_at, started_at),
     date             Date
 )
@@ -1191,6 +1193,14 @@ ENGINE = ReplacingMergeTree(row_version)
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, call_id)
 """
+
+# VOZ-11 (fatia b): o que FLUIU de verdade, por papel. Vazio numa linha com `ended_at` = nada
+# fluiu; numa linha sem `ended_at` = a chamada ainda corre (o fim traz o valor).
+_DDL_CALL_INTERVALS_MIGRATE_FLOWED = (
+    "ALTER TABLE {db}.call_intervals"
+    " ADD COLUMN IF NOT EXISTS customer_flowed Array(String) AFTER end_reason,"
+    " ADD COLUMN IF NOT EXISTS agent_flowed Array(String) AFTER customer_flowed"
+)
 
 _DDL_SPEECH_CHECKS = """
 CREATE TABLE IF NOT EXISTS {db}.speech_checks
@@ -1308,6 +1318,7 @@ _ALL_DDL = [
 
 # Migrations applied after CREATE IF NOT EXISTS (idempotent ALTER TABLE statements).
 _MIGRATIONS = [
+    _DDL_CALL_INTERVALS_MIGRATE_FLOWED,   # VOZ-11 (fatia b)
     _DDL_SESSIONS_MIGRATE,
     _DDL_SESSIONS_MIGRATE_ANI_DNIS,
     _DDL_SESSIONS_MIGRATE_SLA,
@@ -1863,7 +1874,7 @@ class AnalyticsStore:
 
     _CALL_INTERVAL_COLS = [
         "tenant_id", "session_id", "call_id", "channel", "pool_id", "customer_publish",
-        "started_at", "ended_at", "duration_ms", "end_reason",
+        "started_at", "ended_at", "duration_ms", "end_reason", "customer_flowed", "agent_flowed",
         # row_version omitido — DEFAULT coalesce(ended_at, started_at)
         "date",
     ]
@@ -1892,6 +1903,7 @@ class AnalyticsStore:
         vals = [row.get("tenant_id"), row.get("session_id"), row.get("call_id"), row.get("channel") or "",
                 row.get("pool_id"), list(row.get("customer_publish") or []),
                 started, _parse_dt(row.get("ended_at")), row.get("duration_ms"), row.get("end_reason"),
+                list(row.get("customer_flowed") or []), list(row.get("agent_flowed") or []),
                 started]
         await asyncio.to_thread(self._insert, "call_intervals", [vals], self._CALL_INTERVAL_COLS)
 

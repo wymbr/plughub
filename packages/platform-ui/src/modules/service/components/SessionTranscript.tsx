@@ -66,7 +66,8 @@ const SYSTEM_TYPES_SET = new Set([
 /** Evento da plataforma, não fala de ninguém. `recording.*` (VOZ-06) caía como mensagem de autor
  *  desconhecido ("INTERNAL UNKNOWN") — é o mesmo tipo de fato que `participant_left`. */
 function isSystemEvent(type: string): boolean {
-  return SYSTEM_TYPES_SET.has(type) || type.startsWith('recording.') || type.startsWith('media.call.')
+  // VOZ-11: `media.track` (câmera/microfone ligados ou desligados) e `media.degraded`/`restored`
+  return SYSTEM_TYPES_SET.has(type) || type.startsWith('recording.') || type.startsWith('media.')
 }
 
 /** WCH-02 — há chamada presa a este contato de chat AGORA? Derivado do stream (o último
@@ -537,6 +538,18 @@ function EntryRow({ e, showEvents, maskingRules }: {
   )
 }
 
+/** VOZ-11 — câmera/microfone (escolha, `media.track`) e degradação por incapacidade. */
+function mediaLabel(e: StreamEntry, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const p = (e.payload ?? {}) as Record<string, unknown>
+  const kind = t(`transcript.media.kind.${String(p['kind'] ?? '')}`)
+  if (e.type === 'media.track') {
+    return t(`transcript.media.track.${p['state'] === 'on' ? 'on' : 'off'}`,
+      { who: t(`transcript.media.role.${String(p['role'] ?? 'bot')}`), kind })
+  }
+  if (e.type === 'media.restored') return t('transcript.media.restored', { kind, who: String(p['participant'] ?? '') })
+  return t(`transcript.media.degraded.${String(p['reason'] ?? '')}`, { kind, who: String(p['participant'] ?? '') })
+}
+
 function EventRow({ e }: { e: StreamEntry }) {
   const { t } = useTranslation('contacts')
   // WCH-02 — a chamada vinda do ClickHouse (contato fechado) traz a duração; a do stream vivo, não
@@ -549,7 +562,9 @@ function EventRow({ e }: { e: StreamEntry }) {
           : t('transcript.call.ended'))
     : e.type === 'media.call.end_requested'
       ? t('transcript.call.endRequested')      // WCH-07: o atendente pediu o fim (o fim vem na linha seguinte)
-      : e.type.replace(/_/g, ' ')
+      : e.type === 'media.track' || e.type === 'media.degraded' || e.type === 'media.restored'
+        ? mediaLabel(e, t)                     // VOZ-11
+        : e.type.replace(/_/g, ' ')
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '6px 0', color: '#475569' }}>
       <span style={{ flex: 1, height: 1, backgroundColor: '#1e293b', display: 'block' }} />

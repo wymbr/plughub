@@ -1150,8 +1150,40 @@ ou do autor, `author_id`, `participant_id` — contra o conjunto registrado; nun
 | `session_escalate` | mcp-server `session.ts` | `instance_id` do token no payload |
 | IA nativa | bridge `_write_participant_left_to_stream` (`agents_only`) | instância em tudo |
 
-O observador para no `session_closed` do stream. O que resta da VOZ-11 (estado real de mídia pelos
-eventos de trilha, capacidade do recurso, fallback nomeado por incapacidade) está no `pending.md`.
+O observador para no `session_closed` do stream. O resto da VOZ-11 está na § 20b.
+
+## 20b. Estado real, capacidade e incapacidade dita (VOZ-11 b, c, d, 2026-10-01)
+
+Modelo de videoconferência, decidido com o dono: três camadas que não se confundem.
+
+| Camada | O que é | Fonte |
+|---|---|---|
+| **teto** | política do pool ∩ o que os atendentes consomem | `media_policy` + `attendants` (VOZ-09/10), imposto no SFU |
+| **escolha** | o que o participante liga dentro do teto | o próprio participante — desligar DESPUBLICA a trilha |
+| **estado real** | o que está fluindo | webhook `track_published`/`track_unpublished` do SFU, e só ele |
+
+**(b) Estado real.** A rota `/v1/livekit/webhook` passa a trilha (`source` CAMERA/MICROPHONE; tela e
+egress ficam fora) a `_on_track`, que grava `channel:webrtc:{sid}:live` (identidade → áudio/vídeo
+agora), `channel:webrtc:{sid}:flowed` (`papel:tipo` que fluiu alguma vez) e `media.track` no stream
+(`agents_only`). Papéis: `customer`/`sip` → cliente · `agent-`/`voz-` → atendente (a voz da IA é o
+atendente falando) · `supervisor-` · a *linha* SIP muda não conta. O fim da chamada do chat leva
+`customer_flowed`/`agent_flowed` a `call_intervals`. O SFU não avisa mute: por isso desligar é
+despublicar, no Console (`toggleKind`) e nos dois widgets.
+
+**(c) Capacidade do humano.** O Console enumera os dispositivos e manda `&capable=audio,video` no
+pedido de token; o gateway grava em `attendants[human-{sub}].capacity` e recalcula teto e
+degradação. Ausente (Console antigo) = não sabido, nunca queixa. As trilhas são criadas UMA a UMA:
+pedir câmera e microfone juntos fazia o navegador sem câmera recusar tudo, e o atendente não entrava.
+
+**(d) Incapacidade dita.** `media_policy.degradations` compara o que o pool oferece com o que cada
+atendente consegue: IA não consome vídeo (`attendant_cannot_consume`), IA sem bot leg não ouve
+(`bot_leg_unavailable`), humano sem o dispositivo (`attendant_no_device`, sentido `to_customer`).
+A diferença para o já dito vira `media.degraded`/`media.restored` (stream `agents_only` + Console);
+quem SAIU não "volta a servir". O cliente só ouve quando a chamada DELE muda (`customer_feels`:
+nenhum outro atendente cobre a mídia) — `webrtc.notice` com texto neutro e `system_notice` no
+stream, sempre DEPOIS do `webrtc.ready`. Fica de fora (fichas próprias): gravação e avaliação lendo o
+que fluiu (`VOZ-53`) e bot leg que cai com a chamada de pé (`VOZ-54`). Preferência no roteamento:
+`VOZ-51`. Gate: `infra/test/probe_voz11_media_degradation.sh`.
 
 ## 21. A chamada tem DONA entre réplicas (WCH-12, 2026-09-24)
 

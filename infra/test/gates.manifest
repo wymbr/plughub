@@ -424,6 +424,11 @@ probe_voz06_recording.sh
 # VOZ-44: nos B* o cliente ENTRA na sala e publica um tom; L2 a parte foi CONFIRMADA pelo SFU antes da
 # faixa · E1 cliente sem midia: a faixa NAO acende em 45 s · E2 o gateway diz que nao confirmou. ~3 min.
 probe_voz39_recording_badge.sh
+# VOZ-11 (2026-10-01): incapacidade de midia dita, estado real pelo SFU. Pool de IA que oferece
+# VIDEO: D1 `webrtc.notice` de video DEPOIS do `webrtc.ready` · D2 `media.degraded` agents_only +
+# `system_notice` no stream · T1 o microfone publicado vira `media.track` (webhook de trilha) ·
+# N1 controle so-audio: nada dito, com `media.track` lido como testemunha. ~2 min.
+probe_voz11_media_degradation.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro

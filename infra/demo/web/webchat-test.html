@@ -128,6 +128,8 @@
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <div style="font-size:11px;opacity:.7" id="session-label"></div>
+      <button id="mic-btn" class="call-btn" onclick="toggleKindCall('audio')" style="display:none" title="Microfone">🎙</button>
+      <button id="cam-btn" class="call-btn" onclick="toggleKindCall('video')" style="display:none" title="Câmera">🎥</button>
       <button id="call-btn" class="call-btn" onclick="toggleCall()" disabled>📞 Ligar</button>
     </div>
   </div>
@@ -183,6 +185,9 @@
   // esta sessão. O texto continua por aqui; a queda da chamada não encerra o chat.
   const CALL_URL   = 'ws://localhost:8010/ws/call';
   let chatToken = null, callWs = null, callRoom = null, callTracks = [];
+  // VOZ-11: o que o teto permite publicar agora (muda com `webrtc.media`). Câmera e microfone
+  // são ESCOLHA do cliente: desligar DESPUBLICA a trilha, e o servidor lê o estado real do SFU.
+  let callPub = [];
   // WCH-13 — UM elemento de áudio por trilha. `track.attach()` sem argumento CRIA um
   // elemento novo a cada chamada, e o evento de assinatura pode vir mais de uma vez para a
   // mesma trilha (o SFU reavalia a assinatura quando a permissão do participante muda — e ela
@@ -292,6 +297,11 @@
         addMsg('📞 Nenhum atendente com áudio agora — a chamada começa quando houver.', 'sys');
       } else if (m.type === 'webrtc.ready') {
         await joinCall(m);
+      } else if (m.type === 'webrtc.media') {
+        callPub = m.publish || [];                 // o teto mudou (entrou ou saiu atendente)
+        refreshKindButtons();
+      } else if (m.type === 'webrtc.notice') {
+        addMsg('⚠ ' + (m.text || ''), 'sys');       // VOZ-11: degradação por incapacidade, dita
       } else if (m.type === 'webrtc.message') {
         addMsg(m.text || '', 'sys');                // aviso de gravação e afins
       } else if (m.type === 'webrtc.recording') {
@@ -332,11 +342,49 @@
     });
     await callRoom.connect(m.livekit_url, m.token);
     const pub = m.publish || [];
-    if (pub.length) {
-      callTracks = await LK.createLocalTracks({ audio: pub.includes('audio'), video: pub.includes('video') });
-      for (const t of callTracks) await callRoom.localParticipant.publishTrack(t);
+    callPub = pub;
+    // Uma trilha por tipo: sem câmera, o microfone ainda entra (pedir os dois juntos fazia o
+    // navegador recusar tudo).
+    for (const kind of ['audio', 'video']) {
+      if (pub.includes(kind)) await publishKind(kind);
     }
-    addMsg('📞 Em chamada (' + (pub.join('+') || 'só ouvindo') + ')', 'sys');
+    refreshKindButtons();
+    addMsg('📞 Em chamada (' + (callTracks.map(t => t.kind).join('+') || 'só ouvindo') + ')', 'sys');
+  }
+
+  async function publishKind(kind) {
+    const LK = window.LivekitClient;
+    try {
+      const [t] = await LK.createLocalTracks(kind === 'audio' ? { audio: true } : { video: true });
+      if (!t) return;
+      await callRoom.localParticipant.publishTrack(t);
+      callTracks.push(t);
+    } catch (err) {
+      console.warn('[call] ' + kind + ' indisponível neste navegador', err);
+    }
+  }
+
+  async function toggleKindCall(kind) {
+    if (!callRoom) return;
+    const t = callTracks.find(x => x.kind === kind);
+    if (t) {
+      await callRoom.localParticipant.unpublishTrack(t);
+      try { t.stop(); } catch {}
+      callTracks = callTracks.filter(x => x !== t);
+    } else if (callPub.includes(kind)) {
+      await publishKind(kind);
+    }
+    refreshKindButtons();
+  }
+
+  function refreshKindButtons() {
+    for (const [kind, id] of [['audio', 'mic-btn'], ['video', 'cam-btn']]) {
+      const b = document.getElementById(id);
+      const on = callTracks.some(x => x.kind === kind);
+      b.style.display = callRoom && callPub.includes(kind) ? '' : 'none';
+      b.classList.toggle('on', on);
+      b.style.opacity = on ? '1' : '.5';
+    }
   }
 
   function hangupCall() {
@@ -362,6 +410,8 @@
     setRecording('stopped');
     for (const t of callTracks) { try { t.stop(); } catch {} }
     callTracks = [];
+    callPub = [];
+    for (const id of ['mic-btn', 'cam-btn']) document.getElementById(id).style.display = 'none';
     if (callRoom) { try { callRoom.disconnect(); } catch {} callRoom = null; }
     for (const el of callAudioEls.values()) { try { el.remove(); } catch {} }
     callAudioEls.clear();

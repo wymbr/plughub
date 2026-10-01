@@ -818,9 +818,13 @@ class TestWebRTCAdapterMediaCeiling:
         await self.adapter._on_routing_assigned(self.ws, self.session_id, _assigned("native", "ia1"), self.settings)
         await self.adapter._on_routing_renegotiate(self.ws, self.session_id, _assigned("human", "h1"), self.settings)
         await self.adapter._on_attendant_left(self.ws, self.session_id, {"type": "participant_left", "author_id": "h1"})
+        # VOZ-11 (d): a IA de texto sozinha num pool de vídeo é incapacidade dita ao cliente,
+        # uma vez (áudio e vídeo) e logo após o `webrtc.ready`; o resto da sequência é o teto.
         tipos = [m["type"] for m in self.ws.sent_messages]
-        assert tipos == ["webrtc.ready", "webrtc.media", "webrtc.media"]
-        subiu, caiu = self.ws.sent_messages[1], self.ws.sent_messages[2]
+        assert tipos[:3] == ["webrtc.ready", "webrtc.notice", "webrtc.notice"]
+        teto = [m for m in self.ws.sent_messages if m["type"] != "webrtc.notice"]
+        assert [m["type"] for m in teto] == ["webrtc.ready", "webrtc.media", "webrtc.media"]
+        subiu, caiu = teto[1], teto[2]
         assert subiu["publish"] == ["audio", "video"] and subiu["reason"] == "attendant_joined:human"
         assert caiu["publish"] == [] and caiu["reason"] == "attendant_left:human"
         assert caiu["token"]      # token novo para quem ainda vai entrar

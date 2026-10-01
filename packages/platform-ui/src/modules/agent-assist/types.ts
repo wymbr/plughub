@@ -168,9 +168,25 @@ export interface WsMediaCall {
   timestamp?: string;
 }
 
+/**
+ * VOZ-11 (fatia d) — uma perna da chamada não serve uma mídia que a política oferece, por
+ * INCAPACIDADE (nunca por escolha): IA que não consome vídeo, IA sem bot de voz, atendente sem
+ * câmera. `media.restored` é o fim dela. O gateway publica em `agent:events:{sid}`.
+ */
+export interface WsMediaDegradation {
+  type:        "media.degraded" | "media.restored";
+  session_id:  string;
+  participant: string;
+  framework:   string;
+  kind:        "audio" | "video";
+  direction:   "to_attendant" | "to_customer";
+  reason:      "attendant_cannot_consume" | "bot_leg_unavailable" | "attendant_no_device";
+}
+
 export type WsServerEvent =
   | WsConnectionAccepted
   | WsMediaCall
+  | WsMediaDegradation
   | WsMessageText
   | WsMenuRender
   | WsAgentTyping

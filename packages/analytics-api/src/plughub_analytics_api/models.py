@@ -784,6 +784,9 @@ def parse_media_call_event(payload: dict[str, Any]) -> dict | None:
         "ended_at": payload.get("ended_at") if ended else None,
         "duration_ms": int(dur) if ended and dur is not None else None,
         "end_reason": (payload.get("end_reason") or "unknown") if ended else None,
+        # VOZ-11 (fatia b): só o FIM sabe o que fluiu; só tipos conhecidos atravessam
+        "customer_flowed": [m for m in (payload.get("customer_flowed") or []) if m in ("audio", "video")] if ended else [],
+        "agent_flowed":    [m for m in (payload.get("agent_flowed") or []) if m in ("audio", "video")] if ended else [],
     }
 
 

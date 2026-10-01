@@ -653,5 +653,15 @@
     "routedPool": "✓ @{{alias}} triggered ({{pool}})",
     "unknownAlias": "⚠ @{{alias}} is not available in this pool — nothing was triggered",
     "commandAck": "✓ command \"{{command}}\" acknowledged"
+  },
+  "mediaDegradation": {
+    "kind": {
+      "audio": "audio",
+      "video": "video"
+    },
+    "attendant_cannot_consume": "{{participant}} does not receive the customer's {{kind}} — that leg goes on without it.",
+    "bot_leg_unavailable": "{{participant}} cannot hear the call: the voice bot is unavailable.",
+    "attendant_no_device": "{{participant}} has no {{kind}} device — the customer gets no {{kind}} from this attendant.",
+    "restored": "{{participant}} serves {{kind}} again."
   }
 }

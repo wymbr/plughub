@@ -766,6 +766,7 @@ async def webrtc_token(
     session_id: str,
     request:    Request,
     role:       str = "agent",
+    capable:    str | None = None,
 ) -> dict:
     """
     Issue a LiveKit token for an agent or supervisor joining an active WebRTC session.
@@ -843,6 +844,9 @@ async def webrtc_token(
             session_id = session_id,
             role       = role,
             identity   = str(_payload.get("sub") or ""),
+            # VOZ-11 (fatia c): os dispositivos que o NAVEGADOR do atendente achou. Ausente =
+            # Console antigo, capacidade não sabida — nenhuma degradação é afirmada por ela.
+            capable    = capable if role == "agent" else None,
         )
     except MaskedCollectInProgress:
         # NIV-07: o cliente está teclando um dado protegido no telefone, e a tecla SIP chega a
@@ -944,7 +948,16 @@ async def livekit_webhook(request: Request) -> JSONResponse:
         p = ev.participant
         participante = {"identity": p.identity, "kind": _lkm.ParticipantInfo.Kind.Name(p.kind),
                         "attributes": dict(p.attributes)}
-    disparar(_webrtc_adapter.on_livekit_event(ev.event, sala, participante), nome=f"livekit-{ev.event}")
+    trilha = None
+    if ev.HasField("track"):
+        # VOZ-11 (fatia b): `track_published`/`track_unpublished` são o estado REAL de câmera e
+        # microfone — desligar despublica (decisão do dono), e o SFU não avisa mute.
+        from livekit.protocol import models as _lkm
+        t = ev.track
+        trilha = {"sid": t.sid, "type": _lkm.TrackType.Name(t.type),
+                  "source": _lkm.TrackSource.Name(t.source)}
+    disparar(_webrtc_adapter.on_livekit_event(ev.event, sala, participante, track=trilha),
+             nome=f"livekit-{ev.event}")
     return JSONResponse({"ok": True})
 
 

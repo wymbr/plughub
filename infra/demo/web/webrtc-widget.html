@@ -578,6 +578,18 @@ async function requestMedia(medium) {
     return stream;
   } catch (err) {
     console.warn('[webrtc-widget] getUserMedia failed:', err.name, err.message);
+    if (medium === 'video') {
+      // VOZ-11: pedir câmera e microfone JUNTOS falha inteiro quando falta a câmera. O que o
+      // aparelho tem entra; a falta da câmera não derruba a voz.
+      try {
+        const audioOnly = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+        currentMedium = 'voice';
+        addMsg('Câmera indisponível neste aparelho — seguindo por voz.', 'sys');
+        return audioOnly;
+      } catch (err2) {
+        console.warn('[webrtc-widget] audio-only also failed:', err2.name, err2.message);
+      }
+    }
     // Fall back to text — show LGPD / permission notice
     document.getElementById('perm-banner').classList.add('visible');
     currentMedium = 'text';
@@ -652,7 +664,7 @@ async function connectLiveKit(livekitUrl, livekitToken, medium) {
     if (stream && currentMedium !== 'text') {
       localTracks = await LK.createLocalTracks({
         audio: true,
-        video: medium === 'video',
+        video: medium === 'video' && currentMedium === 'video',
       });
       for (const t of localTracks) {
         await room.localParticipant.publishTrack(t);
@@ -707,7 +719,7 @@ async function handleRenegotiate(newMedium) {
   if (room) {
     localTracks = await LK.createLocalTracks({
       audio: true,
-      video: newMedium === 'video',
+      video: newMedium === 'video' && currentMedium === 'video',
     });
     for (const t of localTracks) {
       await room.localParticipant.publishTrack(t);
@@ -729,11 +741,35 @@ async function handleRenegotiate(newMedium) {
 }
 
 // ── Media controls ────────────────────────────────────────────────────────────
+// VOZ-11 (fatia b): desligar DESPUBLICA a trilha — o SFU não avisa mute, e o servidor lê o estado
+// real de câmera e microfone pelo webhook dele. Ligar de novo cria e publica uma trilha nova.
+async function setKindPublished(kind, on) {
+  if (!room) return false;
+  const lk = kind === 'audio' ? LK.Track.Kind.Audio : LK.Track.Kind.Video;
+  const cur = localTracks.find(t => t.kind === lk);
+  if (!on && cur) {
+    await room.localParticipant.unpublishTrack(cur);
+    try { cur.stop(); } catch {}
+    localTracks = localTracks.filter(t => t !== cur);
+    return true;
+  }
+  if (on && !cur) {
+    try {
+      const [t] = await LK.createLocalTracks(kind === 'audio' ? { audio: true } : { video: true });
+      await room.localParticipant.publishTrack(t);
+      localTracks.push(t);
+      if (kind === 'video') { t.attach(document.getElementById('local-video')); }
+      return true;
+    } catch (err) {
+      console.warn('[webrtc-widget] ' + kind + ' indisponivel', err);
+    }
+  }
+  return false;
+}
+
 async function toggleMic() {
-  const audioTrack = localTracks.find(t => t.kind === LK.Track.Kind.Audio);
-  if (!audioTrack) return;
+  if (!(await setKindPublished('audio', micMuted))) return;
   micMuted = !micMuted;
-  micMuted ? await audioTrack.mute() : await audioTrack.unmute();
   const btn = document.getElementById('btn-mic');
   btn.textContent = micMuted ? '🔇' : '🎤';
   btn.classList.toggle('muted', micMuted);
@@ -744,10 +780,8 @@ async function toggleMic() {
 }
 
 async function toggleCam() {
-  const videoTrack = localTracks.find(t => t.kind === LK.Track.Kind.Video);
-  if (!videoTrack) return;
+  if (!(await setKindPublished('video', camOff))) return;
   camOff = !camOff;
-  camOff ? await videoTrack.mute() : await videoTrack.unmute();
   const btn = document.getElementById('btn-cam');
   btn.textContent = camOff ? '🚫' : '📷';
   btn.classList.toggle('muted', camOff);
@@ -1096,6 +1130,12 @@ async function connectWebRTC() {
         // text-only — just confirm
         wsSend({ type: 'webrtc.connected', medium: 'text' });
       }
+      return;
+    }
+
+    // ── VOZ-11: degradação por incapacidade, dita ao cliente ────────────────
+    if (msg.type === 'webrtc.notice') {
+      addMsg('⚠ ' + (msg.text || ''), 'sys');
       return;
     }
 

@@ -33,6 +33,35 @@ import {
 } from "livekit-client";
 
 /**
+ * VOZ-11 (fatia c): os dispositivos que ESTE navegador tem — câmera e microfone. A capacidade do
+ * atendente é deduzida aqui (decisão do dono), nunca declarada por ele: o servidor não enxerga o
+ * dispositivo, e "não publicou vídeo" pode ser falta de câmera, permissão negada ou escolha.
+ */
+async function detectDevices(): Promise<MediaKind[]> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const out: MediaKind[] = [];
+    if (devices.some(d => d.kind === "audioinput")) out.push("audio");
+    if (devices.some(d => d.kind === "videoinput")) out.push("video");
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Uma trilha por tipo: sem câmera, o microfone ainda entra. Pedir os dois juntos fazia o
+ *  navegador recusar o pedido INTEIRO, e o atendente sem câmera não entrava nem com áudio. */
+async function createTrack(kind: MediaKind): Promise<LocalTrack | null> {
+  try {
+    const [t] = await createLocalTracks(kind === "audio" ? { audio: true } : { video: true });
+    return t ?? null;
+  } catch (err) {
+    console.warn(`[webrtc] ${kind} indisponivel neste navegador`, err);
+    return null;
+  }
+}
+
+/**
  * Canais cujo contato tem SALA de mídia. `voice` entrou na VOZ-02: a chamada de telefone chega pela
  * perna SIP numa sala do SFU, com a mesma mídia do browser — o atendente humano entra nela igual.
  * Uma casa só para a pergunta, que o Console fazia em quatro lugares com `=== "webrtc"`.
@@ -173,8 +202,9 @@ export function useWebRTCSession(
       let body: TokenResponse | null = null;
       let attempt = 0;
       for (;;) {
+        const capable = role === "agent" ? `&capable=${(await detectDevices()).join(",")}` : "";
         const res = await fetch(
-          `/webrtc/token/${sid}?role=${role}`,
+          `/webrtc/token/${sid}?role=${role}${capable}`,
           // Token em MEMORIA (`auth/token-store`). A leitura do localStorage aqui mandava
           // `Bearer ` vazio — chave que ninguem escreve.
           { headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` } }
@@ -257,14 +287,13 @@ export function useWebRTCSession(
       await r.connect(body.livekit_url, body.token);
       if (r.remoteParticipants.size > 0) othersSeen = true;
 
-      // Publica só o que o PRÓPRIO teto permite; o SFU recusaria o resto.
-      const trackOptions = {
-        audio: body.publish.includes("audio"),
-        video: body.publish.includes("video"),
-      };
-      const local = trackOptions.audio || trackOptions.video
-        ? await createLocalTracks(trackOptions)
-        : [];
+      // Publica só o que o PRÓPRIO teto permite; o SFU recusaria o resto. Uma trilha por tipo.
+      const local: LocalTrack[] = [];
+      for (const kind of ["audio", "video"] as MediaKind[]) {
+        if (!body.publish.includes(kind)) continue;
+        const t = await createTrack(kind);
+        if (t) local.push(t);
+      }
       for (const t of local) {
         await r.localParticipant.publishTrack(t);
       }
@@ -321,29 +350,29 @@ export function useWebRTCSession(
   }, [sessionId, channel, role]);
 
   // ── Media controls ──────────────────────────────────────────────────────
-  const toggleMic = useCallback(async () => {
-    const audioTrack = localTracks.find(t => t.kind === Track.Kind.Audio);
-    if (!audioTrack) return;
-    if (micMuted) {
-      await audioTrack.unmute();
-      setMicMuted(false);
+  // VOZ-11 (fatia b): desligar DESPUBLICA (decisão do dono). O SFU não avisa mute, e o estado
+  // real de câmera e microfone é lido do webhook dele; com mute, a escolha ficava invisível.
+  const toggleKind = useCallback(async (kind: MediaKind, off: boolean) => {
+    const r = roomRef.current;
+    if (!r) return;
+    const lkKind = kind === "audio" ? Track.Kind.Audio : Track.Kind.Video;
+    if (off) {
+      const t = localTracks.find(x => x.kind === lkKind);
+      if (!t) return;
+      await r.localParticipant.unpublishTrack(t);
+      t.stop();
+      setLocalTracks(prev => prev.filter(x => x !== t));
     } else {
-      await audioTrack.mute();
-      setMicMuted(true);
+      const t = await createTrack(kind);
+      if (!t) return;
+      await r.localParticipant.publishTrack(t);
+      setLocalTracks(prev => [...prev, t]);
     }
-  }, [localTracks, micMuted]);
+    if (kind === "audio") setMicMuted(off); else setCameraOff(off);
+  }, [localTracks]);
 
-  const toggleCamera = useCallback(async () => {
-    const videoTrack = localTracks.find(t => t.kind === Track.Kind.Video);
-    if (!videoTrack) return;
-    if (cameraOff) {
-      await videoTrack.unmute();
-      setCameraOff(false);
-    } else {
-      await videoTrack.mute();
-      setCameraOff(true);
-    }
-  }, [localTracks, cameraOff]);
+  const toggleMic = useCallback(() => toggleKind("audio", !micMuted), [toggleKind, micMuted]);
+  const toggleCamera = useCallback(() => toggleKind("video", !cameraOff), [toggleKind, cameraOff]);
 
   const kinds = new Set<MediaKind>([...publish, ...customerPublish]);
   const view: MediaView = kinds.has("video") ? "video" : kinds.has("audio") ? "audio" : "none";

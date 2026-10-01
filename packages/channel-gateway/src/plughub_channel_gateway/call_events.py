@@ -41,7 +41,8 @@ def started(*, tenant_id: str, session_id: str, call_id: str, channel: str, pool
     }
 
 
-def ended(*, begun: dict, ended_at: str, end_reason: str) -> dict:
+def ended(*, begun: dict, ended_at: str, end_reason: str,
+          flowed: dict[str, list[str]] | None = None) -> dict:
     """O fim leva os campos do início (o consumidor grava a LINHA INTEIRA — `ReplacingMergeTree`
     substitui a linha, não faz merge por coluna) mais a duração e o motivo."""
     t0 = datetime.fromisoformat(begun["started_at"])
@@ -52,6 +53,10 @@ def ended(*, begun: dict, ended_at: str, end_reason: str) -> dict:
         "event_id": str(uuid.uuid4()), "event_type": "call_ended", "ended_at": ended_at,
         "duration_ms": max(0, int((t1 - t0).total_seconds() * 1000)),
         "end_reason": end_reason or "unknown",
+        # VOZ-11 (fatia b): o que FLUIU de verdade (trilhas publicadas, pelo webhook do SFU), não o
+        # que o teto permitia — chamada de vídeo em que ninguém ligou a câmera é chamada de áudio.
+        "customer_flowed": sorted((flowed or {}).get("customer") or []),
+        "agent_flowed":    sorted((flowed or {}).get("agent") or []),
     }
 
 

@@ -50,6 +50,10 @@ export const CallEndedEventSchema = z.object({
   duration_ms: z.number().int().nonnegative(),
   /** Motivo conhecido OU outro dito pelo produtor — nunca vazio. */
   end_reason:  z.string().min(1),
+  /** VOZ-11 (fatia b): o que FLUIU — trilhas publicadas de verdade, pelo webhook do SFU —, por
+   *  papel. Não é o teto: vídeo permitido e câmera nunca ligada dá `["audio"]`. */
+  customer_flowed: z.array(z.enum(["audio", "video"])),
+  agent_flowed:    z.array(z.enum(["audio", "video"])),
 }).strict()
 
 export const MediaCallEventSchema = z.discriminatedUnion("event_type", [

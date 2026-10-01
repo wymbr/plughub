@@ -1513,8 +1513,12 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   que os atendentes consomem, aplicado no SFU e anunciado ao cliente. Não reviver `negotiated_medium`.
   **A saída casa pela identidade da ENTRADA** (VOZ-11a): o atendente entra pelo `instance_id` do
   `routing.assigned` e sai no `participant_left` que o nomeia — a IA nativa inclusive, escrita pelo
-  bridge (`agents_only`). Saída que não casa é WARNING e o teto NÃO cai; câmera/microfone desligados
-  são ESCOLHA, nunca degradação (VOZ-11 b–d).
+  bridge (`agents_only`). Saída que não casa é WARNING e o teto NÃO cai.
+  **Câmera e microfone desligados são ESCOLHA, nunca degradação** (VOZ-11): desligar DESPUBLICA, e o
+  estado real vem SÓ do webhook de trilha do SFU (`media.track`, `flowed`). O que se nomeia é a
+  INCAPACIDADE (`media.degraded`, e ao cliente só quando muda a chamada dele) — da IA pelo deploy e
+  bot leg, do humano DEDUZIDA no navegador (`capable` no token; ausente = não sabido, sem queixa).
+  Gate: `probe_voz11_media_degradation.sh`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,
   obrigatória em pool de contato com `webrtc` **ou `voice`** (VOZ-02), lida fresca pelo bridge e levada no `routing.assigned`
   com a procedência. **Ausência nunca vira permissão** — pool sem política ou registry fora oferece nada.

@@ -653,5 +653,15 @@
     "routedPool": "✓ @{{alias}} acionado ({{pool}})",
     "unknownAlias": "⚠ @{{alias}} não está disponível neste pool — nada foi acionado",
     "commandAck": "✓ comando \"{{command}}\" reconhecido"
+  },
+  "mediaDegradation": {
+    "kind": {
+      "audio": "áudio",
+      "video": "vídeo"
+    },
+    "attendant_cannot_consume": "{{participant}} não recebe o {{kind}} do cliente — essa perna segue sem ele.",
+    "bot_leg_unavailable": "{{participant}} não ouve a chamada: o bot de voz está indisponível.",
+    "attendant_no_device": "{{participant}} está sem dispositivo de {{kind}} — o cliente não recebe {{kind}} desse atendente.",
+    "restored": "{{participant}} voltou a servir {{kind}}."
   }
 }

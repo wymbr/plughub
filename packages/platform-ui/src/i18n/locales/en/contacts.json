@@ -268,6 +268,28 @@
   },
   "transcript": {
     "call": { "started": "📞 call started", "ended": "📞 call ended", "endRequested": "📞 agent asked to end the call", "endedWith": "📞 call ended · {{duration}}" },
+    "media": {
+      "kind": {
+        "audio": "microphone",
+        "video": "camera"
+      },
+      "role": {
+        "customer": "customer",
+        "agent": "agent",
+        "supervisor": "supervisor",
+        "bot": "voice bot"
+      },
+      "track": {
+        "on": "🎥 {{who}} turned {{kind}} on",
+        "off": "🎥 {{who}} turned {{kind}} off"
+      },
+      "degraded": {
+        "attendant_cannot_consume": "⚠ {{who}} does not receive the customer's {{kind}}",
+        "bot_leg_unavailable": "⚠ {{who}} has no voice bot — cannot hear the call",
+        "attendant_no_device": "⚠ {{who}} has no {{kind}} device"
+      },
+      "restored": "✓ {{who}} serves {{kind}} again"
+    },
     "back": "← Segments",
     "session": "Session",
     "supervising": "👁 supervising",

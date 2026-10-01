@@ -268,6 +268,28 @@
   },
   "transcript": {
     "call": { "started": "📞 chamada iniciada", "ended": "📞 chamada encerrada", "endRequested": "📞 atendente pediu o fim da chamada", "endedWith": "📞 chamada encerrada · {{duration}}" },
+    "media": {
+      "kind": {
+        "audio": "microfone",
+        "video": "câmera"
+      },
+      "role": {
+        "customer": "cliente",
+        "agent": "atendente",
+        "supervisor": "supervisor",
+        "bot": "bot de voz"
+      },
+      "track": {
+        "on": "🎥 {{who}} ligou {{kind}}",
+        "off": "🎥 {{who}} desligou {{kind}}"
+      },
+      "degraded": {
+        "attendant_cannot_consume": "⚠ {{who}} não recebe {{kind}} do cliente",
+        "bot_leg_unavailable": "⚠ {{who}} sem bot de voz — não ouve a chamada",
+        "attendant_no_device": "⚠ {{who}} sem dispositivo de {{kind}}"
+      },
+      "restored": "✓ {{who}} voltou a servir {{kind}}"
+    },
     "back": "← Segmentos",
     "session": "Sessão",
     "supervising": "👁 supervisionando",

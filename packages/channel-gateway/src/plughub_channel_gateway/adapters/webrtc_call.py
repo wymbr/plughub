@@ -292,8 +292,8 @@ class CallAttachMixin:
             logger.warning("webrtc chamada: fim sem inicio conhecido nesta instancia (session=%s reason=%s) "
                            "— intervalo NAO fechado no relatorio", session_id, reason)
             return
-        await call_events.publish(self._producer, call_events.ended(begun=begun, ended_at=now,
-                                                                     end_reason=reason))
+        await call_events.publish(self._producer, call_events.ended(
+            begun=begun, ended_at=now, end_reason=reason, flowed=await self.media_flowed(session_id)))
 
     async def _session_tenant(self, session_id: str) -> str:
         """Tenant da SESSÃO (o meta), não o do processo: o gateway atende vários."""
@@ -419,6 +419,9 @@ class CallAttachMixin:
         if not publish:
             return False
         state["customer"] = self._customer_state(state, publish, "call_attached", session_id)
+        # VOZ-11 (fatia d): o início da chamada do chat também nomeia a incapacidade de quem atende.
+        self._customer_ws[session_id] = ws
+        avisos = await self._reconcile_degradations(ws, session_id, state, publish, defer_notice=True)
         # A decisão da VOZ antes de `_customer_media`, sem `await` entre as duas — a mesma ordem do
         # canal (`_on_routing_assigned`): a fala da IA que chegar agora lê as duas juntas.
         run_voice = self._decide_voice(session_id, state)
@@ -441,6 +444,8 @@ class CallAttachMixin:
             "policy_sources": state["customer"]["policy_sources"],
         })
         await self._announce_call(session_id, "started", media_state=state)
+        for d in avisos:  # depois do `webrtc.ready`, como no canal
+            await self._notify_customer(ws, session_id, d)
         if self._bot_leg_should_run(state, publish, session_id):
             disparar(self._start_stt_pipeline(session_id, room), nome=f"webrtc-stt-start-{session_id[:8]}")
         if run_voice:
