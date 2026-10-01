@@ -174,6 +174,10 @@
   <div class="input-row">
     <textarea id="msg-input" rows="2" placeholder="Digite sua mensagem… (Enter envia)"
               onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send();}"></textarea>
+    <!-- VOZ-28: anexo pelo caminho do chat — vale com a chamada aberta ou não -->
+    <input type="file" id="file-input" style="display:none" onchange="attachFile(this)"
+           accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,video/mp4,video/webm" />
+    <button id="attach-btn" onclick="document.getElementById('file-input').click()" disabled title="Anexar arquivo">📎</button>
     <button id="send-btn" onclick="send()" disabled>Enviar</button>
   </div>
 </div>
@@ -475,8 +479,25 @@
         document.getElementById('session-label').textContent =
           sessionId ? sessionId.slice(0,8)+'…' : '';
         document.getElementById('send-btn').disabled = false;
+        document.getElementById('attach-btn').disabled = false;
         document.getElementById('call-btn').disabled = false;
         addMsg('Conectado ao suporte. Aguardando agente…', 'sys');
+        return;
+      }
+      if (msg.type === 'conn.error' && String(msg.code || '').startsWith('upload_')) {
+        pendingUpload = null;                    // VOZ-28: recusa do anexo não é erro de conexão
+        addMsg('Anexo recusado: ' + (msg.message || msg.code), 'sys');
+        return;
+      }
+      if (msg.type === 'upload.ready') {
+        uploadBinary(msg);
+        return;
+      }
+      if (msg.type === 'upload.committed') {
+        // o arquivo está guardado: agora sim vira mensagem do contato
+        ws.send(JSON.stringify({ type: 'msg.' + (msg.content_type || 'document'), file_id: msg.file_id }));
+        addMsg('📎 ' + (pendingUpload ? pendingUpload.name : msg.file_id) + ' enviado', 'out', 'Você');
+        pendingUpload = null;
         return;
       }
       if (msg.type === 'conn.error') {
@@ -507,6 +528,7 @@
         setStatus('Sessão encerrada', 'err');
         addMsg('Atendimento encerrado.', 'sys');
         document.getElementById('send-btn').disabled = true;
+        document.getElementById('attach-btn').disabled = true;
         connected = false;
         return;
       }
@@ -530,6 +552,35 @@
         document.getElementById('send-btn').disabled = true;
       }
     };
+  }
+
+  // ── VOZ-28: anexo em dois estágios (reserva no WS → binário por HTTP → confirmação no WS) ──
+  let pendingUpload = null;
+
+  function attachFile(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file || !ws || ws.readyState !== WebSocket.OPEN) return;
+    pendingUpload = file;
+    ws.send(JSON.stringify({ type: 'upload.request', id: 'up-' + Date.now(), file_name: file.name,
+                             mime_type: file.type || 'application/octet-stream', size_bytes: file.size }));
+    addMsg('📎 enviando ' + file.name + '…', 'sys');
+  }
+
+  async function uploadBinary(ready) {
+    if (!pendingUpload) return;
+    try {
+      const r = await fetch(ready.upload_url, { method: 'POST', body: pendingUpload,
+                                                headers: { 'Content-Type': 'application/octet-stream' } });
+      if (r.status !== 204) {
+        addMsg('Anexo recusado (' + r.status + '): ' + (await r.text()).slice(0, 120), 'sys');
+        pendingUpload = null;
+      }
+      // 204: a confirmação chega pelo WS (`upload.committed`)
+    } catch (err) {
+      addMsg('Falha ao enviar o anexo: ' + err, 'sys');
+      pendingUpload = null;
+    }
   }
 
   // ── Send message ────────────────────────────────────────────────────────────

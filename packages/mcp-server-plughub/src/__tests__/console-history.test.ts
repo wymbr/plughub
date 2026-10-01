@@ -113,3 +113,23 @@ describe("projectStreamForConsole — a conversa (ALW-18)", () => {
     expect(projectStreamForConsole([lixo, call("started")])).toEqual({ callActive: true, messages: [] })
   })
 })
+
+describe("projectStreamForConsole — anexo do cliente (VOZ-28)", () => {
+  it("o anexo gravado pelo bridge chega ao Console junto com o indicador", () => {
+    const att = { media_type: "document", file_id: "f-1", url: "http://gw/webchat/v1/attachments/f-1" }
+    const anexo = e({
+      type: "message", author_id: "c-1", author_role: "customer",
+      author: JSON.stringify({ participant_id: "c-1", instance_id: "c-1", role: "customer" }),
+      visibility: JSON.stringify("all"),
+      payload: JSON.stringify({ message_id: "m-anexo", content: { type: "text", text: "[Anexo: contrato.pdf]", attachment: att } }),
+    })
+    const [m] = projectStreamForConsole([anexo]).messages
+    expect(m.text).toBe("[Anexo: contrato.pdf]")
+    expect(m.attachment).toEqual(att)
+  })
+
+  it("controle: mensagem sem anexo não ganha o campo", () => {
+    const [m] = projectStreamForConsole([msg("customer", "c-1", "oi")]).messages
+    expect("attachment" in m).toBe(false)
+  })
+})

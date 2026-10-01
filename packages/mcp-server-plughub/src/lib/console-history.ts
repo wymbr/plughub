@@ -45,6 +45,8 @@ export interface ConsoleMessage {
   text:       string
   timestamp:  string
   visibility: string | string[]
+  /** VOZ-28 — anexo do cliente (`payload.content.attachment`, gravado pelo bridge) */
+  attachment?: Record<string, unknown>
 }
 
 export interface StreamProjection {
@@ -139,6 +141,8 @@ export function projectStreamForConsole(entries: RawStreamEntry[]): StreamProjec
       text,
       timestamp: f["timestamp"] ?? "",
       visibility,
+      ...(content["attachment"] && typeof content["attachment"] === "object"
+        ? { attachment: content["attachment"] as Record<string, unknown> } : {}),
     })
   }
   return { callActive: !closed && callState === "started", messages }

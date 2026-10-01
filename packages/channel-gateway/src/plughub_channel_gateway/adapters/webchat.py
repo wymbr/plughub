@@ -671,6 +671,9 @@ class WebchatAdapter:
         }
         media_type = content_type_map.get(msg_type, "document")
 
+        # VOZ-28 — o que o agente precisa para ABRIR o anexo (nome, tipo, tamanho, link) viaja
+        # com a mensagem; antes ia só o `file_id`, e nenhum leitor o resolvia.
+        details: dict = {}
         # Validate that the file was committed (if store is wired)
         if self._attachment_store is not None:
             meta = await self._attachment_store.resolve(
@@ -689,6 +692,21 @@ class WebchatAdapter:
                     file_id, self._contact_id,
                 )
                 return
+            # VOZ-28 — o arquivo tem de ser DESTA sessão. A conferência era só do tenant: quem
+            # conhecesse o `file_id` de outro contato o anexava à própria conversa (e o agente
+            # abriria o arquivo alheio pelo link). O `file_id` é a credencial da porta de anexos.
+            if str(getattr(meta, "session_id", "") or "") != str(self._session_id):
+                logger.warning(
+                    "media msg references file_id=%s of ANOTHER session — recusado "
+                    "(session=%s contact_id=%s)", file_id, self._session_id, self._contact_id,
+                )
+                return
+            details = {
+                "file_name":  getattr(meta, "original_name", None),
+                "mime_type":  getattr(meta, "mime_type", None),
+                "size_bytes": getattr(meta, "size_bytes", None),
+                "url":        getattr(meta, "serving_url", None),
+            }
 
         snapshot = await self._context_reader.get_snapshot(self._session_id)
         event    = NormalizedInboundEvent(
@@ -701,6 +719,7 @@ class WebchatAdapter:
                     "media_type": media_type,
                     "file_id":    file_id,
                     "caption":    data.get("caption"),
+                    **{k: v for k, v in details.items() if v is not None},
                 },
             ),
             context_snapshot = snapshot,

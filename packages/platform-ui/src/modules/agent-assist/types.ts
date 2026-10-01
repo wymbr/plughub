@@ -6,6 +6,16 @@ export type WsStatus = "connecting" | "connected" | "disconnected";
 
 export type AuthorType = "customer" | "agent_human" | "agent_ai" | "supervisor" | "system";
 
+/** VOZ-28 — anexo do cliente. O nome do arquivo NÃO vem aqui: mora no `text` (o indicador
+ *  `[Anexo: …]`), que passou pela rede de texto livre. */
+export interface ChatAttachment {
+  media_type: "image" | "document" | "video" | string;
+  file_id:    string;
+  mime_type?: string;
+  size_bytes?: number;
+  url?:       string;
+}
+
 export interface ChatMessage {
   id: string;
   author: AuthorType;
@@ -18,6 +28,8 @@ export interface ChatMessage {
   visibility?: "all" | "agents_only" | string | string[];
   /** Present for menu.render events — triggers rich MenuCard rendering */
   menuData?: ChatMenuData;
+  /** VOZ-28 — o cliente mandou um arquivo; o bubble mostra o link */
+  attachment?: ChatAttachment;
 }
 
 // ── WebSocket envelope types (from channel-gateway / mcp-server) ──────────────
@@ -35,6 +47,7 @@ export interface WsMessageText {
   text: string;
   timestamp: string;
   visibility?: string;
+  attachment?: ChatAttachment;
 }
 
 export interface WsMenuRender {

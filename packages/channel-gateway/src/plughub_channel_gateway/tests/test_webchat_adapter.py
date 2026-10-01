@@ -635,6 +635,48 @@ class TestMediaMessages:
         assert media_events[0]["content"]["payload"]["media_type"] == "document"
 
 
+    # VOZ-28 — o anexo leva o que o agente precisa para abri-lo, e só o arquivo DESTA sessão.
+    def _store(self, adapter_ref):
+        from plughub_channel_gateway.attachment_store import AttachmentMeta
+
+        async def resolve(file_id, tenant_id):
+            dono = adapter_ref[0]._session_id if file_id == "meu" else "outra-sessao"
+            return AttachmentMeta(file_id=file_id, tenant_id=tenant_id, session_id=dono,
+                                  original_name="contrato.pdf", mime_type="application/pdf",
+                                  size_bytes=1234, file_path="/x", deleted_at=None,
+                                  serving_url=f"http://gw/webchat/v1/attachments/{file_id}")
+        store = AsyncMock()
+        store.resolve = AsyncMock(side_effect=resolve)
+        return store
+
+    async def _media_events(self, file_id, mock_producer, registry, context_reader, settings, mock_redis):
+        ref: list = []
+        ws = make_ws_mock([json.dumps({"type": "msg.document", "file_id": file_id})])
+        adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis,
+                               attachment_store=self._store(ref))
+        ref.append(adapter)
+        await adapter.handle()
+        return [json.loads(c.kwargs["value"].decode())
+                for c in mock_producer.send.call_args_list
+                if c.args[0] == settings.kafka_topic_inbound
+                and json.loads(c.kwargs["value"].decode()).get("content", {}).get("type") == "media"]
+
+    async def test_media_carries_name_type_size_and_link(
+        self, mock_producer, registry, context_reader, settings, mock_redis
+    ):
+        evs = await self._media_events("meu", mock_producer, registry, context_reader, settings, mock_redis)
+        p = evs[0]["content"]["payload"]
+        assert (p["file_name"], p["mime_type"], p["size_bytes"]) == ("contrato.pdf", "application/pdf", 1234)
+        assert p["url"].endswith("/attachments/meu")
+
+    async def test_file_of_another_session_is_refused(
+        self, mock_producer, registry, context_reader, settings, mock_redis, caplog
+    ):
+        evs = await self._media_events("alheio", mock_producer, registry, context_reader, settings, mock_redis)
+        assert evs == [], "o file_id de outra sessao nao vira mensagem desta"
+        assert "ANOTHER session" in caplog.text
+
+
 # ── Upload request ────────────────────────────────────────────────────────────
 
 class TestUploadRequest:

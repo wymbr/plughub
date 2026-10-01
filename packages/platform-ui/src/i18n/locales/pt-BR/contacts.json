@@ -267,6 +267,11 @@
     }
   },
   "transcript": {
+    "attachment": {
+      "open": "Abrir {{kind}}",
+      "noLink": "{{kind}} anexado (sem link)",
+      "kind": { "image": "imagem", "document": "documento", "video": "vídeo" }
+    },
     "call": { "started": "📞 chamada iniciada", "ended": "📞 chamada encerrada", "endRequested": "📞 atendente pediu o fim da chamada", "endedWith": "📞 chamada encerrada · {{duration}}" },
     "media": {
       "kind": {

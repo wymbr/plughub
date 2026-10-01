@@ -267,6 +267,11 @@
     }
   },
   "transcript": {
+    "attachment": {
+      "open": "Open {{kind}}",
+      "noLink": "{{kind}} attached (no link)",
+      "kind": { "image": "image", "document": "document", "video": "video" }
+    },
     "call": { "started": "📞 call started", "ended": "📞 call ended", "endRequested": "📞 agent asked to end the call", "endedWith": "📞 call ended · {{duration}}" },
     "media": {
       "kind": {

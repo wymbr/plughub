@@ -524,6 +524,7 @@ def customer_message_stream_fields(
     author_role: str = "customer",
     original_text: str | None = None,
     masked_categories: list[str] | None = None,
+    attachment: dict | None = None,
 ) -> dict[str, str]:
     """Entrada de stream da mensagem do CLIENTE no layout CANÔNICO (RPL-01).
 
@@ -548,6 +549,10 @@ def customer_message_stream_fields(
     content = {"type": content_type, "text": text}
     if speech:
         content["speech"] = speech
+    if attachment:
+        # VOZ-28 — o anexo do cliente: `text` é o indicador legível (o que todo leitor antigo
+        # já mostra), `attachment` é o que o Console e a transcrição usam para ABRIR o arquivo.
+        content["attachment"] = attachment
     payload: dict = {"message_id": event_id, "content": content, "text": text}
     if masked_categories and original_text is not None:
         original = {"type": content_type, "text": original_text}
@@ -708,6 +713,35 @@ def _menu_meta(content: dict, chave: str) -> str | None:
     """
     valor = (content.get("payload") or {}).get(chave)
     return valor if isinstance(valor, str) and valor else None
+
+
+_MEDIA_LABEL = {"image": "imagem", "document": "documento", "video": "vídeo"}
+
+
+def customer_attachment(content: dict) -> tuple[dict | None, str]:
+    """VOZ-28 — o anexo que o cliente mandou (`content.type == "media"`, do webchat).
+
+    Devolve `(attachment, indicador)`. O indicador é o TEXTO que segue pelos destinos de sempre
+    (menu da IA, Console, stream, analytics) — `[Anexo: contrato.pdf] legenda` —, e por isso
+    passa pela mesma rede de texto livre que a fala do cliente. O nome do arquivo mora SÓ nele:
+    `attachment` leva tipo, id, mime, tamanho e link, nunca o nome, para que um nome com dado
+    pessoal não escape da rede por um campo lateral. Sem `file_id` não há anexo: `(None, "")`.
+    Até aqui este conteúdo caía em "Unknown content type" e era DESCARTADO — o arquivo subia,
+    ficava guardado, e nenhum agente, IA ou transcrição o via.
+    """
+    payload = content.get("payload") or {}
+    file_id = str(payload.get("file_id") or "")
+    if not file_id:
+        return None, ""
+    media_type = str(payload.get("media_type") or "document")
+    att = {"media_type": media_type, "file_id": file_id}
+    for k in ("mime_type", "size_bytes", "url"):
+        if payload.get(k) not in (None, ""):
+            att[k] = payload[k]
+    nome = str(payload.get("file_name") or "") or _MEDIA_LABEL.get(media_type, "arquivo")
+    caption = str(payload.get("caption") or "").strip()
+    indicador = f"[Anexo: {nome}]" + (f" {caption}" if caption else "")
+    return att, indicador
 
 
 def redact_customer_reply(
@@ -10540,8 +10574,17 @@ async def process_inbound(
         # já entrou na sessão como `audio_transcript` pelo mesmo canal; sem isso o mesmo enunciado
         # aparecia duas vezes na transcrição (e a segunda com rótulo de seleção).
         menu_via: str | None = None
+        attachment: dict | None = None
         if msg_type == "text":
             reply_text = content.get("text", "")
+        elif msg_type == "media":
+            attachment, reply_text = customer_attachment(content)
+            if attachment is None:
+                logger.warning("Anexo do cliente SEM file_id descartado: session=%s", session_id)
+                return
+            # Daqui em diante o anexo é FALA do cliente (o indicador): a redação o trata como
+            # texto — senão vira `[Seleção: [Anexo: …]]`, rótulo de escolha que ninguém fez.
+            msg_type = "text"
         elif msg_type == "menu_result":
             outcome = (content.get("payload") or {}).get("outcome")
             if outcome:
@@ -10700,6 +10743,10 @@ async def process_inbound(
             except Exception:
                 pass
 
+        if attachment is not None and any_masked:
+            logger.info("Anexo do cliente com step MASCARADO: o link nao viaja (session=%s)", session_id)
+            attachment = None
+
         # MSK-06 — a rede de texto livre sobre a fala do cliente, nos destinos de pessoa e de
         # armazenamento (nunca no do fluxo). Catálogo lido UMA vez por mensagem (loader com
         # cache de 60 s por tenant).
@@ -10746,6 +10793,8 @@ async def process_inbound(
                 "contact_id": contact_id,
                 "visibility": visibility,
             }
+            if attachment:
+                event["attachment"] = attachment
             if speech is None and not ja_registrado_como_fala:
                 await redis_client.publish(f"agent:events:{session_id}", json.dumps(event))
                 logger.info("Forwarded %s to human agent: session=%s masked=%s",
@@ -10778,6 +10827,7 @@ async def process_inbound(
                             speech       = speech,
                             original_text     = _display_original,
                             masked_categories = _display_cats,
+                            attachment        = attachment,
                         ),
                     )
                     await redis_client.expire(stream_key_human, _stl())  # 4h TTL
@@ -10951,6 +11001,7 @@ async def process_inbound(
                             speech       = speech,
                             original_text     = _ai_original,
                             masked_categories = _ai_cats,
+                            attachment        = attachment,
                         ),
                     )
                     await redis_client.expire(stream_key, _stl())

@@ -1,5 +1,46 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (2) — VOZ-28: o anexo do cliente vira fato da conversa, e sobe com a chamada aberta
+
+**Reescopo com o dono:** provar o upload DURANTE a chamada do chat (a chamada é meio do contato de
+webchat, WCH-01); o canal `webrtc` avulso fica para depois da WCH-04 (`VOZ-55`).
+
+**O que o gate achou, e que era maior que a ficha:** com a chamada de pé, reserva, binário,
+confirmação e arquivo servido funcionavam — e o documento **nunca chegava à conversa**. O webchat
+publica `content.type = media`; o bridge só conhecia `text` e `menu_result` e descartava o resto como
+*"Unknown content type"*. Em **nenhum** contato de webchat, com ou sem chamada, um anexo do cliente
+foi visto por agente, IA, stream ou transcrição — e o Console não tinha código que renderizasse um.
+O dono escolheu fechar o caminho todo.
+
+**O que mudou:**
+- **Gateway.** A mensagem de mídia leva nome, mime, tamanho e link. E o arquivo tem de ser **desta
+  sessão**: a conferência era só do tenant, e quem conhecesse o `file_id` de outro contato o anexava
+  à própria conversa (o `file_id` é a credencial da porta de anexos).
+- **Bridge.** `customer_attachment` transforma o anexo na fala `[Anexo: nome] legenda`, que segue
+  pelos quatro destinos de sempre (menu da IA, Console, stream, analytics) e pela mesma rede de texto
+  livre. O stream e o evento do Console levam `content.attachment` (tipo, id, mime, tamanho, link) —
+  **sem o nome**, para que um nome com dado pessoal não escape da rede por um campo lateral. Com step
+  mascarado, o link não viaja. Sem `file_id`, o descarte é dito.
+- **mcp-server.** A projeção do histórico do Console carrega o `attachment`.
+- **Console e transcrição.** Link para abrir, e miniatura quando é imagem (i18n en/pt-BR).
+- **Widget do chat de demo.** Botão de anexar, no fluxo de dois estágios.
+
+**Um defeito do próprio trabalho, achado pelo gate:** a primeira versão gravava
+`[Seleção: [Anexo: voz28.pdf] voz28]` — a redação decora todo tipo que não é `text`. Depois de
+extraído, o anexo é fala do cliente e segue como texto.
+
+**Ao vivo** (`probe_voz28_call_upload.sh`, novo, no manifesto), pool `demo_ia` com áudio: chamada
+aberta; `upload.ready`; POST 204 e `upload.committed` no chat; a mensagem
+`[Anexo: voz28.pdf] voz28` com `content.attachment` e link no stream; os mesmos bytes servidos; a
+chamada de pé depois (ping, sem encerramento); controle: PDF falso recusado com 415. Não medido ao
+vivo: o caminho com HUMANO atendendo (coberto por teste do evento ao Console e da projeção).
+
+**Testes:** channel-gateway 1504, orchestrator-bridge 281, mcp-server `console-history` 12; build do
+platform-ui (tsc). **Contraprovas**, todas vermelhas: anexo voltando a rótulo de seleção · stream da
+IA sem o anexo · step mascarado levando o link · nome no `attachment` · humano sem o anexo · arquivo
+de outra sessão aceito · mensagem sem os detalhes do arquivo. **Gates verdes:** `probe_wch01_chat_call`,
+`probe_i18n_duplicate_keys`, `probe_ui_color_scale_classes`, `probe_python_suites`.
+
 ## 2026-10-01 (1) — VOZ-11 fatias b, c e d: o estado real de mídia vem do SFU, e só a incapacidade é dita
 
 **O modelo, decidido com o dono em 2026-09-30:** videoconferência. Câmera e microfone desligados são

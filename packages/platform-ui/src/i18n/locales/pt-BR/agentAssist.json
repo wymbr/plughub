@@ -654,6 +654,11 @@
     "unknownAlias": "⚠ @{{alias}} não está disponível neste pool — nada foi acionado",
     "commandAck": "✓ comando \"{{command}}\" reconhecido"
   },
+  "attachment": {
+    "open": "Abrir {{kind}}",
+    "noLink": "{{kind}} anexado (sem link)",
+    "kind": { "image": "imagem", "document": "documento", "video": "vídeo" }
+  },
   "mediaDegradation": {
     "kind": {
       "audio": "áudio",

@@ -1185,6 +1185,23 @@ stream, sempre DEPOIS do `webrtc.ready`. Fica de fora (fichas próprias): grava�
 que fluiu (`VOZ-53`) e bot leg que cai com a chamada de pé (`VOZ-54`). Preferência no roteamento:
 `VOZ-51`. Gate: `infra/test/probe_voz11_media_degradation.sh`.
 
+## 20c. Anexo durante a chamada do chat (VOZ-28, 2026-10-01)
+
+A chamada é meio do contato de chat, então o anexo é do CHAT: o mesmo fluxo de dois estágios do
+webchat (`upload.request` → `upload.ready` → POST binário → `upload.committed` → `msg.document`), e a
+chamada não é tocada. O que faltava não era o upload, era a conversa: o bridge descartava
+`content.type = media`. Hoje:
+
+| Peça | O que faz |
+|---|---|
+| gateway (`webchat._handle_media`) | confere que o arquivo é DESTA sessão (antes, só do tenant) e manda nome, mime, tamanho e link |
+| bridge (`customer_attachment`) | o anexo vira a fala `[Anexo: nome] legenda` nos quatro destinos; `content.attachment` (sem o nome) no stream e no evento do Console; step mascarado ⇒ sem link |
+| mcp-server (`console-history`) | a projeção do histórico carrega o `attachment` |
+| Console e transcrição | link para abrir (e miniatura de imagem) |
+
+O canal `webrtc` AVULSO segue sem anexo (`VOZ-55`, bloqueada pela `WCH-04`). Gate:
+`infra/test/probe_voz28_call_upload.sh`.
+
 ## 21. A chamada tem DONA entre réplicas (WCH-12, 2026-09-24)
 
 A chamada vive na **memória** de uma réplica do gateway: a sala, o bot leg, a fila de fala, a coleta

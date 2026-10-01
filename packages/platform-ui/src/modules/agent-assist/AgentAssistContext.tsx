@@ -474,6 +474,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         text:        event.text,
         timestamp:   event.timestamp,
         visibility:  event.visibility,
+        ...(event.attachment ? { attachment: event.attachment } : {}),
       };
 
       setContacts(prev => {

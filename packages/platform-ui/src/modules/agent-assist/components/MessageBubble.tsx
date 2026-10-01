@@ -9,7 +9,8 @@
  */
 
 import React from "react";
-import { AuthorType, ChatMessage } from "../types";
+import { useTranslation } from "react-i18next";
+import { AuthorType, ChatAttachment, ChatMessage } from "../types";
 import { MenuCard, SubmitResult } from "./MenuCard";
 import { renderWithTokens, type MaskingRulesMap } from "@/components/MaskedToken";
 
@@ -23,6 +24,25 @@ interface MessageBubbleProps {
   /** Arc 11 Fase C — called when the user clicks the selection checkbox */
   onToggleSelection?: () => void;
 }
+
+/** VOZ-28 — o anexo do cliente: miniatura se é imagem, link para abrir em qualquer caso. */
+const AttachmentView: React.FC<{ attachment: ChatAttachment }> = ({ attachment }) => {
+  const { t } = useTranslation("agentAssist");
+  const kind = t(`attachment.kind.${attachment.media_type}`, { defaultValue: attachment.media_type });
+  if (!attachment.url) {
+    return <div className="mt-1 text-xs italic opacity-80">📎 {t("attachment.noLink", { kind })}</div>;
+  }
+  return (
+    <div className="mt-1 flex flex-col gap-1">
+      {attachment.media_type === "image" && (
+        <img src={attachment.url} alt={kind} className="max-h-40 max-w-full rounded-md object-contain" />
+      )}
+      <a href={attachment.url} target="_blank" rel="noopener noreferrer" className="text-xs underline">
+        📎 {t("attachment.open", { kind })}
+      </a>
+    </div>
+  );
+};
 
 function agentLabel(agentTypeId: string | undefined): string {
   if (!agentTypeId) return "IA";
@@ -165,6 +185,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       </span>
       <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${bubbleStyle}`}>
         {renderWithTokens(message.text, maskingRules)}
+        {message.attachment && <AttachmentView attachment={message.attachment} />}
       </div>
     </div>
   );

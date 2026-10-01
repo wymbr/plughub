@@ -640,7 +640,7 @@ function StatusDot({ status }: { status: string }) {
 // normalizeContent() unwraps all shapes into a single NormalizedContent so
 // ContentRenderer can render each type uniformly.
 
-interface NormalizedText    { kind: 'text';   text: string }
+interface NormalizedText    { kind: 'text';   text: string; attachment?: { media_type?: string; url?: string } }
 interface NormalizedMenu    { kind: 'menu';   text: string; options: { id: string; label: string }[]; mode?: string }
 interface NormalizedButton  { kind: 'button'; text: string; options: { id: string; label: string }[] }
 interface NormalizedForm    { kind: 'form';   text: string; fields: { id: string; label: string; type?: string }[] }
@@ -665,7 +665,12 @@ function normalizeContent(content: unknown): NormalizedContent {
     const options = Array.isArray(obj.options) ? obj.options as { id: string; label: string }[] : []
     const fields  = Array.isArray(obj.fields)  ? obj.fields  as { id: string; label: string; type?: string }[] : []
 
-    if (type === 'text' || (!type && text)) return { kind: 'text', text }
+    if (type === 'text' || (!type && text)) {
+      // VOZ-28 — o anexo do cliente viaja em `content.attachment` (o texto é o indicador)
+      const att = obj.attachment && typeof obj.attachment === 'object'
+        ? obj.attachment as { media_type?: string; url?: string } : undefined
+      return att ? { kind: 'text', text, attachment: att } : { kind: 'text', text }
+    }
     if (type === 'menu')   return { kind: 'menu',   text, options, mode: typeof obj.mode === 'string' ? obj.mode : undefined }
     if (type === 'button') return { kind: 'button', text, options }
     if (type === 'form')   return { kind: 'form',   text, fields }
@@ -686,7 +691,16 @@ function ContentRenderer({ normalized, maskingRules }: {
 }) {
   const { t } = useTranslation('contacts')
   if (normalized.kind === 'text') {
-    return <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderWithTokens(normalized.text, maskingRules)}</div>
+    const att = normalized.attachment
+    const kind = att ? t(`transcript.attachment.kind.${att.media_type ?? ''}`, { defaultValue: att.media_type ?? '' }) : ''
+    return (
+      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {renderWithTokens(normalized.text, maskingRules)}
+        {att && (att.url
+          ? <div><a href={att.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline' }}>📎 {t('transcript.attachment.open', { kind })}</a></div>
+          : <div style={{ fontStyle: 'italic' }}>📎 {t('transcript.attachment.noLink', { kind })}</div>)}
+      </div>
+    )
   }
 
   if (normalized.kind === 'menu' || normalized.kind === 'button') {
