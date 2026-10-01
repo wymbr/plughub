@@ -50,6 +50,7 @@ from .attachment_rescan import run_attachment_rescan
 from .attachment_store import configure_scanner
 from .sip_trunk_watch import run_sip_trunk_watch
 from . import a2a_card
+from . import a2a_principal
 from . import speech_catalog
 from .config import get_settings, Settings
 # Verificador canônico (passo 3 da consolidação, 2026-08-28). O import vem DIRETO do
@@ -2922,6 +2923,70 @@ async def a2a_agent_card(slug: str) -> JSONResponse:
         return JSONResponse({"error": "not_found"}, status_code=404)
     logger.warning("a2a card indisponível slug=%s: %s", slug, res.reason)
     return JSONResponse({"error": "unavailable"}, status_code=503)
+
+
+# ── Interface A2A — a PORTA, antes da execução (AAS-04) ─────────────────────────
+#
+# "A2 antes de A4 é inegociável" (ADR § 6): publicar execução antes do principal seria publicar
+# um disparador anônimo de pools. Esta rota já é o endereço que o card anuncia, e por ora só
+# AUTENTICA e AUTORIZA: quem passa recebe `UnsupportedOperationError` (JSON-RPC -32004) até a
+# execução chegar (AAS-06). A ordem importa:
+#   1. credencial ANTES de tudo — anônimo não aprende se o slug existe;
+#   2. o TENANT é o da credencial (D7) e tem de ser o desta instalação — credencial de outro
+#      tenant é 403, nunca "executa no tenant do slug";
+#   3. o pool do endereço tem de estar em `allowed_pools` do principal.
+
+@app.post("/a2a/{slug}")
+async def a2a_interface(slug: str, request: Request) -> JSONResponse:
+    settings = get_settings()
+    auth = await a2a_principal.authenticate(
+        request.headers.get("authorization", ""),
+        auth_api_url  = settings.auth_api_url,
+        service_token = settings.auth_api_service_token,
+    )
+    if auth.outcome in ("missing", "invalid"):
+        return JSONResponse({"error": "unauthorized"}, status_code=401,
+                            headers={"WWW-Authenticate": 'Bearer realm="a2a"'})
+    if auth.outcome == "unavailable":
+        logger.warning("a2a: credencial não conferida (slug=%s): %s", slug, auth.reason)
+        return JSONResponse({"error": "unavailable"}, status_code=503)
+
+    p = auth.principal
+    if p is None:   # `ok` sempre traz o principal; se não trouxer, recusa — nunca segue sem quem chama
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if p.tenant_id != settings.tenant_id:
+        logger.warning("a2a: principal %s (%s) é do tenant %s e chamou a instalação de %s — recusado",
+                       p.sub, p.display_name, p.tenant_id, settings.tenant_id)
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    ep = await resolve_endpoint(
+        channel            = "a2a",
+        identifier         = slug,
+        tenant_id          = p.tenant_id,
+        agent_registry_url = settings.agent_registry_url,
+        allowed_origins    = frozenset({"external"}),
+    )
+    if ep.outcome == "unavailable":
+        return JSONResponse({"error": "unavailable"}, status_code=503)
+    if ep.outcome != "found" or not ep.pool_id:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    if ep.pool_id not in p.allowed_pools:
+        logger.warning("a2a: principal %s (%s) sem o pool %s (slug=%s) — recusado",
+                       p.sub, p.display_name, ep.pool_id, slug)
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    try:
+        req = await request.json()
+    except ValueError:
+        return JSONResponse({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32700, "message": "Parse error"}})
+    rid = req.get("id") if isinstance(req, dict) else None
+    logger.info("a2a: principal %s autorizado no pool %s (slug=%s); execução ainda não existe (AAS-06)",
+                p.sub, ep.pool_id, slug)
+    return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {
+        "code": -32004, "message": "UnsupportedOperationError",
+        "data": {"detail": "credencial aceita; a execução de tarefas A2A ainda não está disponível"},
+    }})
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

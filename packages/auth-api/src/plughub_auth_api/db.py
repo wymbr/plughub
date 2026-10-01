@@ -577,6 +577,38 @@ CREATE TABLE IF NOT EXISTS auth.agent_group_supervisors (
 
 DDL_AGENT_GROUPS_IDX_TENANT = "CREATE INDEX IF NOT EXISTS idx_agent_groups_tenant ON auth.agent_groups (tenant_id)"
 
+# ── AAS-04 — principal de máquina EXTERNO (adr-a2a-server-binding D6) ────────────
+#
+# UM mecanismo para "que software chama, com que cota, para quais pools": não existe
+# `a2a_client` (rev. 2 do ADR). `kind` separa quem EMITE a credencial — `partner` pelo admin
+# do tenant (esta ficha), `customer_agent` pelo próprio cliente depois de prova (AAS-09).
+# `origin` fica para o principal nativo da spec de Agent Principal (F1), que não existe ainda.
+#
+# A credencial é guardada só como SHA-256 (mesmo padrão do refresh token): o texto sai UMA
+# vez, no 201 da criação ou da rotação, e nunca mais. `credential_prefix` identifica qual
+# credencial está na linha sem dar material de busca.
+DDL_AGENT_PRINCIPALS = """
+CREATE TABLE IF NOT EXISTS auth.agent_principals (
+    agent_principal_id    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id             TEXT        NOT NULL,
+    kind                  TEXT        NOT NULL CHECK (kind IN ('partner', 'customer_agent')),
+    origin                TEXT        NOT NULL DEFAULT 'external' CHECK (origin IN ('native', 'external')),
+    display_name          TEXT        NOT NULL,
+    allowed_pools         TEXT[]      NOT NULL DEFAULT '{}',
+    credential_hash       TEXT        UNIQUE,
+    credential_prefix     TEXT,
+    credential_rotated_at TIMESTAMPTZ,
+    active                BOOLEAN     NOT NULL DEFAULT true,
+    created_by            TEXT        NOT NULL,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_authenticated_at TIMESTAMPTZ
+)
+"""
+DDL_AGENT_PRINCIPALS_IDX_TENANT = (
+    "CREATE INDEX IF NOT EXISTS idx_agent_principals_tenant ON auth.agent_principals (tenant_id)"
+)
+
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
@@ -633,6 +665,8 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_AGENT_GROUP_USERS)
             await conn.execute(DDL_AGENT_GROUP_SUPERVISORS)
             await conn.execute(DDL_AGENT_GROUPS_IDX_TENANT)
+            await conn.execute(DDL_AGENT_PRINCIPALS)
+            await conn.execute(DDL_AGENT_PRINCIPALS_IDX_TENANT)
     logger.info("auth schema ensured")
 
 

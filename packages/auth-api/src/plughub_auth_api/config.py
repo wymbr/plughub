@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     port: int = 3200
     host: str = "0.0.0.0"
 
+    # AAS-04 — porta de SERVIÇO da introspecção de credencial de principal externo
+    # (`X-Service-Token`). Vazio = a introspecção responde 503: credencial de terceiro não é
+    # conferida por quem não se identificou, e "sem token configurado" nunca libera.
+    service_token: str = ""
+    # AAS-04 — de onde se confere que o pool concedido a um principal EXPÕE A2A. Wiring.
+    agent_registry_url: str = "http://agent-registry:3300"
+
     # Admin bootstrap
     admin_token: str = ""                           # vazio = sem auth (dev only)
     # Seed: cria este usuário admin na primeira inicialização se não existir

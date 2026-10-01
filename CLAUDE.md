@@ -1014,6 +1014,11 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   (403 `tenant_mismatch`) mora no ramo de usuário do `optional_pool_principal`, por onde passam
   as três dependências de principal de pool. Serviço e token de sistema escolhem o tenant.
   Gate: `probe_tenant_from_session.sh`.
+- **Quem chama de FORA pelo canal `a2a` é um `agent_principal`** (AAS-04, auth-api; `config.agents`):
+  credencial opaca guardada só como SHA-256, conferida pela introspecção SÓ de serviço, e o
+  **tenant é o da credencial** — nunca de corpo, query ou header (ADR A2A, D7). A porta
+  `POST /a2a/{slug}` autentica ANTES de revelar o slug e confere `allowed_pools`; execução nova
+  entra ATRÁS dela, nunca ao lado. Gate: `probe_aas04_a2a_principal.sh`.
 - **Toda rota de serviço Python tem UMA linha em `infra/test/route_credential_baseline.tsv`** (AUT-58):
   `fechada`, `guard_corpo:<g>` (conferido no código), `isenta` com motivo, ou `divida:<ficha>`. Quem
   mede é uma varredura ANÔNIMA ao vivo, não a leitura do código — o código não mostra guard que falha

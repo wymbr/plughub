@@ -1010,6 +1010,8 @@ services:
       PLUGHUB_AUTH_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
       PLUGHUB_AUTH_ADMIN_TOKEN:         changeme_auth_admin_token_demo
       PLUGHUB_AUTH_SEED_ADMIN_EMAIL:    admin@plughub.local
+      PLUGHUB_AUTH_SERVICE_TOKEN:       changeme_auth_service_token_demo   # AAS-04 — introspecção de principal; == PLUGHUB_AUTH_API_SERVICE_TOKEN do gateway
+      PLUGHUB_AUTH_AGENT_REGISTRY_URL:  http://agent-registry:3300   # AAS-04 — confere que o pool concedido expõe A2A
       PLUGHUB_AUTH_SEED_ADMIN_PASSWORD: changeme_admin
       PLUGHUB_AUTH_SEED_TENANT_ID:      tenant_demo
       # Path do modules.yaml montado — override tem prioridade sobre a heurística parents[4]
@@ -1788,6 +1790,8 @@ services:
       PLUGHUB_DATABASE_URL:               postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_WEBCHAT_SERVING_BASE_URL:   http://localhost:8010/webchat/v1/attachments
       PLUGHUB_A2A_PUBLIC_BASE_URL: http://localhost:8010   # AAS-03 — URL anunciada no AgentCard
+      PLUGHUB_AUTH_API_URL:               http://auth-api:3200   # AAS-04 — introspecção da credencial do principal A2A
+      PLUGHUB_AUTH_API_SERVICE_TOKEN:     changeme_auth_service_token_demo
       PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:    http://localhost:8010/webchat/v1/upload
       PLUGHUB_TENANT_ID:                  tenant_demo
       PLUGHUB_KAFKA_TOPIC_INBOUND:        conversations.inbound

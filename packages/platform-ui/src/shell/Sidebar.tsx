@@ -7,7 +7,7 @@ import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, ClipboardList, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
-  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send, Inbox, Scale,
+  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send, Inbox, Scale, KeyRound,
 } from 'lucide-react'
 
 type LucideIcon = React.FC<{ className?: string }>
@@ -216,6 +216,8 @@ const Sidebar: React.FC = () => {
         { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      abac: { module: 'billing', field: 'visualizar' } },
         { label: t('nav.access'),        href: '/config/access',        icon: Lock,            abac: { module: 'config', field: 'users'     } },
         { label: t('nav.groups'),        href: '/config/groups',        icon: Users,           abac: { module: 'config', field: 'users'     } },
+        // AAS-04 — principais externos (A2A); o auth-api gateia com o MESMO campo.
+        { label: t('nav.agentPrincipals'), href: '/config/agents',      icon: KeyRound,        abac: { module: 'config', field: 'agents'    } },
       ]
     },
 

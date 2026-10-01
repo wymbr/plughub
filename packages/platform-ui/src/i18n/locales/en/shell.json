@@ -71,6 +71,7 @@
     "agent_reports": "Agent Reports",
     "access": "Access",
     "groups": "Groups",
+    "agentPrincipals": "External agents (A2A)",
     "audit": "Audit",
     "devops": "DevOps"
   },

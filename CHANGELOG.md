@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (13) — AAS-04: quem chama por A2A é um principal cadastrado, e a porta confere antes de revelar
+
+Fase A2 do `adr-a2a-server-binding` (D6, D7). Ainda **sem execução**: a fechadura vem antes da sala.
+
+**O principal `partner`, no auth-api:**
+- **Tabela `auth.agent_principals`:**
+  - `kind`: `partner` hoje; `customer_agent` já é valor aceito, para a AAS-09.
+  - `origin`: `external`; `native` fica para a F1 da spec de Agent Principal.
+  - `allowed_pools`, `active` e auditoria de último uso.
+- **Credencial:**
+  - opaca, `pha_…`, guardada só como SHA-256, como o refresh token;
+  - sai em claro no 201 da criação e da rotação e em lugar nenhum mais;
+  - rotacionar invalida a anterior na hora.
+- **Administração** em `/auth/v1/agent-principals`, sob um campo ABAC novo, **`config.agents`**:
+  - só admin nasce com ele, e não houve backfill, como a AUT-65 com `config.rules`;
+  - o tenant é o do TOKEN;
+  - a trilha de administração é a das pessoas (`user_admin_log`, ação `agent_principal.*`).
+- **`allowed_pools` é CONCESSÃO** e passa por duas réguas:
+  - a de quem concede pool a pessoa (`grants.violacoes`): ninguém concede o que não detém, e o
+    master passa;
+  - o pool tem de expor A2A a `partner`: contato, canal e contrato com `partner` em
+    `principal_kinds`, conferido no registry. Registry fora → 503, nunca aprovação por ausência.
+  - Tirar pool não exige deter nada.
+- **Introspecção** `POST /auth/v1/agent-principals/introspect`:
+  - só serviço (`X-Service-Token`; env vazia → 503), no formato do RFC 7662;
+  - desconhecida e desativada respondem igual (`active: false`), e o motivo fica no log.
+- **Tela `/config/agents`** com menu, rota e backend no mesmo campo.
+  - O seletor só oferece pool que o servidor aceitaria.
+  - A credencial aparece uma vez, com aviso de que não volta.
+  - Visto no navegador: admin@ sem o campo é recusado na URL direta; o usuário com o campo vê a
+    lista e o formulário.
+
+**A porta, no gateway: `POST /a2a/{slug}`, o endereço que o card já anuncia.**
+- **Ordem das checagens:**
+  1. credencial ANTES de tudo: anônimo recebe 401, exista o slug ou não, sem oráculo;
+  2. o tenant é o da credencial e tem de ser o da instalação (D7);
+  3. o pool do endereço tem de estar em `allowed_pools`.
+- Quem passa recebe `UnsupportedOperationError` (JSON-RPC -32004) até a AAS-06.
+- **Verificação da credencial** (`a2a_principal.py`): o veredicto da introspecção fica 30 s em cache
+  pela CHAVE HASH, nunca o texto. Falha de conferência é 503 e não entra no cache.
+- Por que a porta antes da execução: *"A2 antes de A4 é inegociável"* (ADR § 6). Sem ela, a
+  credencial não teria consumidor vivo e a ficha mediria uma tabela.
+
+**O que mudou de casa, e por quê:**
+- **`principal_id`/`subject_type` no `AuditRecord` foram para a AAS-06.** Nenhuma chamada MCP é
+  feita em nome de um principal antes de uma sessão nascer de um, e campo sem produtor é promessa
+  sem mecanismo. A ficha diz como: a sessão leva o principal e as chamadas MCP dela o carimbam.
+- A AAS-06 herdou também a conferência, em tempo de execução, de que o contrato do pool ainda admite
+  o `kind` do principal. A régua da concessão vale no momento de conceder.
+- **AAS-13 (card estendido) destravou:** é um método da porta JSON-RPC que agora existe.
+- A `/v1/channels/webhook/pool/{id}`, que toma o tenant do corpo, **fica como está**. É interna, e a
+  D7 só a condena se ficar pública; o canal `a2a` não passa por ela.
+
+**Achados de passagem:**
+- A introspecção com a checagem no handler dava **422 ao anônimo sem corpo**: a validação respondia
+  antes da credencial. A varredura anônima (AUT-58) pegou; a checagem virou dependência, que resolve
+  antes do corpo, e há teste.
+- A tabela da varredura (`route_credential_baseline.tsv`) **não tinha a rota do card da AAS-03**.
+  Entrou agora como `isenta` com motivo, junto com as oito rotas novas.
+- O gate de ledger reprovou porque a nota da AAS-09 citava o id fechado. O texto foi reescrito.
+
+**Gates:**
+- `probe_aas04_a2a_principal.sh` VERDE, 20 OK:
+  - A1–A6: administração, com o controle de editar sem conceder;
+  - B1–B3: introspecção;
+  - C1–C6: a porta;
+  - D1–D5: rotação, e desativar derrubando a porta em ≤ 30 s.
+- Não medido ao vivo, e declarado: a credencial de OUTRO tenant na porta, que exige pool A2A noutro
+  tenant. Quem guarda são os testes do gateway.
+- `mut_aas04_a2a_principal.sh` pegou 6 de 6:
+  - introspecção aceita desativado;
+  - concessão sem deter o pool;
+  - pool sem conferir A2A;
+  - credencial gravada em claro;
+  - porta sem `allowed_pools`;
+  - porta aceitando resposta sem `active`.
+- O probe repõe o estado que as mutações gravam.
+- `probe_route_anon_sweep.sh` · `probe_edge_surface.sh` · `probe_abac_field_labels_i18n.sh` ·
+  `probe_nav_route_guard_agreement.sh` · `probe_nav_grant_first.sh` · `probe_task_ledger.sh` VERDE.
+
+**Testes:** auth-api 124 (+23) · channel-gateway 1647 (+21) · platform-ui tsc limpo · i18n VERDE.
+
 ## 2026-10-01 (12) — AAS-03: o AgentCard público de um pool existe, e é projeção
 
 Fase A1 do `adr-a2a-server-binding` (D2, D14.3). Ainda **sem execução**: o card diz onde e como

@@ -231,6 +231,31 @@ credencial nasce de prova, sem ninguém do tenant no meio.
 A fusão preserva o que a spec de Agent Principal exige além do A2A: `origin: native` e
 `principal_id`/`subject_type` no `AuditRecord`.
 
+**Como ficou (AAS-04, 2026-10-01), o `partner`.**
+- **`auth.agent_principals`** no auth-api: `kind` (`partner` hoje; `customer_agent` já é valor
+  aceito, para a AAS-09), `origin` (`external`; `native` fica para a F1 da spec), `allowed_pools`,
+  e a credencial `pha_…` guardada só como SHA-256. Ela sai em claro no 201 da criação e da
+  rotação e em lugar nenhum mais; rotacionar invalida a anterior na hora.
+- **Administração em `/auth/v1/agent-principals`**, sob o campo novo **`config.agents`** (só
+  admin nasce com ele), com a tela `/config/agents`. O tenant é o do TOKEN.
+  - `allowed_pools` é concessão e passa pela régua de quem concede pool a pessoa
+    (`grants.violacoes`): ninguém concede o que não detém, e o master passa.
+  - Cada pool tem de expor A2A a `partner` (contato, canal, contrato com `partner` em
+    `principal_kinds`), conferido no registry. Registry fora → 503.
+- **Introspecção** `POST /auth/v1/agent-principals/introspect`, só de serviço (`X-Service-Token`;
+  vazio → 503), no formato do RFC 7662. Desconhecida e desativada respondem igual
+  (`active: false`), e o motivo fica no log.
+- **A porta antes da execução:** `POST /a2a/{slug}` no gateway.
+  - Autentica ANTES de revelar o slug (anônimo → 401, existindo ou não).
+  - O tenant é o da credencial e tem de ser o da instalação (D7).
+  - O pool do endereço tem de estar em `allowed_pools`.
+  - Quem passa recebe `UnsupportedOperationError` (-32004) até a A4.
+  - O veredicto da introspecção fica 30 s em cache pela CHAVE HASH; falha de conferência é 503 e
+    não entra no cache.
+- **`principal_id`/`subject_type` no `AuditRecord` foi para a A4** (`AAS-06`): nenhuma chamada MCP
+  é feita em nome de um principal antes de uma sessão nascer de um, e campo sem produtor é
+  promessa sem mecanismo.
+
 ### D7 — `tenant_id` **nunca** vem do corpo
 
 Re-medido em 2026-09-30: `webhook_trigger_by_pool` ainda faz `body.get("tenant_id") or
@@ -438,7 +463,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | **ATT-0** | Risco de anexo **de hoje** | allowlist e tamanho em todo canal de entrada, magic bytes fail-closed, `nosniff`, CSP `sandbox`, `filename*`, `inline` só para imagem | **independe do A2A e vem antes**: WhatsApp e e-mail pulam `validate_mime` e a porta pública serve inline |
 | **A0** | Canal + descritor | `a2a` no `ChannelSchema` e no perfil; bloco `a2a` no pool; tela | destrava delegate-por-pool · **feita em 2026-10-01 (AAS-01)** |
 | **A1** | AgentCard read-only | card público + estendido, modos derivados, `securitySchemes` | **sem execução**; força o descritor a ser honesto · **card público feito em 2026-10-01 (AAS-03)**; o estendido espera o principal (`AAS-13`) |
-| **A2** | Principal `partner` | `agent_principals` (fusão, D6), credencial, `allowed_pools`, tenant da credencial (D7), linha no probe de borda | **bloqueia A4** |
+| **A2** | Principal `partner` | `agent_principals` (fusão, D6), credencial, `allowed_pools`, tenant da credencial (D7), linha no probe de borda | **bloqueia A4** · **feita em 2026-10-01 (AAS-04)**, com a porta autenticada já de pé |
 | **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera |
 | **A4** | Adapter JSON-RPC | `message/send` (bloqueante com teto + `returnImmediately`), `tasks/get`, `tasks/cancel`, `tasks/list`; `menu` → `INPUT_REQUIRED` com `DataPart`/texto; D15 inteira | **basta para o OpenClaw** (só bearer, texto e JSON, polling) |
 | **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling |
@@ -565,3 +590,5 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   (schema estrito, portão sobre o estado resultante, espelho `-int` isento, capacidade vazia até a A4).
 - **2026-10-01, fase A1 (AAS-03).** D2 corrigida por decisão do dono: um card por pool, endereçado
   por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.
+- **2026-10-01, fase A2 (AAS-04).** D6 ganhou o *como ficou* do `partner`; a porta `POST /a2a/{slug}`
+  existe antes da execução; o carimbo do principal no `AuditRecord` foi para a A4.

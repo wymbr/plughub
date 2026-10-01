@@ -22,6 +22,7 @@ from . import db as db_mod
 from .models import Role
 from .config import get_settings, seed_admin_roles
 from .groups_router import groups_router
+from .agent_principals import agent_principals_router
 from .password import hash_password
 from .permissions import ensure_permissions_schema
 from .router import router
@@ -219,6 +220,7 @@ def build_app() -> FastAPI:
 
     app.include_router(router)
     app.include_router(groups_router)
+    app.include_router(agent_principals_router)   # AAS-04
     return app
 
 

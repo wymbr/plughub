@@ -157,6 +157,11 @@ class Settings(BaseSettings):
     # `{base}/a2a/{slug}`. Wiring, não política: vazio = card não servido (503 + ERROR), nunca
     # adivinhado pelo `Host` da requisição.
     a2a_public_base_url:        str = ""
+    # AAS-04 — introspecção da credencial do principal A2A no auth-api. Wiring + segredo; vazio
+    # = toda chamada a `POST /a2a/{slug}` recebe 503 (credencial de terceiro nunca é aceita sem
+    # ser conferida).
+    auth_api_url:               str = ""
+    auth_api_service_token:     str = ""
 
     # ── SMS (Twilio / ISMSProvider) ───────────────────────────────────────────
     # Twilio Account SID. Can be overridden per-tenant via Redis:

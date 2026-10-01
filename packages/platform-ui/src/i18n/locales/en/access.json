@@ -59,6 +59,7 @@
       "calendars": "Calendars and holidays",
       "dialog_forms": "Dialog forms (DialogForms)",
       "rules": "Escalation rules (Rules Engine)",
+      "agents": "External agents (A2A) — partner credentials",
       "resources": "Routing resources (pools, skills, LLM accounts)",
       "channels": "Channel configuration and credentials",
       "users": "User management (create, edit details, activate/deactivate)",

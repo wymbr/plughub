@@ -488,6 +488,14 @@ probe_aas01_a2a_pool.sh
 # motivo no log, cache <= 30 s · E cadastro do endereco recusa pool sem A2A e slug fora de forma.
 # Espera 31 s pelo cache. Bateria: mut_aas03_a2a_card.sh.
 probe_aas03_a2a_card.sh
+# AAS-04 (2026-10-01): quem chama por A2A e um agent_principal `partner` (auth-api), e a porta
+# POST /a2a/{slug} confere antes de revelar. A administracao (config.agents; credencial so como hash;
+# pool que nao expoe A2A a partner 422; sem master nao concede fora do escopo 403 + controle) ·
+# B introspeccao so de servico, tenant/pools DA credencial, desconhecida inativa · C porta: anonimo
+# 401 inclusive em slug inexistente, -32004 no pool concedido, 403 no nao concedido, 404 autenticado ·
+# D rotacao mata a anterior, desativar derruba a porta em <= 30 s. Espera 31 s.
+# Bateria: mut_aas04_a2a_principal.sh.
+probe_aas04_a2a_principal.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro
@@ -1063,6 +1071,7 @@ smoke_wrapup_slot_handoff.sh
 =mut_cfg01_description_kept.sh                        mutacao
 =mut_aas01_a2a_pool.sh                                mutacao
 =mut_aas03_a2a_card.sh                                mutacao
+=mut_aas04_a2a_principal.sh                           mutacao
 =mut_sip_edge_surface.sh                              mutacao
 =mutation_claim_lease_slot.sh                         mutacao
 =mutation_occupancy_peak.sh                           mutacao

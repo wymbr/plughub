@@ -59,6 +59,7 @@
       "calendars": "Calendários e feriados",
       "dialog_forms": "Formulários de diálogo (DialogForms)",
       "rules": "Regras de escalação (Rules Engine)",
+      "agents": "Principais externos (A2A) — credenciais de parceiros",
       "resources": "Recursos de roteamento (Pools, competências, contas de LLM)",
       "channels": "Configuração de canais e credenciais",
       "users": "Gestão de usuários (criar, editar dados, ativar/desativar)",

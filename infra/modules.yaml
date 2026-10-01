@@ -429,6 +429,18 @@ modules:
         default: none
         role_defaults:
           admin: read_write
+      agents:
+        # AAS-04 (2026-10-01): principais de máquina EXTERNOS (`partner`) — o software de um
+        # parceiro que chama pools pelo canal a2a. read_write cria, concede pools, desativa e
+        # ROTACIONA a credencial. É campo próprio, e não `permissions`, porque administra
+        # credencial de MÁQUINA; conceder pool a ela ainda passa pela régua de quem concede pool
+        # a pessoa (ninguém concede o que não detém). Só admin nasce com o campo.
+        label: Principais externos (A2A) — credenciais de parceiros
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+        role_defaults:
+          admin: read_write
       masking:
         label: Configuração de mascaramento de dados (catálogo de tipos)
         domain: [none, read_only, read_write]

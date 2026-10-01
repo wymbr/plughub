@@ -12,6 +12,7 @@ import ContextMapPage from '@/modules/context-map/ContextMapPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import SchedulesPage from '@/modules/schedules/SchedulesPage'
 import RulesPage from '@/modules/rules/RulesPage'
+import AgentPrincipalsPage from '@/modules/agent-principals/AgentPrincipalsPage'
 import SchedulesMonitorPage from '@/modules/schedules/SchedulesMonitorPage'
 import WorkItemsPage from '@/modules/work-items/WorkItemsPage'
 import OutboundPage from '@/modules/outbound/OutboundPage'
@@ -247,6 +248,7 @@ export const routes: RouteObject[] = [
       { path: 'config/agent-reports', element: <Navigate to="/analise/agents"    replace /> },
       { path: 'config/access',     element: <RequireAbac module="config" field="users"><AccessPage /></RequireAbac> },
       { path: 'config/groups',     element: <RequireAbac module="config" field="users"><GroupsPage /></RequireAbac> },
+      { path: 'config/agents',     element: <RequireAbac module="config" field="agents"><AgentPrincipalsPage /></RequireAbac> },
       { path: 'audit',             element: <AuditPage /> },
       { path: 'config/calendars',  element: <RequireAbac module="config" field="calendars"><CalendarsPage /></RequireAbac> },
       { path: 'config/schedules',  element: <RequireAbac module="scheduler" field="configurar"><SchedulesPage /></RequireAbac> },
