@@ -65,7 +65,7 @@ from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint
 from .outbound_consumer import OutboundConsumer
 from .call_relay import CallRelay
 from .registry_invalidation_consumer import RegistryInvalidationConsumer
-from .webchat_config import webchat_config
+from .webchat_config import retention_config, webchat_config
 from .session_registry import SessionRegistry
 from .survey_web import (
     ArchivedFormError,
@@ -392,6 +392,7 @@ async def lifespan(app: FastAPI):
     # config-http-propagation arc: load the webchat config namespace from the
     # Config API (HTTP) at startup, then keep it fresh via config.changed events.
     await webchat_config.reload(settings.config_api_url, settings.tenant_id)
+    await retention_config.reload(settings.config_api_url, settings.tenant_id)   # ATT-04
 
     async def _config_changed_consumer() -> None:
         """
@@ -421,6 +422,11 @@ async def lifespan(app: FastAPI):
                             "config.changed: webchat namespace reloaded (key=%s)",
                             event.get("key"),
                         )
+                    elif namespace == "retention":
+                        # ATT-04: o prazo do anexo (`attachment_days`) vale no PRÓXIMO anexo
+                        await retention_config.reload(settings.config_api_url, settings.tenant_id)
+                        logger.info("config.changed: retention namespace reloaded (key=%s)",
+                                    event.get("key"))
                     elif namespace == "webrtc" and _webrtc_adapter is not None:
                         # VOZ-21: segmentação da fala do tenant; sem invalidar, a mudança na tela
                         # só valeria no próximo boot

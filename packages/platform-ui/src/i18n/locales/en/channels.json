@@ -1,5 +1,8 @@
 {
   "title": "Channels",
+  "webchat": {
+    "attachmentRetentionMoved": "The attachment deadline is now a retention class, with the others: Masking → Retention → Contact attachments."
+  },
   "tabs": {
     "webchat":  "WebChat",
     "whatsapp": "WhatsApp",

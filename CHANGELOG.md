@@ -1,5 +1,54 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (6) — ATT-04: o prazo do anexo é a classe `retention.attachment_days`
+
+**Antes:** o prazo era `webchat.attachment_expiry_days`, um nome que dizia "webchat" para um prazo que
+vale para anexo de **qualquer** canal (WhatsApp e e-mail chamam o mesmo resolvedor). Ele morava
+**fora** do namespace `retention`, onde estão as classes da AUD-07/08, e era editado na tela de canais.
+A AUD-08 pede uma casa por classe.
+
+**O que passou a ser verdade:**
+- **Uma chave só.** A classe é **`retention.attachment_days`** (semente: 30). O gateway a lê por um
+  `retention_config`, o mesmo cache HTTP do config-api, que o `config.changed` do namespace
+  `retention` recarrega no serviço em execução.
+- **A chave antiga saiu:**
+  - da semente;
+  - do estado vivo, apagada **pela API** (`DELETE /config/webchat/attachment_expiry_days`), porque
+    ficaria órfã e editável na tela sem efeito;
+  - da `WebChatConfigPage`, onde no lugar dela uma linha (por `t()`) diz onde o prazo mora agora.
+- **A tela de retenção** (Mascaramento → Retenção) ganhou a classe `attachment_days`, com título e
+  descrição em en e pt-BR.
+- **O aviso de degradação do cache** passou a nomear o que deixa de valer: "mantém os últimos
+  valores (…)" ou "valem os padrões do código: attachment_days=30". Antes dizia o genérico *"using
+  cached/default values"*, a frase que o `CLAUDE.md` registra como a que ninguém leu por meses.
+- O `NamespaceEditor` citava um `voice_recording_days` que **não existe**; a descrição foi corrigida.
+
+**População medida antes de mover:** só o valor global padrão (30). Nenhum tenant tinha
+personalizado o prazo, então não houve valor a migrar.
+
+**Semântica preservada, e declarada na descrição da chave:** o prazo é carimbado no anexo quando ele
+chega (`expires_at`), então mudar vale para os **próximos** anexos. O expurgo é o mesmo
+`attachment_expiry` de antes, logo a classe entrou junto com o expurgo dela (regra da AUD-08).
+
+**Diferença deliberada em relação às outras classes:** com o config-api fora, o anexo **não** pode
+"pular o tenant", porque precisa de um prazo ao nascer. O gateway usa o último valor carregado, ou
+30, e diz qual no log.
+
+**Gates:**
+- `probe_att04_attachment_retention_class.sh` (C1, C2, R1, P1, R2) VERDE ao vivo. O valor original é
+  restaurado no fim.
+  - A primeira versão do R1 **não podia reprovar**: o valor semeado (30) era igual ao padrão do
+    código, e um leitor que ignorasse a classe também devolveria 30.
+  - O **R2** grava um valor fora do padrão e exige esse valor.
+- A primeira rodada também achou o caminho real de implantação: a semente é o job à parte
+  `config-seed` (`--only retention.attachment_days`), não o boot do config-api.
+- Testes: gateway **1557 passed** (o resolvedor prova que a chave antiga NÃO é mais lida);
+  config-api **61 passed**; typecheck do platform-ui limpo.
+
+**Deixou ficha:** ATT-07 — a mesma tela oferece `webchat.upload_limits_mb`, e **nenhum código o lê**
+(os limites reais são fixos em `MIME_LIMITS`); a `config-recursos/ChannelsPage.tsx` é órfã (sem
+import) e cita chaves que não existem.
+
 ## 2026-10-01 (5) — ATT-03: a porta pública do anexo só abre com URL assinada, cunhada na entrega
 
 **Antes:** o `file_id` nu era a credencial. Quem o tivesse (de um log, de um evento no Kafka, do

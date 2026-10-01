@@ -83,7 +83,11 @@ Anexos (imagem, documento, vídeo) usam um handshake de 2 estágios:
 | Documento | PDF | 100 MB |
 | Vídeo | MP4, WebM | 512 MB |
 
-**Expiração:** soft-delete a cada hora; delete físico diário (com +24h de grace).
+**Expiração:** soft-delete a cada hora; delete físico diário (com +24h de grace). O prazo é a classe
+**`retention.attachment_days`** (ATT-04, 2026-10-01; era `webchat.attachment_expiry_days`), editada em
+Mascaramento → Retenção junto das outras classes. Ele é carimbado no anexo quando o anexo chega
+(`expires_at`), então mudar o valor vale para os **próximos** anexos. Com o config-api fora, o
+gateway usa o último valor carregado, ou 30, e diz qual no log.
 
 ### A regra vale para TODO escritor, e a porta não serve página (ATT-01, 2026-10-01)
 

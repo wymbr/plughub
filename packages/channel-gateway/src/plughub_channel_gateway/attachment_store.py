@@ -66,9 +66,12 @@ async def resolve_attachment_expiry_days(redis, tenant_id: str, default: int) ->
     caía no default). `redis`/`tenant_id` mantidos na assinatura por compat dos
     call-sites; o tenant efetivo é o `settings.tenant_id` carregado no cache.
     """
-    from .webchat_config import webchat_config
+    # ATT-04 (2026-10-01): a classe é `retention.attachment_days`, ao lado das outras classes de
+    # retenção (AUD-07/08), e não mais `webchat.attachment_expiry_days` — o prazo vale para anexo
+    # de QUALQUER canal (WhatsApp e e-mail também), e o nome antigo dizia que era do webchat.
+    from .webchat_config import retention_config
     try:
-        return int(webchat_config.get("attachment_expiry_days", default))
+        return int(retention_config.get("attachment_days", default))
     except (TypeError, ValueError):
         return default
 

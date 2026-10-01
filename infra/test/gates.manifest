@@ -446,6 +446,11 @@ probe_att01_attachment_door.sh
 # A3 pool fora do dominio 403 · A4 controle: 200, JPEG, nosniff, sandbox · A5 id inexistente 404 ·
 # I1 a rota interna do gateway recusa usuario e anonimo · T1 trilha ok/denied/not_found.
 probe_att02_attachment_internal_door.sh
+# ATT-04 (2026-10-01): o prazo do anexo e a classe `retention.attachment_days`. C1 a classe existe ·
+# C2 `webchat.attachment_expiry_days` nao existe · R1 o leitor resolve pela classe · P1 PUT chega ao
+# gateway EM EXECUCAO (config.changed) · R2 valor fora do default resolvido (R1 sozinho nao reprova).
+# Escreve no estado vivo (PUT global) e RESTAURA o valor original no fim.
+probe_att04_attachment_retention_class.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro

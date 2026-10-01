@@ -1,5 +1,8 @@
 {
   "title": "Canais",
+  "webchat": {
+    "attachmentRetentionMoved": "O prazo do anexo agora é uma classe de retenção, junto das outras: Mascaramento → Retenção → Anexos de contato."
+  },
   "tabs": {
     "webchat":  "WebChat",
     "whatsapp": "WhatsApp",

@@ -29,9 +29,15 @@ import httpx
 logger = logging.getLogger("plughub.channel-gateway.webchat_config")
 
 # Defaults matching Config API seed — webchat namespace.
+# ATT-04 (2026-10-01): `attachment_expiry_days` SAIU daqui — o prazo do anexo é classe do
+# namespace `retention` (`attachment_days`), lido por `retention_config` abaixo.
 _DEFAULTS: dict[str, Any] = {
     "auth_timeout_s":         30,   # WS handshake timeout (webchat + webrtc)
-    "attachment_expiry_days": 30,   # soft-delete stage-1 expiry
+}
+
+# Defaults matching Config API seed — retention namespace (só o que o gateway lê).
+_RETENTION_DEFAULTS: dict[str, Any] = {
+    "attachment_days": 30,   # anexo de contato: expires_at = criação + N dias (ATT-04)
 }
 
 
@@ -47,7 +53,9 @@ class WebchatConfigCache:
         webchat_config.invalidate()                              # on config.changed
     """
 
-    def __init__(self) -> None:
+    def __init__(self, namespace: str = "webchat", defaults: dict[str, Any] | None = None) -> None:
+        self._namespace = namespace
+        self._defaults: dict[str, Any] = dict(_DEFAULTS if defaults is None else defaults)
         self._data: dict[str, Any] = {}
         self._loaded_at: float = 0.0
         self._invalidated: bool = True   # start invalid — forces first reload
@@ -56,7 +64,7 @@ class WebchatConfigCache:
         """Returns value from cache, falling back to _DEFAULTS, then `default`."""
         if key in self._data:
             return self._data[key]
-        return _DEFAULTS.get(key, default)
+        return self._defaults.get(key, default)
 
     def invalidate(self) -> None:
         """Marks cache stale (called on config.changed namespace == 'webchat')."""
@@ -73,7 +81,7 @@ class WebchatConfigCache:
         cache. Falls back silently to cached/default values on any error so the
         gateway stays operational when the Config API is temporarily unreachable.
         """
-        url = f"{config_api_url.rstrip('/')}/config/webchat"
+        url = f"{config_api_url.rstrip('/')}/config/{self._namespace}"
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(url, params={"tenant_id": tenant_id})
@@ -88,20 +96,31 @@ class WebchatConfigCache:
                 self._data = new_data
                 self._loaded_at = time.monotonic()
                 self._invalidated = False
-                logger.info("WebchatConfigCache reloaded: %d keys from %s", len(new_data), url)
+                logger.info("config cache '%s' reloaded: %d keys from %s",
+                            self._namespace, len(new_data), url)
             else:
                 self._invalidated = True
                 logger.warning(
-                    "WebchatConfigCache: Config API returned HTTP %d — using cached/default values",
-                    resp.status_code,
+                    "config cache '%s': Config API returned HTTP %d — %s",
+                    self._namespace, resp.status_code, self._what_degrades(),
                 )
         except Exception as exc:
             self._invalidated = True
             logger.warning(
-                "WebchatConfigCache reload failed (%s) — using cached/default values", exc
+                "config cache '%s' reload failed (%s) — %s", self._namespace, exc, self._what_degrades()
             )
+
+    def _what_degrades(self) -> str:
+        """Nomeia o que deixa de valer — "using default values" foi a frase que ninguém leu."""
+        if self._data:
+            return f"keeps the LAST loaded values ({', '.join(sorted(self._data))})"
+        return ("the tenant's values are NOT in effect; code defaults apply: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(self._defaults.items())))
 
 
 # Module-level singleton — imported by main.py (startup reload + config.changed)
 # and by attachment_store resolvers (hot-path reads).
 webchat_config = WebchatConfigCache()
+
+# ATT-04: o prazo do anexo mora no namespace `retention`, com as outras classes (AUD-07/08).
+retention_config = WebchatConfigCache("retention", _RETENTION_DEFAULTS)

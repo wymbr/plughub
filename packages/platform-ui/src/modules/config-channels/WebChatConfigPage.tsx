@@ -4,12 +4,14 @@
  *
  * Three configuration groups:
  *   1. Authentication  — auth_timeout_s
- *   2. Attachments     — attachment_expiry_days, upload_limits_mb (image/pdf/video)
+ *   2. Attachments     — upload_limits_mb (image/pdf/video). O PRAZO do anexo saiu daqui (ATT-04):
+ *                        é a classe `retention.attachment_days`, na tela de Mascaramento → Retenção.
  *   3. Info            — documentation link and MIME allowlist
  *
  * Admin token is requested inline (same pattern as NamespaceEditor).
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { useNamespace, putConfig } from '../config-plataforma/api/config-hooks'
 import Spinner from '@/components/ui/Spinner'
@@ -20,13 +22,11 @@ interface UploadLimits { image: number; pdf: number; video: number }
 
 interface WebChatConfig {
   auth_timeout_s:         number
-  attachment_expiry_days: number
   upload_limits_mb:       UploadLimits
 }
 
 const DEFAULTS: WebChatConfig = {
   auth_timeout_s:         30,
-  attachment_expiry_days: 30,
   upload_limits_mb:       { image: 16, pdf: 100, video: 512 },
 }
 
@@ -36,6 +36,7 @@ const WebChatConfigPage: React.FC = () => {
   // G-PROBE platform-wide: escritas usam o Bearer do operador + ABAC `config.canais` —
   // sem caixa de admin-token (`adminToken` = access token, nome mantido p/ diff mínimo).
   const { tenantId, session } = useAuth()
+  const { t } = useTranslation('channels')
   const { entries, loading, error, reload } = useNamespace(tenantId, 'webchat')
 
   const adminToken = session?.accessToken ?? ''
@@ -53,7 +54,6 @@ const WebChatConfigPage: React.FC = () => {
     }
     setCfg({
       auth_timeout_s:         parse('auth_timeout_s',         DEFAULTS.auth_timeout_s),
-      attachment_expiry_days: parse('attachment_expiry_days', DEFAULTS.attachment_expiry_days),
       upload_limits_mb:       parse('upload_limits_mb',       DEFAULTS.upload_limits_mb),
     })
     setDirty(false)
@@ -85,7 +85,6 @@ const WebChatConfigPage: React.FC = () => {
     try {
       await Promise.all([
         putConfig('webchat', 'auth_timeout_s',         cfg.auth_timeout_s,         null, '', adminToken),
-        putConfig('webchat', 'attachment_expiry_days', cfg.attachment_expiry_days, null, '', adminToken),
         putConfig('webchat', 'upload_limits_mb',       cfg.upload_limits_mb,       null, '', adminToken),
       ])
       setDirty(false)
@@ -146,24 +145,8 @@ const WebChatConfigPage: React.FC = () => {
       {/* ── 2. Attachments ── */}
       <section className="bg-white border border-border rounded-lg p-5">
         <h3 className="text-sm font-semibold text-dark mb-1">Attachment Policy</h3>
-        <p className="text-xs text-muted mb-4">
-          Controls expiry and size limits per file type. Soft-delete occurs at
-          <em> attachment_expiry_days</em>; physical delete happens 24h later.
-        </p>
-
-        {/* Expiry */}
-        <div className="mb-4">
-          <label className="text-xs font-medium text-dark block mb-1">Expiry (days)</label>
-          <div className="flex items-end gap-3">
-            <input
-              type="number"
-              min={1} max={365} step={1}
-              value={cfg.attachment_expiry_days}
-              onChange={e => update('attachment_expiry_days', parseInt(e.target.value) || DEFAULTS.attachment_expiry_days)}
-              className="w-24 text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
-            />
-          </div>
-        </div>
+        {/* ATT-04: o prazo do anexo é classe de retenção, com as outras — não mora mais aqui */}
+        <p className="text-xs text-muted mb-4">{t('webchat.attachmentRetentionMoved')}</p>
 
         {/* Upload limits */}
         <label className="text-xs font-medium text-dark block mb-2">Upload limits (MB)</label>
@@ -193,8 +176,8 @@ const WebChatConfigPage: React.FC = () => {
         </div>
 
         <SaveBtn
-          onClick={() => saveKey('attachment_expiry_days').then(() => saveKey('upload_limits_mb'))}
-          saving={saving === 'attachment_expiry_days' || saving === 'upload_limits_mb'}
+          onClick={() => saveKey('upload_limits_mb')}
+          saving={saving === 'upload_limits_mb'}
           disabled={!adminToken}
           label="Save attachment policy"
         />

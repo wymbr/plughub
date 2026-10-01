@@ -20,7 +20,8 @@ def test_get_returns_cached_value_over_defaults():
 def test_get_falls_back_to_builtin_default():
     c = WebchatConfigCache()
     assert c.get("auth_timeout_s", 99) == _DEFAULTS["auth_timeout_s"]
-    assert c.get("attachment_expiry_days", 99) == _DEFAULTS["attachment_expiry_days"]
+    # ATT-04: o prazo do anexo saiu do namespace webchat — default de chave inexistente
+    assert "attachment_expiry_days" not in _DEFAULTS
 
 
 def test_get_unknown_key_uses_passed_default():

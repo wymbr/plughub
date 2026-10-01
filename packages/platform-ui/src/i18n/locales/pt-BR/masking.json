@@ -153,6 +153,10 @@
     "survey_free_text_days": {
       "title": "Texto livre de pesquisa",
       "description": "Respostas abertas, verbatims e referências de áudio/transcrição das pesquisas. A nota fica."
+    },
+    "attachment_days": {
+      "title": "Anexos de contato",
+      "description": "Arquivos que o cliente enviou (webchat, WhatsApp, e-mail). O prazo é carimbado quando o arquivo chega, então mudar vale para os PRÓXIMOS anexos. Vencido, o arquivo deixa de ser servido e é apagado 24 h depois; o registro fica. Gravação de chamada tem prazo próprio."
     }
   }
 }

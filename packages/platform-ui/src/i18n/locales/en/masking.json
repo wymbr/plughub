@@ -153,6 +153,10 @@
     "survey_free_text_days": {
       "title": "Survey free text",
       "description": "Open-text answers, verbatims and audio/transcript references of survey responses. The score stays."
+    },
+    "attachment_days": {
+      "title": "Contact attachments",
+      "description": "Files the customer sent (webchat, WhatsApp, e-mail). The deadline is stamped when the file arrives, so a change applies to the NEXT attachments. Once expired the file is no longer served and is deleted 24 h later; the record stays. Call recordings have their own deadline."
     }
   }
 }

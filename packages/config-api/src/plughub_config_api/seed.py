@@ -417,13 +417,11 @@ _SEED: list[tuple[str, str, object, str]] = [
         "connection is accepted. Connection is dropped on timeout. "
         "Source: channel-gateway/config.py"
     ),
-    (
-        "webchat", "attachment_expiry_days",
-        30,
-        "Days before uploaded attachments are soft-deleted (stage 1 expiry). "
-        "Physical deletion occurs 24h later (stage 2). "
-        "Source: channel-gateway/config.py"
-    ),
+    # ATT-04 (2026-10-01): `webchat.attachment_expiry_days` SAIU — o prazo do anexo é a classe
+    # `retention.attachment_days` (abaixo, com as outras classes). O nome antigo dizia "webchat",
+    # e o prazo vale para anexo de QUALQUER canal. A linha já gravada foi apagada pela API
+    # (DELETE /config/webchat/attachment_expiry_days) na implantação: ficaria órfã e editável na
+    # tela sem efeito nenhum.
     (
         "webchat", "upload_limits_mb",
         {
@@ -527,6 +525,16 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Dias que o TEXTO LIVRE de uma resposta de pesquisa (open_text, verbatims e as "
         "referencias de audio e transcricao) fica guardado, contado da resposta. A nota fica. "
         "Inteiro de 1 a 3650. Config-api fora ou valor invalido: o expurgo PULA o tenant."
+    ),
+    (
+        "retention", "attachment_days",
+        30,
+        "Dias que um ANEXO de contato (webchat, WhatsApp, e-mail) fica disponivel, contado do "
+        "envio: o prazo e carimbado no anexo quando ele chega (expires_at), e mudar este valor "
+        "vale para os anexos SEGUINTES. Vencido, o anexo deixa de ser servido (410) e o arquivo "
+        "e apagado 24 h depois; o registro (sem o arquivo) fica. Gravacao de chamada tem prazo "
+        "proprio (storage.call_recording_retention_days). Config-api fora: o gateway usa o "
+        "ultimo valor carregado ou 30, e diz qual no log."
     ),
 
     # ── audit_policy ──────────────────────────────────────────────────────────

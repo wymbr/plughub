@@ -61,7 +61,7 @@ const NAMESPACES: NsEntry[] = [
     id: 'expurgo',
     label: 'Data Retention',
     icon: '🗑️', color: 'bg-slate-400',
-    desc: 'Data retention periods: voice_recording_days (recordings), attachment_days (message attachments) — applies to DB and file storage',
+    desc: 'Retention per data class lives in namespace `retention` (Masking → Retention): original_content_days, conversation_content_days, survey_free_text_days, attachment_days. Call recordings: storage.call_recording_retention_days',
   },
 ]
 

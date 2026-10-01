@@ -907,7 +907,9 @@ function ToggleCard({ label, sublabel, active, onToggle, saving, warning }: {
 // AUD-08 — as classes com expurgo. Classe nova entra aqui JUNTO com o expurgo dela
 // (chave sem leitor é promessa sem mecanismo). Gravação de chamada e entrada de mailing
 // têm prazo em outro lugar: `storage.call_recording_retention_days` e `entry_ttl_seconds`.
-const RETENTION_CLASSES = ['original_content_days', 'conversation_content_days', 'survey_free_text_days'] as const
+// ATT-04: `attachment_days` (anexo de contato) entrou com o expurgo dele — o `attachment_expiry`
+// do channel-gateway, que vence pelo `expires_at` carimbado na chegada.
+const RETENTION_CLASSES = ['original_content_days', 'conversation_content_days', 'survey_free_text_days', 'attachment_days'] as const
 
 function RetentionEditor({ value, onSave, saving }: {
   value: number | null; onSave: (v: number) => void; saving: boolean

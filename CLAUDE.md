@@ -1362,9 +1362,10 @@ mecanismo; cada um entra com a sua feature.
   lápide no cadastro; **na avaliação sai só a citação da conversa** e fica o julgamento (AUD-09).
   Loja que falha sai nomeada (207, `partial` na trilha), e o cadastro de identidade é o último a sair.
 - **Retenção é POR CLASSE de dado, por tenant, no namespace `retention` do config-api** (AUD-07).
-  Três classes (AUD-08): `original_content_days` (90) · `conversation_content_days` (365, stream
-  durável + `messages`/`contact_insights`/`session_timeline` + wrap-up de `segments`) ·
-  `survey_free_text_days` (365). O
+  Quatro classes (AUD-08, ATT-04): `original_content_days` (90) · `conversation_content_days` (365,
+  stream durável + `messages`/`contact_insights`/`session_timeline` + wrap-up de `segments`) ·
+  `survey_free_text_days` (365) · `attachment_days` (30, anexo de contato de qualquer canal, carimbado
+  na chegada como `expires_at` — mudar vale para os PRÓXIMOS; era `webchat.attachment_expiry_days`). O
   conteúdo sai, a linha de métrica fica; o texto desmascarado mora DENTRO de `payload`, nunca na
   coluna homônima. Classe nova entra na chave JUNTO com o expurgo dela; na dúvida sobre o prazo, o
   expurgo PULA o tenant, nunca adivinha. Prazos com casa própria: gravação
