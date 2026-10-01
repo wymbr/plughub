@@ -62,7 +62,7 @@ async def test_servico_le_meta_controle_positivo(ambiente):
 
 
 async def test_servico_le_conteudo_com_cabecalhos_da_porta(ambiente):
-    resp = await r.attachment_content(FILE, _req({"x-service-token": TOKEN}), tenant_id="t")
+    resp = await r.attachment_content(FILE, _req({"x-service-token": TOKEN}), tenant_id="t", variant=None)
     assert resp.headers["x-content-type-options"] == "nosniff"
     assert resp.headers["content-disposition"].startswith("inline;")
     assert resp.headers["cache-control"] == "no-store"
@@ -92,7 +92,7 @@ async def test_expirado_responde_410_no_conteudo_e_diz_na_meta(ambiente, monkeyp
     m = await r.attachment_meta(FILE, _req({"x-service-token": TOKEN}), tenant_id="t")
     assert m["expired"] is True
     with pytest.raises(HTTPException) as e:
-        await r.attachment_content(FILE, _req({"x-service-token": TOKEN}), tenant_id="t")
+        await r.attachment_content(FILE, _req({"x-service-token": TOKEN}), tenant_id="t", variant=None)
     assert e.value.status_code == 410
 
 

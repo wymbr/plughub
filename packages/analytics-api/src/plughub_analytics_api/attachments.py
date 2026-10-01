@@ -14,6 +14,12 @@ mesma conversa (decisão do dono, 2026-10-01 — `contacts.transcricao`, sem cam
   3. linha      — o pool da SESSÃO do anexo no escopo do chamador
      (`authorize_session_scope`, viva e fechada — a mesma resposta do transcript)   → 403
 
+  4. vista      — ATT-06: nítido só para quem ATENDE o contato (`human-{sub}` no roster da
+     sessão, papel primary/specialist) e para principal de serviço. Os demais (supervisor,
+     avaliador, replay) recebem a PRÉVIA BORRADA da imagem, feita no gateway; o original sai com
+     `?reveal=true`, que vai à trilha como `revealed`. Não-imagem sem `reveal` → 409
+     `reveal_required`. A resposta diz qual vista saiu em `X-Attachment-View`.
+
 TODO desfecho vai à trilha (`audit_access_log`, de que esta API é a única escritora): servido,
 recusado, desconhecido, expirado, indisponível. A recusa grava ANTES de responder — portão que
 levanta antes do corpo deixa a recusa fora da trilha (lição da Audit LGPD).
@@ -22,6 +28,7 @@ Os bytes vêm do gateway, por rota interna com `X-Service-Token`; a decisão nun
 """
 from __future__ import annotations
 
+import json
 import logging
 
 import httpx
@@ -39,6 +46,7 @@ router = APIRouter(prefix="/v1/attachments", tags=["attachments"])
 
 ENDPOINT = "analytics-api:attachments.view"
 FIELD = "transcricao"
+_ATTENDING_ROLES = frozenset({"primary", "specialist"})
 
 # Cabeçalhos que a resposta repassa do gateway (que já os calcula pela regra da ATT-01) —
 # e os de segurança, que esta porta garante por conta própria, mesmo que o gateway os perca.
@@ -50,14 +58,38 @@ _SECURITY = {
 }
 
 
-async def _gateway_get(path: str, tenant_id: str) -> httpx.Response:
+async def _attends(redis, session_id: str, sub: str) -> bool:
+    """ATT-06: o usuário ATENDE (ou atendeu) este contato? `human-{sub}` no roster da sessão
+    (`session:{id}:participants`, do bridge, 7 dias — sobrevive ao fechamento) com papel de
+    atendimento. Supervisor e avaliador não estão lá com esse papel.
+
+    Sem resposta (Redis fora, roster ilegível) é NÃO — a prévia borrada é o lado seguro, e o
+    `reveal` continua disponível e auditado. Dito no log, nunca calado.
+    """
+    if not sub or not session_id:
+        return False
+    try:
+        raw = await redis.get(f"session:{session_id}:participants")
+        roster = json.loads(raw) if raw else []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("attachment: roster de %s ilegível (%s) — prévia borrada", session_id, exc)
+        return False
+    eu = f"human-{sub}"
+    return any(isinstance(p, dict) and p.get("participant_id") == eu
+               and p.get("role") in _ATTENDING_ROLES for p in roster)
+
+
+async def _gateway_get(path: str, tenant_id: str, variant: str | None = None) -> httpx.Response:
     s = get_settings()
     if not s.channel_gateway_url or not s.channel_gateway_service_token:
         raise RuntimeError("PLUGHUB_CHANNEL_GATEWAY_URL/SERVICE_TOKEN ausentes na analytics-api")
+    params = {"tenant_id": tenant_id}
+    if variant:
+        params["variant"] = variant
     async with httpx.AsyncClient(timeout=30.0) as client:
         return await client.get(
             f"{s.channel_gateway_url}/v1/attachments/{path}",
-            params={"tenant_id": tenant_id},
+            params=params,
             headers={"X-Service-Token": s.channel_gateway_service_token,
                      "X-Service-Name": "analytics-api"},
         )
@@ -68,6 +100,7 @@ async def view_attachment(
     file_id:   str,
     request:   Request,
     tenant_id: str | None = Query(None),
+    reveal:    bool = Query(False),
     principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     # O tenant é o do TOKEN de usuário (TNT-01; `optional_pool_principal` já recusa a query que
@@ -123,8 +156,20 @@ async def view_attachment(
     if meta.get("expired"):
         await trilha("expired", target)
         raise HTTPException(status_code=410, detail="attachment expired")
+
+    # 4 · ATT-06: nítido só para quem ATENDE o contato; os demais veem a prévia borrada, e o
+    # original só com `reveal`, que vai à trilha com desfecho próprio
+    if principal.module_config is None or await _attends(request.app.state.redis, session_id, actor_sub):
+        view, ok_result, variant = "original", "ok", None
+    elif reveal:
+        view, ok_result, variant = "revealed", "revealed", None
+    elif str(meta.get("mime_type") or "").startswith("image/"):
+        view, ok_result, variant = "blurred", "ok_blurred", "blurred"
+    else:
+        await trilha("reveal_required", target)
+        raise HTTPException(status_code=409, detail="reveal_required")
     try:
-        content_r = await _gateway_get(f"{file_id}/content", tenant_id)
+        content_r = await _gateway_get(f"{file_id}/content", tenant_id, variant=variant)
     except Exception as exc:  # noqa: BLE001
         logger.error("attachment %s: gateway inalcançável para conteúdo — %s", file_id, exc)
         await trilha("unavailable", target)
@@ -139,8 +184,9 @@ async def view_attachment(
         raise HTTPException(status_code=content_r.status_code if content_r.status_code in (404, 410)
                             else 503, detail="attachment_unavailable")
 
-    await trilha("ok", target, rows=1)
+    await trilha(ok_result, target, rows=1)
     headers = {k: v for k, v in content_r.headers.items() if k.lower() in _PASS_THROUGH}
     headers.update(_SECURITY)
+    headers["X-Attachment-View"] = view
     return Response(content=content_r.content, status_code=200, headers=headers,
                     media_type=content_r.headers.get("content-type"))

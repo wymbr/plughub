@@ -48,7 +48,10 @@ docker inspect "$GW" >/dev/null 2>&1 || { incon "$GW fora do ar"; fim; }
 
 echo "══ probe_att02_attachment_internal_door — anexo: capacidade, pool da sessão, trilha ══"
 
-FX=$(docker exec -i -e MODE=create -e SID="$SID" -e POOL="$PA" -e TENANT="$TENANT" "$GW" python - \
+# ATT-06: o controle positivo (A4) é quem ATENDE — o roster da sessão o diz; os demais veriam a
+# prévia borrada, e a trilha a chamaria `ok_blurred`, não `ok` (o probe_att06 mede essa divisão)
+ROSTER='[{"participant_id":"human-probe_att02","role":"primary"}]'
+FX=$(docker exec -i -e MODE=create -e SID="$SID" -e POOL="$PA" -e TENANT="$TENANT" -e ROSTER="$ROSTER" "$GW" python -\
       < infra/test/_att02_fixture.py 2>/dev/null | tail -1)
 FILE=$(printf '%s' "$FX" | jq -r '.file // empty' 2>/dev/null)
 [ -n "$FILE" ] || { incon "fixture nao criada: $FX"; fim; }

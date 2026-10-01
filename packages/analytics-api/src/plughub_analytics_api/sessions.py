@@ -965,6 +965,12 @@ def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
         payload_obj = _safe_json(clean["payload"])
         if isinstance(payload_obj, dict) and "text" in payload_obj:
             content = {"text": payload_obj["text"]}
+            # ATT-06: o anexo do cliente (VOZ-28) mora em `payload.content.attachment`, e este
+            # fallback o perdia — a transcrição nunca mostrava o anexo
+            att = (payload_obj.get("content") or {}).get("attachment") \
+                if isinstance(payload_obj.get("content"), dict) else None
+            if isinstance(att, dict):
+                content["attachment"] = _attachment_without_link(att)
         elif payload_obj is not None:
             content = payload_obj
 
@@ -974,6 +980,12 @@ def _parse_entry(entry_id: str | bytes, data: dict) -> dict:
 
     entry_type = clean.get("type", "unknown")
     payload_parsed = _safe_json(clean.get("payload"))
+    # ATT-06: o link gravado por entradas antigas sai daqui — ele abria o ORIGINAL pela porta
+    # pública, sem a prévia borrada nem a trilha de quem não atende. Quem abre é o `file_id`.
+    if isinstance(payload_parsed, dict) and isinstance(payload_parsed.get("content"), dict) \
+            and isinstance(payload_parsed["content"].get("attachment"), dict):
+        payload_parsed["content"]["attachment"] = _attachment_without_link(
+            payload_parsed["content"]["attachment"])
 
 
     # ── Mask sensitive data in any entry ─────────────────────────────────────
@@ -1041,6 +1053,11 @@ def _safe_json(raw: str | None) -> Any:
         return json.loads(raw)
     except Exception:
         return raw
+
+
+def _attachment_without_link(att: dict) -> dict:
+    """ATT-06: o anexo vai à transcrição pelo `file_id`, nunca com o link da porta pública."""
+    return {k: v for k, v in att.items() if k != "url"}
 
 
 # ─── GET /sessions/{session_id}/workflow-trace ────────────────────────────────

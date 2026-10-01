@@ -69,6 +69,11 @@ function jsonObj(raw: string | undefined): Record<string, unknown> {
   } catch { return {} }
 }
 
+function withoutLink(att: Record<string, unknown>): Record<string, unknown> {
+  const { url: _url, ...rest } = att
+  return rest
+}
+
 /** `visibility` chega cru (`agents_only`, escrito pelo analytics-api), em JSON (`"all"`, escrito
  *  pelo `writeStreamEntry`) ou como lista JSON de participantes. As formas de string são o mesmo
  *  valor; a lista volta como lista. */
@@ -141,8 +146,10 @@ export function projectStreamForConsole(entries: RawStreamEntry[]): StreamProjec
       text,
       timestamp: f["timestamp"] ?? "",
       visibility,
+      // ATT-06: sem o `url` que entradas antigas gravaram — ele abria o ORIGINAL pela porta
+      // pública, fora da prévia borrada e da trilha. O Console abre pelo `file_id`.
       ...(content["attachment"] && typeof content["attachment"] === "object"
-        ? { attachment: content["attachment"] as Record<string, unknown> } : {}),
+        ? { attachment: withoutLink(content["attachment"] as Record<string, unknown>) } : {}),
     })
   }
   return { callActive: !closed && callState === "started", messages }

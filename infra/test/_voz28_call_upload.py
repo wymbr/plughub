@@ -10,7 +10,7 @@ arquivo de verdade pelo caminho de anexos do chat: `upload.request` → `upload.
   U1 `upload.ready` com `file_id` e `upload_url`
   U2 POST 204 e `upload.committed` no WebSocket do CHAT, com o `file_id`
   U3 o `msg.document` vira MENSAGEM do stream: indicador `[Anexo: …]` e `content.attachment` com
-     o `file_id` e o link (antes da VOZ-28 o bridge descartava `media` e este ramo ficava vermelho)
+     o `file_id` e SEM link (ATT-06; antes da VOZ-28 o bridge descartava `media`)
   U4 o arquivo servido devolve os MESMOS bytes
   U5 a chamada segue de pé depois do upload (o `/ws/call` responde ping, sem encerramento)
   N1 CONTROLE: PDF declarado com bytes que não são PDF → 415 (a validação de conteúdo roda)
@@ -144,9 +144,11 @@ async def main():
             break
         await asyncio.sleep(0.5)
     att = (achou or {}).get("attachment") or {}
-    veredito(bool(achou) and str(achou.get("text", "")).startswith("[Anexo:") and bool(att.get("url")),
-             f"U3 o documento virou mensagem do stream com indicador e link "
-             f"(texto={(achou or {}).get('text')!r} link={'sim' if att.get('url') else 'NAO'})")
+    # ATT-06: o anexo vai ao stream pelo `file_id`, SEM o link assinado — no stream ele chegava a
+    # quem não atende e abria o original fora da prévia borrada e da trilha
+    veredito(bool(achou) and str(achou.get("text", "")).startswith("[Anexo:") and not att.get("url"),
+             f"U3 o documento virou mensagem do stream com indicador e file_id, sem link "
+             f"(texto={(achou or {}).get('text')!r} link={'SIM' if att.get('url') else 'nao'})")
     cst, corpo = await asyncio.to_thread(get, interno((com or {}).get("url", "")))
     veredito(cst == 200 and corpo == PDF, f"U4 o arquivo servido devolve os mesmos bytes (http {cst}, {len(corpo)} bytes)")
     try:

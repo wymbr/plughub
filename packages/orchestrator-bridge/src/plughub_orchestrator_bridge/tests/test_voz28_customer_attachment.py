@@ -43,9 +43,9 @@ class TestAnexoVira:
         assert r.lpushes == [(f"menu:result:{SID}", "[Anexo: contrato.pdf] segue o contrato")]
         [c] = _stream_contents(r)
         assert c["text"] == "[Anexo: contrato.pdf] segue o contrato"
+        # ATT-06: sem `url` — o link assinado abriria o original fora da porta que borra e audita
         assert c["attachment"] == {"media_type": "document", "file_id": "f-1",
-                                   "mime_type": "application/pdf", "size_bytes": 1234,
-                                   "url": "http://gw/webchat/v1/attachments/f-1"}
+                                   "mime_type": "application/pdf", "size_bytes": 1234}
         assert "file_name" not in c["attachment"], "o nome mora so no indicador (passa pela rede)"
         msgs = [ev["content"] for t, ev in producer.sent if ev.get("event_type") == "message_sent"]
         assert msgs == ["[Anexo: contrato.pdf] segue o contrato"]
@@ -56,8 +56,8 @@ class TestAnexoVira:
         [(canal, data)] = r.publishes
         ev = json.loads(data)
         assert canal == f"agent:events:{SID}" and ev["text"] == "[Anexo: contrato.pdf]"
-        assert ev["attachment"]["file_id"] == "f-1"
-        assert _stream_contents(r)[0]["attachment"]["url"].endswith("/f-1")
+        assert ev["attachment"]["file_id"] == "f-1" and "url" not in ev["attachment"]
+        assert "url" not in _stream_contents(r)[0]["attachment"]   # ATT-06
 
     async def test_sem_nome_o_indicador_diz_o_tipo(self, producer):
         r = _Redis()

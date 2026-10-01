@@ -125,7 +125,8 @@ describe("projectStreamForConsole — anexo do cliente (VOZ-28)", () => {
     })
     const [m] = projectStreamForConsole([anexo]).messages
     expect(m.text).toBe("[Anexo: contrato.pdf]")
-    expect(m.attachment).toEqual(att)
+    // ATT-06: a entrada antiga gravou o link da porta pública; ele não chega ao Console
+    expect(m.attachment).toEqual({ media_type: "document", file_id: "f-1" })
   })
 
   it("controle: mensagem sem anexo não ganha o campo", () => {

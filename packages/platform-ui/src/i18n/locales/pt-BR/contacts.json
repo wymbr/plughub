@@ -274,6 +274,10 @@
       "expired": "Anexo expirado",
       "notFound": "Anexo não encontrado",
       "pendingScan": "Em verificação pelo antivírus — tente de novo em instantes",
+      "blurredNotice": "Prévia borrada — você não atende este contato.",
+      "reveal": "Revelar (fica registrado na auditoria)",
+      "revealNotice": "{{kind}} — você não atende este contato.",
+      "revealAndDownload": "Revelar e baixar (fica registrado na auditoria)",
       "loadError": "Não foi possível carregar o anexo ({{status}})",
       "noLink": "{{kind}} anexado (sem link)",
       "kind": { "image": "imagem", "document": "documento", "video": "vídeo", "audio": "nota de voz" }

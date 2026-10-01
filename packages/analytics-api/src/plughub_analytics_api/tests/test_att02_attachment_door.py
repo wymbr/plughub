@@ -10,6 +10,7 @@ Cada recusa tem o controle positivo ao lado.
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -35,10 +36,12 @@ class _Gateway:
 
     def __init__(self, meta_status=200, expired=False, content_status=200):
         self.chamadas: list[str] = []
+        self.variantes: list[str | None] = []
         self.meta_status, self.expired, self.content_status = meta_status, expired, content_status
 
-    async def __call__(self, path: str, tenant_id: str) -> httpx.Response:
+    async def __call__(self, path: str, tenant_id: str, variant: str | None = None) -> httpx.Response:
         self.chamadas.append(path)
+        self.variantes.append(variant)
         if path.endswith("/meta"):
             if self.meta_status != 200:
                 return httpx.Response(self.meta_status)
@@ -71,13 +74,29 @@ def pools_da_sessao(monkeypatch):
     return estado
 
 
-def _req():
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=object(), store=None)))
+# ATT-06: quem ATENDE o contato está no roster da sessão como `human-{sub}` com papel de atendimento
+ATENDE = [{"participant_id": "human-u1", "role": "primary"}]
 
 
-async def _ver(principal, gw, monkeypatch):
+class _Redis:
+    def __init__(self, roster):
+        self.roster = roster
+
+    async def get(self, key):
+        assert key == f"session:{SID}:participants", key
+        if isinstance(self.roster, Exception):
+            raise self.roster
+        return None if self.roster is None else json.dumps(self.roster)
+
+
+def _req(roster=ATENDE):
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=_Redis(roster), store=None)))
+
+
+async def _ver(principal, gw, monkeypatch, *, reveal=False, roster=ATENDE):
     monkeypatch.setattr(attachments, "_gateway_get", gw)
-    return await attachments.view_attachment(FILE, _req(), tenant_id=None, principal=principal)
+    return await attachments.view_attachment(FILE, _req(roster), tenant_id=None, reveal=reveal,
+                                             principal=principal)
 
 
 @pytest.mark.asyncio
@@ -163,7 +182,8 @@ async def test_servico_escolhe_o_tenant_pela_query(monkeypatch, trilha, pools_da
     monkeypatch.setattr(attachments, "_gateway_get", _Gateway())
     svc = PoolPrincipal(accessible_pools=None, tenant_id=None, sub="service:x", module_config=None)
     with pytest.raises(HTTPException) as e:
-        await attachments.view_attachment(FILE, _req(), tenant_id=None, principal=svc)
+        await attachments.view_attachment(FILE, _req(), tenant_id=None, reveal=False, principal=svc)
     assert e.value.status_code == 400
-    r = await attachments.view_attachment(FILE, _req(), tenant_id="tenant_demo", principal=svc)
-    assert r.status_code == 200
+    r = await attachments.view_attachment(FILE, _req(roster=None), tenant_id="tenant_demo",
+                                          reveal=False, principal=svc)
+    assert r.status_code == 200 and r.headers["x-attachment-view"] == "original"   # ATT-06

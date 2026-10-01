@@ -10,6 +10,10 @@
  *
  * Imagem: miniatura carregada ao montar; clicar abre a imagem numa aba. Outros tipos (PDF, vídeo,
  * nota de voz): botão que BAIXA — a mesma regra da porta (ATT-01), só imagem é exibida.
+ *
+ * ATT-06: quem não ATENDE o contato (supervisor, avaliador, replay) recebe a prévia BORRADA da
+ * imagem — o servidor decide e diz qual vista saiu em `X-Attachment-View`. O original sai por
+ * "Revelar", que fica na trilha de auditoria; não-imagem responde 409 `reveal_required` até isso.
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,13 +33,15 @@ interface Props {
   className?: string
 }
 
+type View = 'original' | 'blurred' | 'revealed'
+
 const EXT: Record<string, string> = {
   'application/pdf': 'pdf', 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/ogg': 'ogg',
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
 }
 
-function attachmentPath(fileId: string): string {
-  return `/analytics/v1/attachments/${encodeURIComponent(fileId)}`
+function attachmentPath(fileId: string, reveal: boolean): string {
+  return `/analytics/v1/attachments/${encodeURIComponent(fileId)}${reveal ? '?reveal=true' : ''}`
 }
 
 export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, className }) => {
@@ -44,17 +50,23 @@ export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, cla
   const fileId = attachment.file_id
   const isImage = attachment.media_type === 'image'
   const [thumb, setThumb] = useState<string | null>(null)
+  const [view, setView]   = useState<View | null>(null)
+  const [needsReveal, setNeedsReveal] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy]   = useState(false)
   const urls = useRef<string[]>([])
 
   useEffect(() => () => { urls.current.forEach(u => URL.revokeObjectURL(u)); urls.current = [] }, [fileId])
 
-  async function fetchBlob(): Promise<Blob | null> {
+  async function fetchBlob(reveal: boolean): Promise<{ blob: Blob; view: View } | null> {
     if (!fileId) return null
     setBusy(true); setError(null)
     try {
-      const r = await apiFetch(attachmentPath(fileId))
+      const r = await apiFetch(attachmentPath(fileId, reveal))
+      if (r.status === 409) {
+        setNeedsReveal(true)
+        return null
+      }
       if (!r.ok) {
         setError(r.status === 403 ? t('denied')
                : r.status === 410 ? t('expired')
@@ -63,7 +75,8 @@ export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, cla
                : t('loadError', { status: r.status }))
         return null
       }
-      return await r.blob()
+      const v = r.headers.get('x-attachment-view')
+      return { blob: await r.blob(), view: v === 'blurred' || v === 'revealed' ? v : 'original' }
     } catch {
       setError(t('loadError', { status: '—' }))
       return null
@@ -72,23 +85,36 @@ export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, cla
     }
   }
 
+  function showThumb(b: Blob) {
+    const u = URL.createObjectURL(b)
+    urls.current.push(u)
+    setThumb(u)
+  }
+
   useEffect(() => {
     if (!isImage || !fileId) return
     let cancelled = false
-    fetchBlob().then(b => {
-      if (cancelled || !b) return
-      const u = URL.createObjectURL(b)
-      urls.current.push(u)
-      setThumb(u)
+    fetchBlob(false).then(res => {
+      if (cancelled || !res) return
+      showThumb(res.blob)
+      setView(res.view)
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, isImage])
 
-  async function download() {
-    const b = await fetchBlob()
-    if (!b || !fileId) return
-    const u = URL.createObjectURL(b)
+  async function revealImage() {
+    const res = await fetchBlob(true)
+    if (!res) return
+    showThumb(res.blob)
+    setView(res.view)
+  }
+
+  async function download(reveal: boolean) {
+    const res = await fetchBlob(reveal)
+    if (!res || !fileId) return
+    setNeedsReveal(false)
+    const u = URL.createObjectURL(res.blob)
     const a = document.createElement('a')
     a.href = u
     a.download = `${attachment.media_type ?? 'attachment'}-${fileId.slice(0, 8)}.${EXT[attachment.mime_type ?? ''] ?? 'bin'}`
@@ -106,10 +132,26 @@ export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, cla
           <img src={thumb} alt={kind} className="max-h-40 max-w-full rounded-md object-contain" />
         </a>
       )}
-      {!isImage && (
-        <button type="button" onClick={download} disabled={busy} className="text-left text-xs underline">
+      {isImage && view === 'blurred' && (
+        <span className="text-xs italic opacity-80">
+          {t('blurredNotice')}{' '}
+          <button type="button" onClick={revealImage} disabled={busy} className="underline">
+            {t('reveal')}
+          </button>
+        </span>
+      )}
+      {!isImage && !needsReveal && (
+        <button type="button" onClick={() => download(false)} disabled={busy} className="text-left text-xs underline">
           📎 {t('download', { kind })}
         </button>
+      )}
+      {!isImage && needsReveal && (
+        <span className="text-xs italic opacity-80">
+          📎 {t('revealNotice', { kind })}{' '}
+          <button type="button" onClick={() => download(true)} disabled={busy} className="underline">
+            {t('revealAndDownload')}
+          </button>
+        </span>
       )}
       {busy && isImage && !thumb && <span className="text-xs italic opacity-80">{t('loading')}</span>}
       {error && <span className="text-xs italic opacity-80">📎 {error}</span>}

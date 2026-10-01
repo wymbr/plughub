@@ -9,6 +9,8 @@ entrega, e só a quem apresenta a credencial de SERVIÇO do gateway.
 
     GET /v1/attachments/{file_id}/meta     → de qual sessão é, tipo, tamanho, se expirou
     GET /v1/attachments/{file_id}/content  → os bytes, com os cabeçalhos da porta (ATT-01)
+        ?variant=blurred                    → a PRÉVIA BORRADA de uma imagem (ATT-06), para quem
+                                              não atende o contato; quem decide é a analytics-api
 
 O tenant vem da query: principal de serviço escolhe o tenant (TNT-01). Usuário recebe 403 aqui
 mesmo com grant — rota interna não é porta alternativa para quem a analytics-api recusaria.
@@ -21,7 +23,7 @@ import logging
 from typing import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from . import main as _main_module
 from .attachment_store import (
@@ -31,6 +33,7 @@ from .attachment_store import (
     served_media_type,
 )
 from .identity_auth import identity_principal
+from .media_sanitize import blurred_preview, is_image
 
 logger = logging.getLogger("plughub.channel-gateway.attachment-internal")
 
@@ -74,8 +77,11 @@ async def attachment_meta(file_id: str, request: Request, tenant_id: str = Query
 
 @router.get("/{file_id}/content")
 async def attachment_content(file_id: str, request: Request,
-                             tenant_id: str = Query(...)) -> StreamingResponse:
+                             tenant_id: str = Query(...),
+                             variant: str | None = Query(None)) -> Response:
     _service_only(request)
+    if variant not in (None, "", "blurred"):
+        raise HTTPException(status_code=400, detail=f"unknown variant: {variant}")
     store, meta = await _meta(file_id, tenant_id)
     if meta.deleted_at is not None:
         raise HTTPException(status_code=410, detail="attachment expired")
@@ -84,10 +90,25 @@ async def attachment_content(file_id: str, request: Request,
         raise HTTPException(status_code=recusa[0], detail=recusa[1])
     if meta.file_path is None:
         raise HTTPException(status_code=404, detail="file not committed")
+    if variant == "blurred" and not is_image(meta.mime_type):
+        # ATT-06: só imagem tem prévia borrada; o resto se revela ou não se vê
+        raise HTTPException(status_code=415, detail="no_blurred_variant")
     try:
         stream: AsyncIterator[bytes] = await store.stream_bytes(file_id=file_id, tenant_id=tenant_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if variant == "blurred":
+        # ATT-06: a prévia de quem não atende — reduzida e borrada AQUI; o original não sai
+        try:
+            borrada = blurred_preview(b"".join([c async for c in stream]), meta.mime_type)
+        except ValueError as exc:
+            logger.warning("attachment %s: prévia borrada falhou — %s", file_id, exc)
+            raise HTTPException(status_code=422, detail="blurred_preview_failed") from exc
+        return Response(content=borrada, media_type="image/jpeg", headers={
+            "Content-Disposition": content_disposition("preview.jpg", "image/jpeg"),
+            "Cache-Control":       "no-store",
+            **SERVE_SECURITY_HEADERS,
+        })
     media_type = served_media_type(meta.mime_type)
     return StreamingResponse(
         stream,

@@ -735,7 +735,10 @@ def customer_attachment(content: dict) -> tuple[dict | None, str]:
         return None, ""
     media_type = str(payload.get("media_type") or "document")
     att = {"media_type": media_type, "file_id": file_id}
-    for k in ("mime_type", "size_bytes", "url"):
+    # ATT-06: o `url` (assinado, porta PÚBLICA, original) NÃO é gravado: no stream ele chegava a
+    # quem não atende e abria o original sem passar pela prévia borrada nem pela trilha. Quem
+    # precisa de link o cunha pelo `file_id` na entrega (ATT-03); o Console usa a porta interna.
+    for k in ("mime_type", "size_bytes"):
         if payload.get(k) not in (None, ""):
             att[k] = payload[k]
     nome = str(payload.get("file_name") or "") or _MEDIA_LABEL.get(media_type, "arquivo")

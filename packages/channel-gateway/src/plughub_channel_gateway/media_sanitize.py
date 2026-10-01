@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import io
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 # Teto de pixels decodificados, conferido no CABEÇALHO, antes de decodificar. O
 # `Image.MAX_IMAGE_PIXELS` do Pillow só RECUSA no dobro do valor (abaixo disso, avisa), então ele
@@ -35,6 +35,40 @@ _FORMATS = {
 
 def is_image(mime_type: str) -> bool:
     return mime_type in _FORMATS
+
+
+# ATT-06 — a prévia de quem NÃO atende o contato (supervisor, avaliador, replay). Borrar só com
+# GaussianBlur é parcialmente reversível (deconvolução); a imagem é primeiro REDUZIDA a poucos
+# pixels — o detalhe deixa de existir — e só então ampliada e suavizada para ficar legível como
+# forma e cor. O original nunca sai por este caminho.
+PREVIEW_DETAIL_PX = 24     # lado maior depois da redução: o que sobra de informação
+PREVIEW_SIZE_PX = 320      # lado maior da prévia entregue
+
+
+def blurred_preview(data: bytes, mime_type: str) -> bytes:
+    """JPEG da prévia borrada. Levanta ValueError se a imagem não decodifica."""
+    if not is_image(mime_type):
+        raise ValueError(f"sem prévia borrada para {mime_type}")
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            if img.width * img.height > MAX_PIXELS:
+                raise ValueError("imagem grande demais para decodificar com segurança")
+            img.seek(0)
+            base = ImageOps.exif_transpose(img).convert("RGB")
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"imagem não decodifica ({type(exc).__name__}: {exc})") from exc
+    w, h = base.size
+    escala = PREVIEW_DETAIL_PX / max(w, h, 1)
+    pequena = base.resize((max(1, round(w * escala)), max(1, round(h * escala))), Image.BILINEAR)
+    escala = PREVIEW_SIZE_PX / max(pequena.size)
+    saida = pequena.resize((max(1, round(pequena.width * escala)), max(1, round(pequena.height * escala))),
+                           Image.BICUBIC).filter(ImageFilter.GaussianBlur(radius=6))
+    out = io.BytesIO()
+    saida.save(out, format="JPEG", quality=70)
+    return out.getvalue()
 
 
 def sanitize_image(data: bytes, mime_type: str) -> bytes:

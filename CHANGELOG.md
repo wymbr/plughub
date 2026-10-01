@@ -1,5 +1,65 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (8) — ATT-06: nítido só para quem atende; os demais veem a prévia borrada, e revelar fica na trilha
+
+**Antes:** quem tinha `contacts.transcricao` sobre o pool via o original de todo anexo: o
+supervisor que monitora, o avaliador e o replay. E havia um **atalho fora da porta**. O bridge
+gravava no stream o link ASSINADO da porta pública (`content.attachment.url`, válido por 1 h). A
+transcrição (SSE da analytics-api) e o histórico do Console o repassavam no `payload`. Com ele,
+qualquer um que lesse a transcrição abria o original **sem passar pela porta interna**: sem
+capacidade, sem escopo e sem trilha.
+
+**O que passou a ser verdade:**
+- **A porta interna decide a VISTA**, depois da capacidade e do escopo:
+  - quem **ATENDE** vê o original. "Atender" é ter `human-{sub}` no roster da sessão
+    (`session:{id}:participants`, do bridge; TTL de 7 dias, sobrevive ao fechamento) com papel
+    `primary` ou `specialist`;
+  - principal de serviço vê o original;
+  - os demais recebem a **prévia borrada** da imagem. Outro tipo de arquivo responde 409
+    `reveal_required`;
+  - o original sai com `?reveal=true`, que a trilha registra como **`revealed`**. A trilha ganhou
+    também os desfechos `ok_blurred` e `reveal_required`.
+- **Roster ilegível é NÃO**: sai a prévia, com o motivo no log, e o `reveal` continua disponível.
+- **A prévia é feita no gateway** (`?variant=blurred` na rota interna, só serviço): a imagem é
+  reduzida a 24 px e só depois ampliada e suavizada. Um borrão só por filtro seria reversível em
+  parte; aqui o detalhe deixa de existir. A variante passa pelas mesmas recusas da porta
+  (antivírus, expiração).
+- **O link assinado saiu de todo lugar em que chegava a quem não atende:**
+  - o bridge não o grava mais no stream;
+  - a transcrição e o histórico do Console o retiram das entradas antigas.
+
+  Ninguém o lia: a entrega ao cliente re-assina pelo `file_id` (ATT-03), e o Console usa a porta
+  interna (ATT-02).
+- O Console mostra *"Prévia borrada — você não atende este contato"* com **Revelar (fica
+  registrado na auditoria)**, ou **Revelar e baixar** para outro tipo (en e pt-BR). A vista vem
+  no cabeçalho `X-Attachment-View`.
+
+**Achado no caminho:** a transcrição de sessão **nunca mostrou o anexo**. O fallback de `content`
+na SSE (`_parse_entry`) o reduzia a `{"text"}` e descartava `attachment`. A ATT-02 e a VOZ-28
+mediram a porta e o stream, mas não o que a tela recebe. Visto no navegador nesta entrega: a
+transcrição do admin passou a mostrar o anexo e o pedido de revelar.
+
+**Gates:**
+- `probe_att06_attachment_view.sh` VERDE ao vivo, pelo caminho do Console (5174), com os mesmos
+  grants e o mesmo pool nos três usuários: só o roster os distingue. Ramos V1–V5, S1 (transcrição
+  sem link), I1 e T1 (trilha).
+- `mut_att06_attachment_view.sh`: **6/6 mutações pegas** — todos "atendem"; o papel não é
+  conferido; a prévia pede o original; revelar vai à trilha como acesso comum; não-imagem tratada
+  como imagem; o link volta à transcrição.
+- O controle positivo do `probe_att02` passou a ser um atendente (senão sairia `ok_blurred`).
+- O U3 do `probe_voz28` passou a exigir o anexo **sem** link.
+- Probes verdes ao vivo: ATT-02, ATT-05, VOZ-28.
+- Testes:
+  - gateway **1601 passed** (prévia: o detalhe some, cor e forma ficam, orientação, recusas na
+    variante);
+  - analytics-api **920 passed** (vistas, revelar, roster ilegível, transcrição sem link);
+  - bridge **281 passed**;
+  - `console-history` 12/12;
+  - typecheck do platform-ui limpo.
+
+**O que não foi visto no navegador:** a prévia borrada de uma IMAGEM. Nenhuma sessão que o admin
+alcança tem imagem; o probe mede os bytes e o cabeçalho.
+
 ## 2026-10-01 (7) — ATT-05: só sai anexo que o antivírus disse `clean`, e imagem é gravada re-codificada
 
 **Antes:** o anexo de contato era gravado como chegou. A foto do celular levava o EXIF (GPS,

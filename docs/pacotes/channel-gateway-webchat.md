@@ -156,7 +156,9 @@ Console ── apiFetch (Bearer) ──▶ /analytics/v1/attachments/{file_id}  
                                    2. meta no gateway  (/v1/attachments/{id}/meta, X-Service-Token)
                                    3. authorize_session_scope(pool da SESSÃO)       → 403
                                    4. bytes no gateway (/v1/attachments/{id}/content)
-                                   todo desfecho → audit_access_log (ok · denied · not_found · expired · pending_scan · unavailable)
+                                   5. vista (ATT-06): quem atende → original; os demais → prévia borrada / reveal
+                                   todo desfecho → audit_access_log (ok · ok_blurred · revealed · reveal_required ·
+                                                   denied · not_found · expired · pending_scan · unavailable)
 ```
 
 - **A capacidade é `contacts.transcricao`** (decisão do dono, 2026-10-01): o anexo é conteúdo da
@@ -206,6 +208,34 @@ Todo `commit` de anexo de **contato** (`webchat_attachment`: webchat, WhatsApp, 
   ele passa limpo (medido). A esteira não depende disso — a re-codificação tira a carga da imagem.
 
 Gate: `infra/test/probe_att05_ingest_pipeline.sh`, com bateria em `mut_att05_ingest_pipeline.sh`.
+
+### Nítido para quem atende, borrado para os demais (ATT-06, 2026-10-01)
+
+A porta interna (analytics-api) decide a VISTA depois da capacidade e do escopo:
+
+| Quem | Imagem | Outro tipo | Trilha |
+|---|---|---|---|
+| quem ATENDE (`human-{sub}` no roster `session:{id}:participants`, papel `primary`/`specialist`) | original | original | `ok` |
+| principal de serviço | original | original | `ok` |
+| os demais (supervisor, avaliador, replay, quem não está no roster) | **prévia borrada** | 409 `reveal_required` | `ok_blurred` · `reveal_required` |
+| os demais com `?reveal=true` | original | original | **`revealed`** |
+
+- **O roster é o do bridge** (TTL 7 dias, sobrevive ao fechamento): quem atendeu continua vendo
+  nítido o próprio contato no histórico. Supervisor não aparece lá com papel de atendimento.
+- **Roster ilegível (Redis fora) é NÃO** — prévia borrada, com o motivo no log; o `reveal` segue
+  disponível e auditado.
+- **A prévia é feita no gateway** (`media_sanitize.blurred_preview`, `?variant=blurred` na rota
+  interna, só serviço): a imagem é REDUZIDA a 24 px no lado maior e só então ampliada e suavizada.
+  Borrar só com filtro seria reversível em parte; aqui o detalhe deixa de existir. Sai em JPEG.
+- A resposta diz a vista em `X-Attachment-View` (`original` · `blurred` · `revealed`), e o Console
+  mostra "Revelar (fica registrado na auditoria)" sob a prévia, ou "Revelar e baixar" para outro tipo.
+- **O link assinado não vai mais ao stream** (bridge) e é retirado de entradas antigas na
+  transcrição (SSE da analytics-api) e no histórico do Console: ele abria o ORIGINAL pela porta
+  pública, sem prévia e sem trilha. Quem precisa de link o cunha pelo `file_id` na entrega (ATT-03).
+- A transcrição (SSE) **passou a levar o anexo** — o fallback de `content` o descartava, e nenhuma
+  transcrição de sessão mostrava o anexo.
+
+Gate: `infra/test/probe_att06_attachment_view.sh`, com bateria em `mut_att06_attachment_view.sh`.
 
 ---
 

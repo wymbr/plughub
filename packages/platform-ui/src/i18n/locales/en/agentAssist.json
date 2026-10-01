@@ -661,6 +661,10 @@
     "expired": "Attachment expired",
     "notFound": "Attachment not found",
     "pendingScan": "Being checked by the antivirus — try again in a moment",
+    "blurredNotice": "Blurred preview — you are not attending this contact.",
+    "reveal": "Reveal (recorded in the audit trail)",
+    "revealNotice": "{{kind}} — you are not attending this contact.",
+    "revealAndDownload": "Reveal and download (recorded in the audit trail)",
     "loadError": "Could not load the attachment ({{status}})",
     "noLink": "{{kind}} attached (no link)",
     "kind": { "image": "image", "document": "document", "video": "video", "audio": "voice note" }
