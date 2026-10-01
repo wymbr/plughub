@@ -66,6 +66,7 @@ from .identity_auth import identity_principal, tenant_for
 from .context_reader import ContextReader
 from .pool_existence import fetch_pool, pool_existence, resolve_contact_address
 from . import a2a_tasks
+from . import a2a_customer_token
 from plughub_contextstore.writer import write_context_tags
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint
 from .outbound_consumer import OutboundConsumer
@@ -3000,8 +3001,18 @@ async def a2a_interface(slug: str, request: Request) -> JSONResponse:
         logger.info("a2a: versão %s recusada (principal %s, slug=%s)", verr.data["requested"], p.sub, slug)
         return JSONResponse({"jsonrpc": "2.0", "id": req.get("id") if isinstance(req, dict) else None,
                              "error": verr.as_json()})
+    holder = quota = None
+    if p.kind == "customer_agent":
+        # AAS-09 — o titular e a cota vêm do TOKEN (D6, D9); o introspect já recusou o sem titular.
+        holder = a2a_tasks.Holder(customer_id=p.customer_id or "", proof_mechanism=p.proof_mechanism or "",
+                                  proof_verified_at=p.proof_verified_at or "", mandate=p.mandate)
+        if p.max_active_tasks and p.max_tasks_per_day:
+            quota = (p.max_active_tasks, p.max_tasks_per_day)
+        else:
+            logger.error("a2a: customer_agent %s sem cota na introspecção — recusado (D9: cota é requisito)", p.sub)
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
     caller = a2a_tasks.Caller(sub=p.sub, kind=p.kind, tenant_id=p.tenant_id, pool_id=ep.pool_id,
-                              slug=slug)
+                              slug=slug, holder=holder, quota=quota)
     try:
         if isinstance(req, dict) and req.get("method") in a2a_tasks.STREAMING_METHODS:
             # AAS-07: erro ANTES do stream é JSON-RPC comum; aberto, cada evento é um `data:` SSE
@@ -3017,7 +3028,61 @@ async def a2a_interface(slug: str, request: Request) -> JSONResponse:
         # §9 do ADR: chamador de máquina reenvia em laço — back-pressure explícito, nunca 500.
         logger.warning("a2a: contrato do pool %s não conferido (principal %s): %s", ep.pool_id, p.sub, exc)
         return JSONResponse({"error": "unavailable"}, status_code=503, headers={"Retry-After": "5"})
+    except a2a_tasks.A2AQuota as q:
+        # AAS-09 (D9): a spec não tem erro de cota; para chamador de máquina é back-pressure.
+        return JSONResponse({"error": "quota_exceeded", "quota": q.which, "limit": q.limit},
+                            status_code=429, headers={"Retry-After": str(q.retry_after_s)})
     return JSONResponse(body)
+
+
+# ── Retirada do token do cliente (AAS-09) ────────────────────────────────────
+#
+# Debaixo de `/a2a` (prefixo público já declarado no `probe_edge_surface.sh`); o slug
+# `customer-token` é reservado no registry para a URL não significar duas coisas. Ver
+# `a2a_customer_token.py` para o porquê do GET que não retira.
+
+@app.get("/a2a/customer-token/{code}")
+async def a2a_customer_token_offer(code: str):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(a2a_customer_token.page_offer(), headers=a2a_customer_token.HEADERS)
+
+
+@app.post("/a2a/customer-token/{code}")
+async def a2a_customer_token_redeem(code: str):
+    from fastapi.responses import HTMLResponse
+    settings = get_settings()
+    res = await a2a_customer_token.redeem(
+        code, tenant_id=settings.tenant_id, auth_api_url=settings.auth_api_url,
+        service_token=settings.auth_api_service_token)
+    if res.outcome == "gone":
+        return HTMLResponse(a2a_customer_token.page_gone(), status_code=410, headers=a2a_customer_token.HEADERS)
+    if res.outcome != "ok" or res.principal is None:
+        logger.warning("a2a: retirada de token indisponível: %s", res.reason)
+        return HTMLResponse(a2a_customer_token.page_unavailable(), status_code=503,
+                            headers={**a2a_customer_token.HEADERS, "Retry-After": "5"})
+    cards = await _a2a_card_urls(settings, list(res.principal.get("allowed_pools") or []))
+    logger.info("a2a: token customer_agent %s retirado (titular %s, pools %s)",
+                res.principal.get("agent_principal_id"), res.principal.get("customer_id"),
+                res.principal.get("allowed_pools"))
+    return HTMLResponse(a2a_customer_token.page_token(res.principal, cards), headers=a2a_customer_token.HEADERS)
+
+
+async def _a2a_card_urls(settings, pools: list[str]) -> list[str]:
+    """Os endereços de card dos pools do token — o que a pessoa cola no assistente."""
+    base = settings.a2a_public_base_url.strip().rstrip("/")
+    if not base or not pools:
+        return []
+    url = f"{settings.agent_registry_url.rstrip('/')}/v1/channel-endpoints?channel=a2a"
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(url, headers={"x-tenant-id": settings.tenant_id})
+        lista = r.json() if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("a2a: retirada sem os endereços de card (registry: %s) — a página não os mostra", exc)
+        return []
+    lista = lista.get("endpoints", lista) if isinstance(lista, dict) else lista
+    return [f"{base}/a2a/{e['identifier']}/.well-known/agent-card.json" for e in lista
+            if isinstance(e, dict) and e.get("pool_id") in pools and e.get("active", True) and e.get("identifier")]
 
 
 async def _a2a_sse(eventos):

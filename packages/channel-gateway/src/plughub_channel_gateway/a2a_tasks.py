@@ -80,6 +80,8 @@ STREAM_CEILING_S   = 600.0              # um stream aberto fecha aqui; o chamado
 HEARTBEAT_S        = 15.0               # comentário SSE quando nada acontece
 STREAM_BLOCK_MS    = 1000               # o XREAD acorda nisto, para reler os fatos fora do stream
 STREAMING_METHODS  = frozenset({"SendStreamingMessage", "SubscribeToTask"})
+QUOTA_SCAN_MAX     = 200                # tasks mais recentes do principal olhadas para contar ativas
+QUOTA_ACTIVE_RETRY_S = 30               # Retry-After quando o teto é de tasks ATIVAS
 TEXT, JSON_MT      = "text/plain", "application/json"
 OUR_MODES          = (TEXT, JSON_MT)
 LIST_PAGE_MAX      = 100
@@ -149,6 +151,24 @@ class A2AUnavailable(Exception):
     """Não deu para conferir o contrato do pool — a porta responde 503 + Retry-After (§9)."""
 
 
+class A2AQuota(Exception):
+    """AAS-09 — cota do principal esgotada (D9). A porta responde 429 + Retry-After: é back-pressure
+    para chamador de máquina, como o 503 — a spec não tem erro JSON-RPC de cota."""
+
+    def __init__(self, which: str, limit: int, retry_after_s: int) -> None:
+        super().__init__(f"cota {which} ({limit}) esgotada")
+        self.which, self.limit, self.retry_after_s = which, limit, retry_after_s
+
+
+@dataclass(frozen=True)
+class Holder:
+    """AAS-09 — o TITULAR que o token `customer_agent` carrega (D6: vem do token, nunca da Part)."""
+    customer_id:       str
+    proof_mechanism:   str
+    proof_verified_at: str
+    mandate:           tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class Caller:
     sub:       str
@@ -156,6 +176,9 @@ class Caller:
     tenant_id: str
     pool_id:   str
     slug:      str
+    holder:    Optional[Holder] = None
+    # AAS-09 — (tasks ativas, tasks por dia UTC); None = sem cota (o `partner`, D9)
+    quota:     Optional[tuple[int, int]] = None
 
 
 PoolFetcher = Callable[[str, str], Awaitable[tuple[str, Optional[dict], str]]]
@@ -536,19 +559,36 @@ class A2ATaskService:
         erros = validate_input(descriptor.get("input_schema"), data if has_data else {})
         if erros:
             raise A2AError(INVALID_PARAMS, "o pedido não cumpre o input_schema do agente", {"errors": erros})
+        # Depois de toda validação: um pedido recusado não gasta cota.
+        if caller.quota is not None:
+            await self._charge_quota(caller)
 
         sid = str(uuid.uuid4())
         root = str(context_id) if context_id else sid
         cust_pid = f"cust_{uuid.uuid4().hex[:12]}"
-        customer_id = f"sys:a2a:{uuid.uuid4().hex[:8]}"   # o TITULAR não é o principal (D6)
+        # O TITULAR não é o principal (D6). No `customer_agent` ele vem do token — é a pessoa que
+        # provou a posse e gerou a credencial; no `partner` não há titular, e a sessão nasce com um
+        # cliente de sistema até o fluxo identificar alguém (dito numa Part, é sempre `claimed`).
+        customer_id = caller.holder.customer_id if caller.holder else f"sys:a2a:{uuid.uuid4().hex[:8]}"
         now = _now()
 
-        await self._write_ctx(t, sid, {
+        tags: dict[str, Any] = {
             "core.contact.root_session_id": root,
             "core.a2a.request": {"text": text, **({"data": data} if has_data else {})},
             "core.a2a.principal_id": caller.sub,
             "core.a2a.principal_kind": caller.kind,
-        })
+        }
+        if caller.holder:
+            # A prova é a da EMISSÃO, e vai com a idade dela: não é evidência DESTA sessão
+            # (`core.journey.identity.*` é do escritor único e exige prova aqui). Skill que pedir
+            # prova fresca não a encontra, e isso é o certo — `AUTH_REQUIRED` é ficha própria.
+            tags["core.a2a.holder"] = {
+                "customer_id":       caller.holder.customer_id,
+                "proof_mechanism":   caller.holder.proof_mechanism,
+                "proof_verified_at": caller.holder.proof_verified_at,
+            }
+            tags["core.a2a.mandate"] = list(caller.holder.mandate)
+        await self._write_ctx(t, sid, tags)
         meta = {"tenant_id": t, "channel": "a2a", "contact_id": sid, "customer_id": customer_id,
                 "session_id": sid, "started_at": now, "customer_participant_id": cust_pid,
                 "a2a_principal_id": caller.sub, "a2a_principal_kind": caller.kind}
@@ -577,6 +617,36 @@ class A2ATaskService:
         logger.info("a2a: task %s criada no pool %s pelo principal %s (contexto %s)",
                     sid, caller.pool_id, caller.sub, root)
         return sid
+
+    async def _charge_quota(self, caller: Caller) -> None:
+        """AAS-09 — a cota do principal (D9): tasks NÃO terminadas ao mesmo tempo, e tasks novas por
+        dia (UTC). Conta por PRINCIPAL, em todos os pools do token. Ativa é deduzida dos FATOS de
+        cada task (o mesmo `_facts` do GetTask), nunca de um contador que alguém tenha de
+        decrementar — um decremento perdido prenderia o token para sempre."""
+        assert caller.quota is not None
+        max_ativas, max_dia = caller.quota
+        t = caller.tenant_id
+        ativas = 0
+        ids = [_s(x) for x in await self._r.zrevrange(self._k_index(t, caller.sub), 0, QUOTA_SCAN_MAX - 1)]
+        for sid in ids:
+            raw = await self._r.get(self._k_task(t, sid))
+            if not raw:
+                continue
+            view = await self._facts(t, sid, json.loads(_s(raw)))
+            if view["state"] not in TERMINAL:
+                ativas += 1
+                if ativas >= max_ativas:
+                    logger.warning("a2a: principal %s no teto de tasks ativas (%d) — recusada", caller.sub, max_ativas)
+                    raise A2AQuota("active", max_ativas, QUOTA_ACTIVE_RETRY_S)
+        hoje = datetime.now(timezone.utc)
+        k = f"{t}:a2a:quota:{caller.sub}:{hoje:%Y%m%d}"
+        n = await self._r.incr(k)
+        if n == 1:
+            await self._r.expire(k, 2 * 86_400)
+        if n > max_dia:
+            amanha = (hoje.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() + 86_400)
+            logger.warning("a2a: principal %s no teto diário (%d) — recusada", caller.sub, max_dia)
+            raise A2AQuota("daily", max_dia, max(1, int(amanha - hoje.timestamp())))
 
     async def _continue(self, caller: Caller, sid: str, message: dict, text: str, data: Any,
                         has_data: bool) -> tuple[str, str]:

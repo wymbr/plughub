@@ -530,6 +530,13 @@ probe_aas08_a2a_sdk.sh
 # plataforma 403 · D controles: a vitima administra o dela; a tela do tenant segue 200.
 # Bateria: mut_aut71_tenant_scope.sh.
 probe_aut71_tenant_scope.sh
+# AAS-09 (2026-10-01): o token do PROPRIO cliente (customer_agent). G emissao pela tool real
+# (/sse; prova de posse = fixture, como no PID-03): sem prova e dois clientes recusam, o titular
+# sai da prova e nao do input · R retirada (GET nao retira, POST uma vez sem cache, de novo 410) ·
+# S a sessao do assistente e do titular · X outro titular nao le · Q cota 1 ativa / 3 por dia
+# (429) · A o admin so desliga · V revogar pela prova derruba em <= 31 s.
+# Bateria: mut_aas09_customer_agent.sh.
+probe_aas09_customer_agent.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro
@@ -1112,6 +1119,7 @@ smoke_wrapup_slot_handoff.sh
 =mut_aas07_a2a_stream.sh                              mutacao
 =mut_aas08_a2a_sdk.sh                                 mutacao
 =mut_aut71_tenant_scope.sh                            mutacao
+=mut_aas09_customer_agent.sh                          mutacao
 =mut_sip_edge_surface.sh                              mutacao
 =mutation_claim_lease_slot.sh                         mutacao
 =mutation_occupancy_peak.sh                           mutacao

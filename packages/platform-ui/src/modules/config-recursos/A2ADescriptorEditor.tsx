@@ -12,9 +12,15 @@
  */
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { A2APrincipalKind, A2ASkill, PoolA2ADescriptor } from '@/types'
+import type { A2ACustomerAgentPolicy, A2APrincipalKind, A2ASkill, PoolA2ADescriptor } from '@/types'
 
 const PRINCIPAL_KINDS: A2APrincipalKind[] = ['partner', 'customer_agent']
+
+/** AAS-09 — ponto de partida ao LIGAR a emissão; o operador ajusta. Os tetos são os do schema. */
+const CUSTOMER_AGENT_START: A2ACustomerAgentPolicy = { validity_days: 7, max_active_tasks: 2, max_tasks_per_day: 20 }
+const CUSTOMER_AGENT_LIMITS: Record<keyof A2ACustomerAgentPolicy, [number, number]> = {
+  validity_days: [1, 30], max_active_tasks: [1, 20], max_tasks_per_day: [1, 500],
+}
 
 export const EMPTY_A2A: PoolA2ADescriptor = {
   display_name: '', description: '',
@@ -36,6 +42,11 @@ export function a2aProblems(d: PoolA2ADescriptor, schemaTextOk: boolean): string
   if (d.skills.some(s => !/^[a-z0-9_]+$/.test(s.id) || !s.name.trim() || !s.description.trim())
       || new Set(ids).size !== ids.length) p.push('skillFields')
   if (d.principal_kinds.length === 0) p.push('principals')
+  const pol = d.customer_agent
+  if (pol && (Object.keys(CUSTOMER_AGENT_LIMITS) as (keyof A2ACustomerAgentPolicy)[]).some(k => {
+    const [lo, hi] = CUSTOMER_AGENT_LIMITS[k]
+    return !Number.isInteger(pol[k]) || pol[k] < lo || pol[k] > hi
+  })) p.push('customerAgent')
   return p
 }
 
@@ -149,15 +160,38 @@ export function A2ADescriptorEditor({
           <label key={k} className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" className="w-4 h-4 rounded accent-primary"
                    checked={d.principal_kinds.includes(k)}
-                   onChange={() => set({
-                     principal_kinds: d.principal_kinds.includes(k)
+                   onChange={() => {
+                     const kinds = d.principal_kinds.includes(k)
                        ? d.principal_kinds.filter(x => x !== k)
-                       : PRINCIPAL_KINDS.filter(x => x === k || d.principal_kinds.includes(x)),
-                   })} />
+                       : PRINCIPAL_KINDS.filter(x => x === k || d.principal_kinds.includes(x))
+                     // a política sem o tipo é recusada pelo registry — sai junto
+                     set(kinds.includes('customer_agent')
+                       ? { principal_kinds: kinds }
+                       : { principal_kinds: kinds, customer_agent: undefined })
+                   }} />
             <span className="text-xs text-dark">{t(`pools.a2a.principal.${k}`)}</span>
           </label>
         ))}
       </div>
+
+      {d.principal_kinds.includes('customer_agent') && (
+        <div className="border border-border rounded p-2 space-y-1">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" className="w-4 h-4 rounded accent-primary" checked={!!d.customer_agent}
+                   onChange={e => set({ customer_agent: e.target.checked ? { ...CUSTOMER_AGENT_START } : undefined })} />
+            <span className="text-xs font-medium text-dark">{t('pools.a2a.customerAgent.issue')}</span>
+          </label>
+          <span className="block text-2xs text-muted-light">{t('pools.a2a.customerAgent.hint')}</span>
+          {d.customer_agent && (Object.keys(CUSTOMER_AGENT_LIMITS) as (keyof A2ACustomerAgentPolicy)[]).map(k => (
+            <label key={k} className="flex items-center justify-between gap-2">
+              <span className="text-xs text-dark">{t(`pools.a2a.customerAgent.${k}`)}</span>
+              <input type="number" className={`${inputCls} w-24`} min={CUSTOMER_AGENT_LIMITS[k][0]} max={CUSTOMER_AGENT_LIMITS[k][1]}
+                     value={d.customer_agent![k]}
+                     onChange={e => set({ customer_agent: { ...d.customer_agent!, [k]: Number(e.target.value) } })} />
+            </label>
+          ))}
+        </div>
+      )}
 
       <label className="flex items-center gap-2 cursor-pointer">
         <input type="checkbox" className="w-4 h-4 rounded accent-primary" checked={d.discoverable}

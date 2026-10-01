@@ -142,7 +142,10 @@
       "hint": "O que este pool oferece em chamadas WebRTC, por direção. Texto é sempre possível. O cliente só publica o que o atendente consegue receber: um agente de IA de texto não recebe vídeo mesmo que o pool o ofereça.",
       "customer_publish": "Cliente pode enviar",
       "agent_publish": "Atendente pode enviar",
-      "kind": { "audio": "Áudio", "video": "Vídeo" },
+      "kind": {
+        "audio": "Áudio",
+        "video": "Vídeo"
+      },
       "undeclared": "Não declarada — um pool de contato com WebRTC não pode ser salvo assim.",
       "chatHint": "Num pool de chat, esta política decide se o cliente pode transformar a conversa em chamada. É opcional: sem ela, o chat segue só em texto.",
       "undeclaredChat": "Não declarada — o cliente do chat não pode ligar.",
@@ -187,7 +190,15 @@
         "schemas": "schemas de entrada e saída válidos",
         "skills": "ao menos uma habilidade",
         "skillFields": "toda habilidade com id (snake_case, único), nome e descrição",
-        "principals": "quem pode chamar"
+        "principals": "quem pode chamar",
+        "customerAgent": "política do token do cliente fora dos limites"
+      },
+      "customerAgent": {
+        "issue": "Este pool emite token do cliente",
+        "hint": "O cliente, depois de provar a identidade numa conversa, gera um token pessoal para o assistente dele. A validade e a cota abaixo valem para todo token emitido para este pool.",
+        "validity_days": "Validade (dias, 1–30)",
+        "max_active_tasks": "Tarefas em andamento ao mesmo tempo, por token (1–20)",
+        "max_tasks_per_day": "Tarefas novas por dia, por token (1–500)"
       }
     },
     "transfer": {

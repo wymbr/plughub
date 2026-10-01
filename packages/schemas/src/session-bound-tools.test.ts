@@ -3,7 +3,7 @@ import { injectSessionToken, isSessionBoundTool, SESSION_BOUND_TOOLS, SESSION_ID
 
 describe("PID-01 — injeção do token de sessão", () => {
   it("as tools de retomada e de prova estão na lista", () => {
-    expect([...SESSION_BOUND_TOOLS].sort()).toEqual(["otp_challenge", "otp_verify", "pending_workflow_get", "workflow_resume"])
+    expect([...SESSION_BOUND_TOOLS].sort()).toEqual(["customer_agent_grant", "customer_agent_revoke", "otp_challenge", "otp_verify", "pending_workflow_get", "workflow_resume"])
   })
 
   it("injeta na tool gateada do mcp-server-plughub", () => {

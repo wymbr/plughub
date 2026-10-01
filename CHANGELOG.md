@@ -1,5 +1,76 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (19) — AAS-09: o cliente gera o token do próprio assistente, e ele só fala por ele
+
+Fase B2 do `adr-a2a-server-binding`, a primeira metade. A ficha estava `bloqueada por FED-01` (login
+social), mas o ADR só exige *uma* prova antes de emitir, e as de hoje — OTP e a chegada pelo
+WhatsApp do telefone autoritativo — já existem e já são presas a um `customer_id` (PID-09). Três
+decisões do dono: seguir com as provas de hoje (o login social entra depois como mais um mecanismo,
+sem mexer nisto); o token nasce **dentro de uma conversa**, depois da prova; e esta entrega leva
+emissão, titular, validade, mandato carregado, cota e isolamento entre titulares, deixando
+`AUTH_REQUIRED` (`AAS-19`) e a confirmação de ação de risco (`AAS-20`) para depois.
+
+**O titular sai da prova, nunca do fluxo.** A tool `customer_agent_grant` (mcp-server, ligada à
+sessão) pergunta *quem provou a posse NESTA sessão, agora* — `freshProofs`, nova em
+`@plughub/schemas`, lê a mesma régua do `judgeResumeEvidence` ao contrário (verificada, desta
+sessão, ≤ 15 min, com cliente). Sem prova, recusa pedindo OTP; prova de dois clientes na mesma
+sessão, recusa por ambiguidade. Um `customer_id` no input é ignorado — o fluxo é configuração do
+tenant, e o token fala por uma pessoa. O probe mede isso emitindo com prova de A e `customer_id` de
+B no input: a sessão que o assistente abre é de A.
+
+**A credencial nunca passa pela conversa.** O stream é durável e o avaliador o lê, então a
+emissão cria no auth-api um *grant* com tudo decidido e devolve um link
+`{base}/a2a/customer-token/{código}`. A credencial só NASCE quando a pessoa abre o link e aperta o
+botão, e aparece uma vez. O link fica no transcrito, e por isso: código de uso único, 10 min,
+guardado só como hash; o **GET não retira** (o preview de link do WhatsApp buscaria a URL sozinho e
+queimaria o código); a resposta é `no-store`, sem `Referer`, sem índice e com CSP que não carrega
+nada. Inexistente, vencido e já usado dão a mesma página (410). O slug `customer-token` ficou
+reservado no registry para a URL não significar duas coisas.
+
+**Validade e cota são do contrato do pool, sem default.** `a2a.customer_agent` ganhou
+`validity_days` (≤ 30), `max_active_tasks` e `max_tasks_per_day`, com campos na tela do pool.
+Ausente, o pool não emite — e a recusa diz isso; um default seria inventar a política de consumo do
+tenant. Token de vários pools leva a mais restrita de cada eixo. Opcional no schema porque três
+fixtures de probe já admitiam o tipo sem ela.
+
+**A sessão do assistente é do titular**: `customer_id` do token, `core.a2a.holder` (cliente,
+mecanismo e data da prova) e `core.a2a.mandate`. A prova da emissão **não** vira evidência desta
+sessão (`core.journey.identity.*` é do escritor único e exige prova aqui): skill que pede prova fresca
+não a encontra, que é o caso do `AUTH_REQUIRED`.
+
+**Cota por principal (D9) na porta**, contada em todos os pools do token: tasks NÃO terminadas,
+deduzidas dos fatos de cada task pelo mesmo `_facts` do GetTask — nunca de um contador que alguém
+teria de decrementar, porque um decremento perdido prenderia o token para sempre —, e tasks por dia
+UTC. Pedido recusado por contrato não gasta cota. Acima dela: **429 com `Retry-After`** (a spec não
+tem erro de cota; é back-pressure, como o 503).
+
+**Validade e revogação.** A introspecção carrega titular, prova, mandato, `exp` e cota, e responde
+inativo a token vencido; a borda recusa `customer_agent` sem titular ou validade (nunca o trata como
+`partner`), e o cache de 30 s não estica uma validade que venceu no meio da janela. O titular revoga
+pela mesma prova (`customer_agent_revoke`); o admin do tenant **só desliga** — não rotaciona (seria
+entregar ao admin uma credencial que fala pela pessoa), não alarga pools, não renomeia.
+
+**O mandato é carregado, não imposto.** Vai no token e no ContextStore; recusar ação fora dele e
+pedir confirmação fora de banda para ação de risco é a `AAS-20`. Dito no ADR para não parecer
+garantia.
+
+**Gates.** `probe_aas09_customer_agent.sh` (AUTO) — a tool real pelo `/sse`, com a prova de posse
+como fixture (o mesmo método do PID-03): G emissão e recusas · R retirada · S a sessão do titular ·
+X o token de B não lê a task de A · Q 1 ativa e 3 por dia · A o admin só desliga · V revogar
+derruba em ≤ 31 s. VERDE. `mut_aas09_customer_agent.sh`: 5 mutações em três serviços, cada uma pega
+pelo ramo declarado — prova de dois clientes deixando de ser ambígua (G2), código de retirada
+reutilizável (R3), teto de ativas ausente (Q1), sessão sem o titular (S2), introspecção ignorando o
+desligado (V1). **A primeira M1 sobreviveu, e o motivo é um fato útil**: ela trocava o titular por
+`input["customer_id"]`, mas o SDK do MCP valida o input contra o formato declarado da tool e
+descarta campo desconhecido — `customer_id` nunca chega ao handler. A garantia tem duas camadas; o
+S2 do probe a mede de fora, e a bateria mede a do código pela ambiguidade.
+Unidade: auth-api 20 (suíte 186), gateway 14 (suíte 1710), mcp-server 9 (suíte 546), schemas 15
+(426), registry +1 (185); typecheck do platform-ui limpo.
+
+**Fora desta entrega, e onde ficou:** validade vencendo ao vivo (são dias; nos testes de unidade
+dos dois serviços); os composes de e2e sem `AUTH_SERVICE_TOKEN`/`A2A_PUBLIC_BASE_URL` (a tool recusa
+nomeando a env). Deixou `AAS-19` e `AAS-20`.
+
 ## 2026-10-01 (18) — AUT-71: o tenant de toda gestão no auth-api é o do token
 
 Achado da AAS-08 ao montar um segundo tenant: o auth-api gravava usuário no tenant do **corpo**.

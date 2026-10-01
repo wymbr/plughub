@@ -256,6 +256,13 @@ export interface PoolA2ADescriptor {
   skills:          A2ASkill[]
   discoverable:    boolean
   principal_kinds: A2APrincipalKind[]
+  /** AAS-09 — política do token que o próprio cliente gera. Ausente = o pool não emite. */
+  customer_agent?: A2ACustomerAgentPolicy
+}
+export interface A2ACustomerAgentPolicy {
+  validity_days:     number
+  max_active_tasks:  number
+  max_tasks_per_day: number
 }
 
 /** Campos do gap compartilhados por Create/Update (todos opcionais). */

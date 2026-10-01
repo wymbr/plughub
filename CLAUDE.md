@@ -1027,6 +1027,11 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   card anuncia termina em `/` (AAS-08: sem a barra, o SDK JS perde o slug ao buscar o card). Gates:
   `probe_aas04_a2a_principal.sh`, `probe_aas06_a2a_tasks.sh`, `probe_aas07_a2a_stream.sh`,
   `probe_aas08_a2a_sdk.sh` (os dois SDKs oficiais e outro tenant na porta).
+- **O `customer_agent` é o token que o PRÓPRIO cliente gera** (AAS-09): o titular sai da prova
+  fresca da SESSÃO que emite (`freshProofs`), **nunca de argumento do fluxo**; a credencial só
+  nasce na retirada por link de uso único e aparece uma vez — **nunca passa pela conversa**; a
+  sessão do assistente é do titular; cota por principal na porta (429); o admin só desliga.
+  Validade e cota são do contrato A2A do pool, sem default. Gate: `probe_aas09_customer_agent.sh`.
 - **Toda rota de serviço Python tem UMA linha em `infra/test/route_credential_baseline.tsv`** (AUT-58):
   `fechada`, `guard_corpo:<g>` (conferido no código), `isenta` com motivo, ou `divida:<ficha>`. Quem
   mede é uma varredura ANÔNIMA ao vivo, não a leitura do código — o código não mostra guard que falha

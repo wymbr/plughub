@@ -877,8 +877,10 @@ export {
   judgeResumeEvidence,
   judgeResumeRequirementSteps,
   evidenceCustomers,
+  freshProofs,
 } from "./resume-requirement"
 export type {
+  FreshProof,
   ResumeRequirement,
   ResumeEvidenceMiss,
   ResumeRequirementViolation,

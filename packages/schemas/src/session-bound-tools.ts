@@ -13,7 +13,12 @@
 
 // PID-02: otp_challenge/otp_verify entram porque a prova grava `proven_in_session` e a
 // journey da SESSÃO que verificou — sem o token, a tool não sabe onde gravar.
-export const SESSION_BOUND_TOOLS: readonly string[] = ["pending_workflow_get", "workflow_resume", "otp_challenge", "otp_verify"]
+// AAS-09: `customer_agent_grant`/`_revoke` emitem e revogam o token do PRÓPRIO cliente pela prova
+// DESTA sessão — sem o token ligado à sessão, quem chamasse escolheria de qual sessão é a prova.
+export const SESSION_BOUND_TOOLS: readonly string[] = [
+  "pending_workflow_get", "workflow_resume", "otp_challenge", "otp_verify",
+  "customer_agent_grant", "customer_agent_revoke",
+]
 
 // MEN-08 (2026-09-21): tools que recebem o MESMO token para saber QUEM chama, sem exigi-lo.
 // `conversation_escalate` decide o destino do contato — prerrogativa de quem CONDUZ —, e só

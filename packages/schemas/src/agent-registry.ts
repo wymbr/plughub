@@ -328,7 +328,25 @@ export const PoolA2ADescriptorSchema = z.object({
     (l) => new Set(l).size === l.length,
     { message: "tipo de principal repetido" },
   ),
-}).strict()
+  /**
+   * AAS-09 — a política do token que o PRÓPRIO cliente gera para o assistente dele (D6, D9).
+   * Ausente = este pool não emite `customer_agent`: a emissão RECUSA nomeando o pool, nunca
+   * usa um default — validade e cota de um token de consumidor são decisão do tenant.
+   * Admitir o tipo em `principal_kinds` sem a política deixa o pool chamável por token
+   * emitido para OUTRO pool que a tenha, e nada mais.
+   */
+  customer_agent:  z.object({
+    /** Validade do token, contada da emissão. Curta por desenho (D6): até 30 dias. */
+    validity_days:     z.number().int().min(1).max(30),
+    /** Tasks ainda não terminadas ao mesmo tempo, por token (D9). */
+    max_active_tasks:  z.number().int().min(1).max(20),
+    /** Tasks novas por dia (UTC), por token (D9). */
+    max_tasks_per_day: z.number().int().min(1).max(500),
+  }).strict().optional(),
+}).strict().refine(
+  (d) => !d.customer_agent || d.principal_kinds.includes("customer_agent"),
+  { message: "política `customer_agent` num pool que não admite esse tipo de principal", path: ["customer_agent"] },
+)
 export type PoolA2ADescriptor = z.infer<typeof PoolA2ADescriptorSchema>
 
 /** Ver `PoolRegistrationSchema.media_policy`. */

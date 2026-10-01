@@ -679,6 +679,9 @@ services:
       CONFIG_API_URL: http://config-api:3600   # masking context_rules via HTTP (config-http-propagation arc)
       CHANNEL_GATEWAY_URL: http://channel-gateway:8010   # I5 — gatilho de supervisor retoma a workflow pelo ingress do gateway
       CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_demo   # IDN-06 — == PLUGHUB_CHANNEL_GATEWAY_SERVICE_TOKEN do gateway
+      AUTH_API_URL: http://auth-api:3200   # AAS-09 — customer_agent_grant/revoke
+      AUTH_SERVICE_TOKEN: changeme_auth_service_token_demo   # AAS-09 — == PLUGHUB_AUTH_SERVICE_TOKEN do auth-api
+      A2A_PUBLIC_BASE_URL: http://localhost:8010   # AAS-09 — == PLUGHUB_A2A_PUBLIC_BASE_URL do gateway (link de retirada)
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:

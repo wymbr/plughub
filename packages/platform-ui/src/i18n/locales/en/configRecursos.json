@@ -142,7 +142,10 @@
       "hint": "What this pool offers on WebRTC calls, per direction. Text is always available. The customer only publishes what the attendant can receive: a text AI agent does not receive video even if the pool offers it.",
       "customer_publish": "Customer may send",
       "agent_publish": "Attendant may send",
-      "kind": { "audio": "Audio", "video": "Video" },
+      "kind": {
+        "audio": "Audio",
+        "video": "Video"
+      },
       "undeclared": "Not declared — a contact pool with WebRTC cannot be saved like this.",
       "chatHint": "In a chat pool, this policy decides whether the customer can turn the conversation into a call. It is optional: without it, the chat stays text-only.",
       "undeclaredChat": "Not declared — the chat customer cannot call.",
@@ -187,7 +190,15 @@
         "schemas": "valid input and output schemas",
         "skills": "at least one skill",
         "skillFields": "every skill with id (snake_case, unique), name and description",
-        "principals": "who may call"
+        "principals": "who may call",
+        "customerAgent": "customer token policy out of range"
+      },
+      "customerAgent": {
+        "issue": "This pool issues customer tokens",
+        "hint": "The customer, after proving identity in a conversation, generates a personal token for their own assistant. Validity and quota below apply to every token issued for this pool.",
+        "validity_days": "Validity (days, 1–30)",
+        "max_active_tasks": "Tasks in progress at once, per token (1–20)",
+        "max_tasks_per_day": "New tasks per day, per token (1–500)"
       }
     },
     "transfer": {

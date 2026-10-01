@@ -14,7 +14,7 @@ import { config }                                   from "../config"
 import { prisma }                                   from "../db"
 import { publishRegistryChanged }                   from "../infra/kafka"
 import { generateEndpointToken }                    from "../lib/endpoint-token"
-import { A2A_SLUG_RE }                              from "../lib/a2a-card"
+import { A2A_SLUG_RE, A2A_RESERVED_SLUGS }          from "../lib/a2a-card"
 import type { ChannelEndpointDelegate, ChannelEndpointRow } from "../types/channel-endpoint"
 
 // Typed shim until `prisma generate` is re-run with the updated schema
@@ -46,6 +46,12 @@ function _a2aEndpointViolation(identifier: string | null, pool: Record<string, u
     return {
       error:  `identifier '${identifier}' inválido para a2a: vai na URL pública, use [a-z0-9][a-z0-9_-]* (até 64)`,
       reason: "a2a_slug_invalid",
+    }
+  }
+  if (identifier !== null && A2A_RESERVED_SLUGS.has(identifier)) {
+    return {
+      error:  `identifier '${identifier}' é reservado da plataforma em /a2a/ (AAS-09) — escolha outro`,
+      reason: "a2a_slug_reserved",
     }
   }
   const poolId = String(pool["pool_id"])

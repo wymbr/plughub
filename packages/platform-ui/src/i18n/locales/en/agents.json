@@ -33,5 +33,6 @@
   "kind": {
     "partner": "partner",
     "customer_agent": "customer's agent"
-  }
+  },
+  "customerHolder": "holder {{customer}} · valid until {{when}}"
 }

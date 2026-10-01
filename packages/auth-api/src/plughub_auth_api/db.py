@@ -609,6 +609,53 @@ DDL_AGENT_PRINCIPALS_IDX_TENANT = (
     "CREATE INDEX IF NOT EXISTS idx_agent_principals_tenant ON auth.agent_principals (tenant_id)"
 )
 
+# ── AAS-09 — o principal que o PRÓPRIO cliente gera (`customer_agent`, ADR D6/D9/D13) ─────────
+#
+# Os campos só fazem sentido no `customer_agent` e ficam NULOS no `partner`:
+#   customer_id        o TITULAR — de quem a posse foi provada na sessão que emitiu
+#   proof_*            a prova que sustentou a emissão: mecanismo, quando, em qual sessão
+#   mandate            o que a pessoa declarou que o assistente pode fazer (D13; carregado, a
+#                      imposição por ação de risco é ficha própria)
+#   expires_at         validade curta, da política do pool (`a2a.customer_agent.validity_days`)
+#   max_*              a cota por principal (D9) — `partner` sem cota é NULL, nunca 0
+DDL_AGENT_PRINCIPALS_CUSTOMER = [
+    f"ALTER TABLE auth.agent_principals ADD COLUMN IF NOT EXISTS {col}"
+    for col in (
+        "customer_id TEXT", "proof_mechanism TEXT", "proof_verified_at TIMESTAMPTZ",
+        "proof_session_id TEXT", "mandate TEXT[]", "expires_at TIMESTAMPTZ",
+        "max_active_tasks INTEGER", "max_tasks_per_day INTEGER",
+    )
+] + [
+    "CREATE INDEX IF NOT EXISTS idx_agent_principals_customer "
+    "ON auth.agent_principals (tenant_id, customer_id) WHERE customer_id IS NOT NULL",
+]
+
+# A RETIRADA do token: a emissão cria um `grant` com tudo decidido, e a credencial só nasce
+# quando a pessoa abre o link e pede (`redeem`). O link vai pela conversa, então ele fica no
+# transcrito — por isso a credencial não existe antes da retirada, o código é de uso ÚNICO e
+# vale minutos, e só o hash dele é guardado.
+DDL_CUSTOMER_AGENT_GRANTS = """
+CREATE TABLE IF NOT EXISTS auth.customer_agent_grants (
+    grant_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         TEXT        NOT NULL,
+    pickup_hash       TEXT        NOT NULL UNIQUE,
+    customer_id       TEXT        NOT NULL,
+    proof_mechanism   TEXT        NOT NULL,
+    proof_verified_at TIMESTAMPTZ NOT NULL,
+    proof_session_id  TEXT        NOT NULL,
+    allowed_pools     TEXT[]      NOT NULL,
+    mandate           TEXT[]      NOT NULL DEFAULT '{}',
+    validity_days     INTEGER     NOT NULL,
+    max_active_tasks  INTEGER     NOT NULL,
+    max_tasks_per_day INTEGER     NOT NULL,
+    display_name      TEXT        NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    pickup_expires_at TIMESTAMPTZ NOT NULL,
+    redeemed_at       TIMESTAMPTZ,
+    principal_id      UUID
+)
+"""
+
 
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
@@ -667,6 +714,9 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_AGENT_GROUPS_IDX_TENANT)
             await conn.execute(DDL_AGENT_PRINCIPALS)
             await conn.execute(DDL_AGENT_PRINCIPALS_IDX_TENANT)
+            for ddl in DDL_AGENT_PRINCIPALS_CUSTOMER:
+                await conn.execute(ddl)
+            await conn.execute(DDL_CUSTOMER_AGENT_GRANTS)
     logger.info("auth schema ensured")
 
 

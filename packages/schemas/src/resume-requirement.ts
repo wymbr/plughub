@@ -114,6 +114,38 @@ export function judgeResumeEvidence(
   return { satisfied: missing.length === 0, missing }
 }
 
+/** AAS-09 — uma prova de posse que serve AGORA, NESTA sessão: de quem, por qual mecanismo, quando. */
+export interface FreshProof {
+  customer_id: string
+  mechanism:   IdentityMechanism
+  verified_at: string
+}
+
+/**
+ * AAS-09 — as provas que satisfazem `otp` NESTA sessão, agora, por cliente. É a mesma régua do
+ * `judgeResumeEvidence` (mesmo `motivoDoRegistro`: verificada, desta sessão, dentro da idade,
+ * com cliente), lida ao contrário: em vez de "este cliente provou?", "quem provou?".
+ *
+ * Quem emite o token do PRÓPRIO cliente (`customer_agent`) tira o titular daqui — nunca de um
+ * argumento do fluxo, que nomearia qualquer um. Mais de um cliente com prova fresca na mesma
+ * sessão é ambíguo, e o chamador recusa.
+ */
+export function freshProofs(
+  journeyHash: Record<string, string>,
+  opts:        { sessionId: string; nowMs: number; maxAgeS?: number },
+): FreshProof[] {
+  const maxAgeMs = (opts.maxAgeS ?? RESUME_EVIDENCE_MAX_AGE_S) * 1000
+  const out: FreshProof[] = []
+  for (const m of SATISFIED_BY.otp) {
+    const cliente = entryValue(journeyHash[identityEvidenceTag(m, "customer_id")])
+    if (!cliente) continue
+    if (motivoDoRegistro(m, journeyHash, { ...opts, customerId: cliente }, maxAgeMs) !== null) continue
+    out.push({ customer_id: cliente, mechanism: m,
+               verified_at: entryValue(journeyHash[identityEvidenceTag(m, "verified_at")]) ?? "" })
+  }
+  return out
+}
+
 function motivoDoRegistro(
   m:        IdentityMechanism,
   hash:     Record<string, string>,

@@ -261,6 +261,9 @@ services:
       # que a auth-api EMITE (`PLUGHUB_AUTH_JWT_SECRET`, linha ~448).
       PLUGHUB_JWT_SECRET: changeme_auth_jwt_secret_full_32chars   # == auth-api
       CHANNEL_GATEWAY_SERVICE_TOKEN: changeme_channel_gateway_service_token_full   # IDN-06 — == gateway
+      AUTH_API_URL: http://auth-api:3200   # AAS-09 — customer_agent_grant/revoke
+      AUTH_SERVICE_TOKEN: changeme_auth_service_token_full   # AAS-09 — == PLUGHUB_AUTH_SERVICE_TOKEN do auth-api
+      A2A_PUBLIC_BASE_URL: http://localhost:8010   # AAS-09 — == PLUGHUB_A2A_PUBLIC_BASE_URL do gateway (link de retirada)
       MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_full   # PID-01 — /internal/session-token (== bridge)
       KAFKA_BROKERS:      kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300

@@ -27,6 +27,10 @@ interface AgentPrincipal {
   active:                boolean
   created_by:            string
   last_authenticated_at: string | null
+  // AAS-09 — só no `customer_agent`: o titular, a validade e o que ele autorizou
+  customer_id?:          string | null
+  expires_at?:           string | null
+  mandate?:              string[] | null
 }
 
 const BASE = '/auth/v1/agent-principals'
@@ -200,7 +204,12 @@ export default function AgentPrincipalsPage() {
           <tbody>
             {rows.map(r => (
               <tr key={r.agent_principal_id} className="border-b border-border align-top">
-                <td className="py-2.5 pr-4 text-dark">{r.display_name}<span className="block text-2xs text-muted-light">{t(`kind.${r.kind}`)}</span></td>
+                <td className="py-2.5 pr-4 text-dark">{r.display_name}<span className="block text-2xs text-muted-light">{t(`kind.${r.kind}`)}</span>
+                  {r.kind === 'customer_agent' && (
+                    <span className="block text-2xs text-muted-light">
+                      {t('customerHolder', { customer: r.customer_id ?? '—', when: fmt(r.expires_at ?? null) })}
+                    </span>
+                  )}</td>
                 <td className="py-2.5 pr-4"><code className="text-xs">{r.allowed_pools.join(', ')}</code></td>
                 <td className="py-2.5 pr-4"><code className="text-xs">{r.credential_prefix ? `${r.credential_prefix}…` : '—'}</code>
                   <span className="block text-2xs text-muted-light">{t('rotatedAt', { when: fmt(r.credential_rotated_at) })}</span></td>
@@ -212,8 +221,11 @@ export default function AgentPrincipalsPage() {
                 </td>
                 <td className="py-2.5 text-right whitespace-nowrap">
                   {canWrite && (<>
-                    <button type="button" className="text-xs text-primary underline mr-3" onClick={() => open(r)}>{t('editShort')}</button>
-                    <button type="button" className="text-xs text-primary underline mr-3" onClick={() => void rotate(r)}>{t('rotate')}</button>
+                    {/* AAS-09 — o token do cliente nasceu da prova DELE: o admin só desliga */}
+                    {r.kind !== 'customer_agent' && (<>
+                      <button type="button" className="text-xs text-primary underline mr-3" onClick={() => open(r)}>{t('editShort')}</button>
+                      <button type="button" className="text-xs text-primary underline mr-3" onClick={() => void rotate(r)}>{t('rotate')}</button>
+                    </>)}
                     <button type="button" className="text-xs text-red underline" onClick={() => void setActive(r, !r.active)}>
                       {t(r.active ? 'deactivate' : 'activate')}
                     </button>

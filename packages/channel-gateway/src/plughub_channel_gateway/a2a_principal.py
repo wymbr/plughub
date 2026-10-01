@@ -42,6 +42,14 @@ class Principal:
     kind:          str
     display_name:  str
     allowed_pools: frozenset[str] = field(default_factory=frozenset)
+    # AAS-09 — só no `customer_agent` (o token do PRÓPRIO cliente); None no `partner`
+    customer_id:       Optional[str] = None
+    proof_mechanism:   Optional[str] = None
+    proof_verified_at: Optional[str] = None
+    mandate:           tuple[str, ...] = ()
+    exp:               Optional[int] = None    # epoch s — validade curta (D6)
+    max_active_tasks:  Optional[int] = None    # cota por principal (D9); None = sem cota
+    max_tasks_per_day: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +90,13 @@ async def authenticate(
     key = hashlib.sha256(cred.encode("utf-8")).hexdigest()
     hit = _cache.get(key)
     if hit and time.monotonic() < hit[1]:
+        # AAS-09 — o cache de 30 s não estica a validade: token vencido no meio da janela
+        # deixa de valer na hora, não no próximo pergunta-ao-auth-api.
+        p = hit[0].principal
+        if p is not None and p.exp is not None and time.time() >= p.exp:
+            _cache.pop(key, None)
+            logger.info("a2a: credencial do principal %s venceu (cache) — recusada", p.sub)
+            return AuthResult("invalid")
         return hit[0]
 
     url = f"{auth_api_url.rstrip('/')}/auth/v1/agent-principals/introspect"
@@ -97,14 +112,31 @@ async def authenticate(
         return AuthResult("unavailable", reason=f"auth-api respondeu {r.status_code}: {r.text[:200]}")
 
     body = r.json()
+    kind = str(body.get("kind") or "")
     if body.get("active") is True and body.get("tenant_id") and body.get("sub"):
-        res = AuthResult("ok", principal=Principal(
-            sub           = str(body["sub"]),
-            tenant_id     = str(body["tenant_id"]),
-            kind          = str(body.get("kind") or ""),
-            display_name  = str(body.get("display_name") or ""),
-            allowed_pools = frozenset(body.get("allowed_pools") or []),
-        ))
+        if kind == "customer_agent" and not (body.get("customer_id") and body.get("exp")):
+            # O titular vem DO token (D6): sem titular ou sem validade, não há em nome de quem
+            # falar — recusa, nunca segue como `partner`.
+            logger.error("a2a: customer_agent %s sem titular ou validade na introspecção — recusado",
+                         body.get("sub"))
+            res = AuthResult("invalid")
+        else:
+            def _int(v: object) -> Optional[int]:
+                return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+            res = AuthResult("ok", principal=Principal(
+                sub               = str(body["sub"]),
+                tenant_id         = str(body["tenant_id"]),
+                kind              = kind,
+                display_name      = str(body.get("display_name") or ""),
+                allowed_pools     = frozenset(body.get("allowed_pools") or []),
+                customer_id       = str(body["customer_id"]) if body.get("customer_id") else None,
+                proof_mechanism   = body.get("proof_mechanism") or None,
+                proof_verified_at = body.get("proof_verified_at") or None,
+                mandate           = tuple(str(m) for m in (body.get("mandate") or [])),
+                exp               = _int(body.get("exp")),
+                max_active_tasks  = _int(body.get("max_active_tasks")),
+                max_tasks_per_day = _int(body.get("max_tasks_per_day")),
+            ))
     else:
         res = AuthResult("invalid")
     _cache[key] = (res, time.monotonic() + CACHE_TTL_S)

@@ -284,6 +284,38 @@ A fusão preserva o que a spec de Agent Principal exige além do A2A: `origin: n
   é feita em nome de um principal antes de uma sessão nascer de um, e campo sem produtor é
   promessa sem mecanismo.
 
+**Como ficou (AAS-09, 2026-10-01), o `customer_agent`.** Três decisões do dono: a emissão usa as
+provas que JÁ existem (OTP e a chegada pelo WhatsApp) — o login social (`FED-01`) entra depois
+como mais um mecanismo, sem mexer nisto; o token nasce **dentro de uma conversa**, depois da prova;
+e esta fatia leva emissão, titular, validade, mandato carregado e cota, deixando `AUTH_REQUIRED` e
+a confirmação de ação de risco para fichas próprias.
+
+- **Emissão**: tool `customer_agent_grant` (mcp-server), ligada à sessão. O **titular sai da prova
+  fresca DESTA sessão** (`freshProofs`, a mesma régua do `judgeResumeEvidence`: verificada, desta
+  sessão, ≤ 15 min, com cliente) — nunca de um argumento do fluxo, que nomearia qualquer um. Sem
+  prova ou com prova de dois clientes, recusa. Revogar (`customer_agent_revoke`) pede a mesma prova.
+- **A credencial nunca passa pela conversa.** A emissão cria um *grant* no auth-api com tudo
+  decidido e devolve um link `{base}/a2a/customer-token/{código}`; a credencial só **nasce** quando
+  a pessoa abre o link e aperta o botão, e é mostrada uma vez, no navegador dela. O link fica no
+  transcrito, então: código de uso único, 10 min, guardado só como hash; o GET não retira (preview
+  de link do mensageiro não queima o código); a página não fica em cache nem manda `Referer`. A
+  retirada por outro é registrada e o titular revoga. O slug `customer-token` é reservado no registry.
+- **Política no contrato do pool** (`a2a.customer_agent`: validade em dias ≤ 30, tasks ativas,
+  tasks por dia), editável na tela do pool. Ausente = o pool não emite — validade e cota de token
+  de consumidor nunca têm default. Token de vários pools leva a política mais restrita.
+- **A sessão que o assistente abre é do titular** (`customer_id` = o do token) e leva
+  `core.a2a.holder` (cliente, mecanismo e data da prova) e `core.a2a.mandate`. A prova é a da
+  EMISSÃO e não vira evidência desta sessão: skill que exige prova fresca não a encontra, e isso é
+  o certo — é o caso do `AUTH_REQUIRED` (`AAS-19`).
+- **Cota por principal (D9)** na porta: tasks não terminadas (deduzidas dos FATOS de cada task,
+  nunca de contador que alguém teria de decrementar) e tasks por dia UTC; acima, **429 com
+  `Retry-After`** — a spec não tem erro de cota, e para chamador de máquina é back-pressure.
+- **O admin do tenant só desliga** o token do cliente: não rotaciona (entregaria ao admin uma
+  credencial que fala pela pessoa), não alarga pools, não renomeia. Validade vencida é inativa na
+  introspecção e o cache de 30 s da borda não a estica.
+- **O mandato é carregado, não imposto**: vai no token e no ContextStore; a plataforma recusar ação
+  fora dele e pedir confirmação fora de banda para ação de risco é a `AAS-20`.
+
 ### D7 — `tenant_id` **nunca** vem do corpo
 
 Re-medido em 2026-09-30: `webhook_trigger_by_pool` ainda faz `body.get("tenant_id") or
@@ -542,7 +574,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling · **streaming feito em 2026-10-01 (AAS-07)**: `SendStreamingMessage`/`SubscribeToTask`, os nomes da v1.0; A2UI = `AAS-17` |
 | **A6** | Validação | clientes de referência: SDK oficial, **OpenClaw** (o mais restrito) e **Copilot Studio ou Gemini Enterprise** (o comprador real); isolamento cross-tenant e cross-titular (D15.4); probe de borda | gate · **SDKs e isolamento feitos em 2026-10-01 (AAS-08)**: a2a-sdk 1.2.1 e @a2a-js/sdk 1.3.0 de ponta a ponta, outro tenant recusado ao vivo; clientes corporativos = roteiro do dono (`AAS-18`); cross-titular é `customer_agent` (`AAS-09`) |
 | **B1** | Prova federada (ID-FED) | `princ` (PID-21) e `oidc_email` pelo escritor único; RP OIDC por tenant; cofre de segredo | **bloqueia B2** |
-| **B2** | `customer_agent` | emissão por autosserviço após prova, cota por principal (D9), `AUTH_REQUIRED` (D12), mandato (D13) | o caso do consumidor |
+| **B2** | `customer_agent` | emissão por autosserviço após prova, cota por principal (D9), `AUTH_REQUIRED` (D12), mandato (D13) | o caso do consumidor · **emissão, titular, cota e revogação feitas em 2026-10-01 (AAS-09)**, sobre OTP/WhatsApp (o B1 não bloqueia mais); `AUTH_REQUIRED` = `AAS-19`, imposição do mandato = `AAS-20` |
 | **B3** | Pool humano por A2A | fila de pessoas atrás do canal, com `on_no_resource` e cota | *(rev. 2)* deixa de ser "fase 2 com canal a decidir": o canal já existe |
 | **ATT** | Governança de anexo completa | esteira única de ingestão, antivírus com quarentena, portas pública (URL assinada) e interna (capacidade + `audit.access`), retenção como classe do namespace `retention` | **bloqueia `url`/`raw`** (D14.4) |
 | **C** | Face MCP (D16) | ADR próprio | direção |
@@ -665,6 +697,11 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.
 - **2026-10-01, fase A2 (AAS-04).** D6 ganhou o *como ficou* do `partner`; a porta `POST /a2a/{slug}`
   existe antes da execução; o carimbo do principal no `AuditRecord` foi para a A4.
+- **2026-10-01, fase B2 (AAS-09), a primeira metade.** D6 ganhou o *como ficou* do
+  `customer_agent`. Por decisão do dono a B2 deixou de esperar a B1: as provas de hoje (OTP e a
+  chegada pelo WhatsApp) bastam para emitir, e o login social entra depois como mais um mecanismo.
+  `AUTH_REQUIRED` foi para a `AAS-19` e a imposição do mandato com confirmação fora de banda para a
+  `AAS-20`.
 - **2026-10-01, fase A6 (AAS-08), a parte medível sem conta de terceiro.** Os dois SDKs oficiais
   falam com o canal do card ao artefato. O SDK JavaScript achou que o endereço do agente sem barra
   final perdia o slug ao resolver `.well-known/agent-card.json` por RFC 3986: a interface do card

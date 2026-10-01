@@ -56,6 +56,7 @@ import type { SurveyDeps }          from "./tools/survey"
 import { validateDialogForm }       from "@plughub/schemas"
 import { registerSegmentTools }     from "./tools/segment"
 import { registerWorkflowTools }    from "./tools/workflow"
+import { registerCustomerAgentTools } from "./tools/customer-agent"
 import type { WorkflowDeps }        from "./tools/workflow"
 import { registerDialogTools }      from "./tools/dialog"
 import type { DialogDeps }          from "./tools/dialog"
@@ -237,6 +238,13 @@ export function createServer(allDeps?: AllDeps): McpServer {
     dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://dialog-api:3760",
   })
   registerWorkflowTools(server, workflowDeps)
+  // AAS-09 — o token do PRÓPRIO cliente para o assistente dele (customer_agent)
+  registerCustomerAgentTools(server, {
+    redis,
+    authApiUrl:       process.env["AUTH_API_URL"] ?? "http://auth-api:3200",
+    authServiceToken: process.env["AUTH_SERVICE_TOKEN"] ?? "",
+    a2aPublicBaseUrl: process.env["A2A_PUBLIC_BASE_URL"] ?? "",
+  })
   registerDialogTools(server, dialogDeps)
 
   return server
@@ -1451,6 +1459,18 @@ export async function startServer(config: ServerConfig): Promise<void> {
       tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
       channelGatewayServiceToken: process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"] ?? "",
       redis,   // PID-02 — onde otp_* gravam a evidência
+    })
+    // AAS-09 — sem AUTH_SERVICE_TOKEN o auth-api recusa (401) e a tool diz isso; sem
+    // A2A_PUBLIC_BASE_URL não há link de retirada e a tool recusa nomeando a env.
+    if (!process.env["AUTH_SERVICE_TOKEN"] || !process.env["A2A_PUBLIC_BASE_URL"]) {
+      console.warn("[mcp-server] AUTH_SERVICE_TOKEN ou A2A_PUBLIC_BASE_URL vazia: " +
+        "customer_agent_grant/customer_agent_revoke serao RECUSADAS")
+    }
+    registerCustomerAgentTools(mcpServer, {
+      redis,
+      authApiUrl:       process.env["AUTH_API_URL"] ?? "http://auth-api:3200",
+      authServiceToken: process.env["AUTH_SERVICE_TOKEN"] ?? "",
+      a2aPublicBaseUrl: process.env["A2A_PUBLIC_BASE_URL"] ?? "",
     })
     registerDialogTools(mcpServer, {
       dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",

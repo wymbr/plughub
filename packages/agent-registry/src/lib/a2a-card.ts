@@ -18,6 +18,13 @@ const channelEndpoint = (prisma as unknown as { channelEndpoint: ChannelEndpoint
 /** O slug vai na URL pública: só minúsculas, dígitos, `_` e `-`, sem começar por separador. */
 export const A2A_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
+/**
+ * AAS-09 — segmentos de `/a2a/…` que são da PLATAFORMA, não de um pool: o gateway serve a
+ * retirada do token do cliente em `/a2a/customer-token/{código}`. Um endereço com esse slug
+ * faria a mesma URL significar duas coisas.
+ */
+export const A2A_RESERVED_SLUGS: ReadonlySet<string> = new Set(["customer-token"])
+
 export type A2ACardResult =
   | { card: AgentCard; pool_id: string }
   | { refusal: A2ACardRefusal; pool_id?: string; detail?: string }
