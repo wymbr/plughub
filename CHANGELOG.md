@@ -1,5 +1,40 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (10) — CFG-01: salvar uma chave pela tela não apaga mais a descrição dela
+
+**Antes:**
+- O `PUT /config/{ns}/{key}` gravava a `description` que recebesse (`db_set`:
+  `description = EXCLUDED.description`, default `""`).
+- Nenhuma rota de leitura devolve a descrição, então nenhum chamador podia reenviá-la, e o
+  `putConfig` da tela manda `""` em toda gravação (17 chamadores).
+- **Medido:** 5 de 93 chaves sem descrição — `masking.context_map`, `masking.context_rules`
+  (tenant), `audit_policy.authorized_roles` (tenant), um `dashboards.template:*` (tenant) e
+  `retention.attachment_days`, que eu mesmo tinha apagado com o probe da ATT-04 (restaurada na ATT-07).
+
+**Decisão do dono (a opção recomendada):** a gravação ignora descrição vazia.
+- O upsert faz `COALESCE(NULLIF(EXCLUDED.description, ''), <a gravada>)`: **vazia mantém, não
+  vazia troca**. A mudança mora numa casa só e nenhum dos 17 chamadores mudou.
+- A linha NOVA nasce com o que vier.
+- Apagar uma descrição pela API deixou de ser possível, e nenhum chamador o fazia.
+
+**Restauradas pela API** com o texto da semente da árvore, o VALOR conferido idêntico (md5) antes e
+depois: `masking.context_map` (global), `masking.context_rules` e
+`audit_policy.authorized_roles` (override do tenant). **Ficou vazia:** `dashboards.template:*`. É
+template criado no tenant e não tem semente, então não há texto que não seja inventado. O censo
+foi de 5 para **1 de 93**.
+
+**Gates:**
+- `probe_cfg01_description_kept.sh`, contra o **Postgres real** do config-api (a suíte do pacote usa
+  pool de mentira), numa chave de rascunho global criada e apagada pelo probe:
+  - rodado **antes** do deploy: VERMELHO no K1 (a vazia apagou), verde nos demais;
+  - **depois**: VERDE em K1 (vazia mantém), V1 (o valor muda), C1 (controle: descrição nova troca)
+    e L1 (rascunho apagado).
+- `mut_cfg01_description_kept.sh` 2/2: M1 volta a gravar a recebida (K1 vermelho) e M2 congela a
+  descrição. M2 é o caso que um "mantém" mal feito produziria, e só o controle C1 o pega.
+- `probe_att04` VERDE depois de tudo.
+- Testes: config-api 61 passed.
+- O helper dos probes (`_config_put.py`) ganhou `TENANT`, para escrever override sem tocar o global.
+
 ## 2026-10-01 (9) — ATT-07: o teto de upload que a tela de WebChat edita passou a valer
 
 **Antes:** a `WebChatConfigPage` editava `webchat.upload_limits_mb` (imagem, PDF, vídeo, em MB), e

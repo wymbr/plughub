@@ -9,6 +9,10 @@ Aqui a descrição atual é LIDA do store (só leitura) e reenviada; a ESCRITA �
 
   NS, KEY, VALUE (JSON), ADMIN (X-Admin-Token)   → imprime {"status": ..., "kept_description": n}
   DESCRIPTION (opcional)                          → usa este texto em vez do gravado
+  TENANT (opcional)                               → escreve o override do tenant, não o global
+
+Desde a CFG-01 o PUT com descrição vazia já mantém a gravada; o helper segue reenviando-a para
+não depender disso, e é por ele que se TROCA uma descrição de propósito (DESCRIPTION).
 """
 import asyncio
 import json
@@ -24,17 +28,18 @@ async def main() -> None:
     s = get_settings()
     ns, key = os.environ["NS"], os.environ["KEY"]
     desc = os.environ.get("DESCRIPTION")
+    tenant = os.environ.get("TENANT") or None
     if desc is None:
         conn = await asyncpg.connect(s.database_url)
         try:
             desc = await conn.fetchval(
                 "SELECT description FROM public.platform_config "
-                "WHERE tenant_id = '__global__' AND namespace = $1 AND key = $2", ns, key) or ""
+                "WHERE tenant_id = $3 AND namespace = $1 AND key = $2", ns, key, tenant or "__global__") or ""
         finally:
             await conn.close()
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.put(f"{s.config_api_url.rstrip('/')}/config/{ns}/{key}",
-                        json={"value": json.loads(os.environ["VALUE"]), "tenant_id": None,
+                        json={"value": json.loads(os.environ["VALUE"]), "tenant_id": tenant,
                               "description": desc},
                         headers={"X-Admin-Token": os.environ["ADMIN"]})
     print(json.dumps({"status": r.status_code, "kept_description": len(desc)}))

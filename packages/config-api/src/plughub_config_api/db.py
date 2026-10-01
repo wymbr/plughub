@@ -160,14 +160,22 @@ async def db_set(
     value: Any,
     description: str = "",
 ) -> None:
-    """Upsert a config entry. tenant_id='__global__' sets the platform default."""
+    """Upsert a config entry. tenant_id='__global__' sets the platform default.
+
+    CFG-01 (2026-10-01): `description` vazia MANTÉM a gravada. Nenhuma rota de leitura devolve a
+    descrição, então nenhum chamador consegue reenviá-la — e a tela manda `""` em toda gravação
+    (17 chamadores do `putConfig`). Medido: 5 de 93 chaves tinham perdido a descrição assim, uma
+    delas para um probe. Trocar a descrição continua possível (texto não vazio); APAGÁ-LA pela API
+    deixou de ser, e não havia chamador que quisesse isso.
+    """
     await pool.execute(
         """
         INSERT INTO public.platform_config (tenant_id, namespace, key, value, description, updated_at)
         VALUES ($1, $2, $3, $4::jsonb, $5, now())
         ON CONFLICT (tenant_id, namespace, key) DO UPDATE
             SET value       = EXCLUDED.value,
-                description = EXCLUDED.description,
+                description = COALESCE(NULLIF(EXCLUDED.description, ''),
+                                       public.platform_config.description),
                 updated_at  = now()
         """,
         tenant_id, namespace, key, json.dumps(value), description,

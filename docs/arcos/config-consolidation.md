@@ -197,3 +197,16 @@ burn-down gradual: convergir tudo para **migração versionada if-absent** (mode
 e aposentar `infra/seed/*.py` + o YAML de registry, **store por store, sem retrabalho**. Nenhum bug — só
 arquitetura. Resíduo opcional: tornar o `set_module_config` do `seed_auth` if-absent (demo-users). Ideia: estender
 o guard (§8) para detectar seed que sobrescreve config DB-owned no restart.
+
+## 10. A descrição de uma chave não se perde ao salvar (CFG-01, 2026-10-01)
+
+O `PUT /config/{ns}/{key}` gravava a `description` que recebesse, e **nenhuma rota de leitura a
+devolve** — então nenhum chamador conseguia reenviá-la, e o `putConfig` da tela manda `""` em toda
+gravação (17 chamadores). Medido: 5 de 93 chaves tinham perdido a descrição assim, uma delas para
+um probe.
+
+Hoje o upsert (`db.py::db_set`) faz `description = COALESCE(NULLIF(EXCLUDED.description, ''),
+<a gravada>)`: **vazia mantém, não vazia troca**. Apagar uma descrição pela API deixou de ser
+possível, e não havia chamador que quisesse isso. A linha NOVA nasce com o que vier, inclusive
+vazio. Probes que escrevem config usam `infra/test/_config_put.py`, que lê a gravada e a reenvia.
+Gate: `infra/test/probe_cfg01_description_kept.sh` (Postgres real), bateria `mut_cfg01_description_kept.sh`.

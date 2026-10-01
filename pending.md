@@ -763,12 +763,6 @@ FED-01 não o duplica.
 
 ---
 
-## `docs/arcos/config-consolidation.md` — configuração com uma casa por fato
-
-| id | tarefa | status | âncora |
-|---|---|---|---|
-| CFG-01 | **Salvar uma chave pela tela APAGA a descrição dela.** O `PUT /config/{ns}/{key}` grava a `description` que recebe (`db_set`: `description = EXCLUDED.description`, com default `""` no `PutConfigBody`), nenhuma rota de leitura a devolve, e o `putConfig` da UI manda `''` — **17 chamadores** em `platform-ui/src`. Medido em 2026-10-01: **5 de 93** chaves com descrição vazia (`masking.context_map`, `masking.context_rules`, `audit_policy.authorized_roles`, um `dashboards.template:*` e `retention.attachment_days`, esta apagada pelo probe da ATT-04 e restaurada pela API na ATT-07). Decidir: `""` no PUT mantém a gravada (um `COALESCE(NULLIF(...))` no upsert, sem mudar chamador) **ou** a UI reenvia a descrição (exige rota que a devolva). Depois, restaurar as quatro restantes pelo texto da semente, onde houver | `aberto` | `config-api/router.py` `PutConfigBody`; `db.py` `db_set`; `infra/test/_config_put.py` (o contorno dos probes); CHANGELOG 2026-10-01 (9) |
-
 ## `sem-demanda` — trabalho sem decisão por trás
 
 **Contador: 7.** Balde declarado, não omissão. Se crescer, é sinal de que está entrando trabalho
