@@ -1,5 +1,70 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (11) — AAS-01: `a2a` é canal, e o pool só o expõe com contrato
+
+Fase A0 do `adr-a2a-server-binding` (D1, D3). Ainda **não há execução**: não existe adapter
+(A4), principal (A2) nem card (A1). Esta fase entrega o canal como valor de domínio e o descritor
+que o AgentCard vai projetar.
+
+**Canal.**
+- `a2a` entrou nos **cinco enumeradores obrigatórios**: `ChannelSchema` (zod),
+  `CHANNEL_CAPABILITIES` TS e Py, o `Literal` do `ConversationInboundEvent` no routing-engine e o
+  `VALID_CHANNELS` do mcp-server. Fora deste último, `a2a` cairia **calado** para `webchat`.
+- A lista veio de um censo de toda enumeração de canal. Rótulo, filtro e ícone são opcionais; os
+  enums de `channel-endpoint` e o dict de adapters do gateway ficam para A4/B3 (hoje a saída para
+  `a2a` cai no `debug` de canal sem adapter).
+- O perfil `agent` saiu sem mudança: `skillProfileFor` só separa `webhook`.
+- **Capacidade VAZIA, por decisão** (`a2a: []` / `frozenset()`), até o adapter existir. É a lição
+  da VOZ-12: canal que declara o que não faz é escolhido por `collect` e falha no envio.
+
+**Descritor.**
+- `PoolA2ADescriptorSchema` é mais estrito que o esboço do ADR: textos não vazios, JSON Schemas
+  com `type`, `skills[].id` snake_case e único, `principal_kinds` sem repetição, `.strict()`.
+- Coluna `pools.a2a JSONB` (migração `20261001120000_pool_a2a_descriptor`).
+- O portão é **uma casa** (`lib/a2a-descriptor.ts`) e julga o ESTADO RESULTANTE no POST e no PUT:
+  - pool de contato com o canal e sem descritor → 422;
+  - descritor sem o canal → 422, para qualquer pool, porque seria a segunda casa de *"está
+    exposto"*;
+  - tirar o canal sem limpar o descritor → 422; tirar os dois juntos → 200.
+- **O espelho `-int` herda o canal e não exige descritor**, o mesmo critério do `media_policy`.
+  Consequência registrada na AAS-03: o card lista só pools de contato.
+- **Tela:**
+  - checkbox A2A e editor do contrato (`A2ADescriptorEditor.tsx`): schemas editados como texto,
+    que só viram objeto quando válidos;
+  - o salvar diz o que falta antes de ir ao servidor, e desmarcar o canal manda `a2a: null`;
+  - i18n `pools.a2a.*` nos dois locales, e o rótulo do canal em `contacts`.
+  - **Visto no navegador:** o descritor gravado carrega, o schema sem `type` bloqueia o salvar
+    nomeando o motivo, e WebChat no lugar de A2A gravou `a2a: null`.
+
+**Achado de passagem:** o `probe_channel_capability_single_house.sh` usava `[a-z_]+` nos regex de
+canal e não via `a2a`, o primeiro canal com dígito. Ficou vermelho na hora, com 9 canais contra 10;
+o regex agora é `[a-z0-9_]+`.
+
+**Gates:**
+- `probe_aas01_a2a_pool.sh` VERDE, 19 OK:
+  - A: contrato nos enumeradores e na tela;
+  - B1–B7: registry ao vivo, com o controle positivo de sair limpando;
+  - C1–C2: o espelho é aceito e editável;
+  - D1–D4: routing e gateway **em execução** aceitam o canal, com o controle de canal inventado.
+- Dois defeitos do próprio probe, achados antes do verde:
+  - o ramo D rodava `docker exec` sem `-i` (stdin perdido) e saía VERDE sem imprimir nada; saída
+    vazia de ramo agora é INCONCLUSIVO;
+  - o D1 confundia o `started_at` obrigatório com recusa do canal; agora julga só o erro de
+    `channel`.
+- `mut_aas01_a2a_pool.sh` pegou 5 de 5 mutações no JS compilado:
+  - sem a proibição;
+  - sem a exigência;
+  - sem a isenção do espelho;
+  - PUT julgando o corpo do descritor;
+  - PUT julgando o corpo dos canais.
+- B7 e C2 entraram no probe porque, sem eles, M3 e M4 sobreviveriam.
+- A bateria deixa até 2 pools `probe_aas01_sem_contrato_*` por rodada (criados com o portão
+  desligado). O probe os neutraliza na rodada seguinte, sem o canal e sem descritor: a API não
+  apaga nem desativa pool, porque o PUT ignora `status` (medido).
+
+**Testes:** schemas 411 · agent-registry 158 (tsc limpo após `prisma generate`) · routing 156 ·
+channel-gateway 1616 · platform-ui e mcp-server tsc limpos · capacidade e i18n VERDE.
+
 ## 2026-10-01 (10) — CFG-01: salvar uma chave pela tela não apaga mais a descrição dela
 
 **Antes:**

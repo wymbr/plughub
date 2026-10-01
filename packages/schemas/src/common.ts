@@ -22,6 +22,7 @@ export const ChannelSchema = z.enum([
   "telegram",
   "webrtc",
   "webhook",   // Arc 19 — canal de workflow (channel-agnostic, pool executa skill-flow)
+  "a2a",       // AAS-01 — agente externo pelo protocolo A2A (perfil `agent`; adr-a2a-server-binding D1)
 ])
 export type Channel = z.infer<typeof ChannelSchema>
 

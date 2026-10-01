@@ -102,7 +102,8 @@ if tabela is None or prioridade is None:
 def enum_ts(caminho, nome):
     t = io.open(caminho, encoding="utf-8").read()
     m = re.search(r"export const %s = z\.enum\(\[(.*?)\]\)" % nome, t, re.S)
-    return set(re.findall(r'"([a-z_]+)"', m.group(1))) if m else set()
+    # AAS-01: `[a-z0-9_]` — `a2a` é o primeiro canal com dígito, e `[a-z_]` o tornava INVISÍVEL
+    return set(re.findall(r'"([a-z0-9_]+)"', m.group(1))) if m else set()
 
 canais = enum_ts(COMMON, "ChannelSchema")
 caps = enum_ts(SKILL, "ChannelCapabilitySchema")
@@ -196,9 +197,9 @@ m = re.search(r"CHANNEL_CAPABILITIES[^=]*=\s*\{(.*?)\n\}", ts, re.S)
 tab_ts = {}
 if m:
     for linha in m.group(1).split("\n"):
-        mm = re.match(r'\s*([a-z_]+):\s*\[(.*?)\],', linha)
+        mm = re.match(r'\s*([a-z0-9_]+):\s*\[(.*?)\],', linha)
         if mm:
-            tab_ts[mm.group(1)] = sorted(re.findall(r'"([a-z_]+)"', mm.group(2)))
+            tab_ts[mm.group(1)] = sorted(re.findall(r'"([a-z0-9_]+)"', mm.group(2)))
 
 if tab_py is None or not tab_ts:
     print("ERRO|F|nao consegui ler as duas tabelas (py=%s ts=%s)"

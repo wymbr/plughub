@@ -152,6 +152,44 @@
       "recording": "Record the calls handled by this pool (audio only)",
       "recordingHint": "The customer is told first (no notice delivered, no recording) and can refuse: the flow writes core.contact.recording_opt_out and the platform honours it. Protected-data entry is never recorded. Retention lives in Platform → Data retention."
     },
+    "a2a": {
+      "label": "A2A contract",
+      "hint": "What an external agent sees about this pool (the AgentCard is built from this block — there is no hand-written card). Required for a contact pool with the A2A channel.",
+      "displayName": "Display name",
+      "description": "What this agent does",
+      "descriptionHint": "Prose for the caller's LLM: what it can ask here and what it gets back.",
+      "input_schema": "Input (JSON Schema)",
+      "input_schemaHint": "WHAT the agent needs to receive (e.g. the customer's tax id) — not the interface format.",
+      "output_schema": "Output (JSON Schema)",
+      "output_schemaHint": "The structured result the caller receives when the task ends.",
+      "schemaInvalid": "Not a JSON Schema: it must be a JSON object with \"type\".",
+      "skills": "Skills",
+      "skillsHint": "What the caller can request. The id is stable (snake_case); examples are sample requests.",
+      "skillId": "id (snake_case)",
+      "skillName": "Name",
+      "skillDescription": "Description",
+      "skillTags": "Tags, comma-separated",
+      "skillExamples": "Example requests, one per line",
+      "addSkill": "+ Add skill",
+      "removeSkill": "Remove",
+      "principals": "Who may call",
+      "principalsHint": "Kinds of external caller this pool admits.",
+      "principal": {
+        "partner": "Partner (company system)",
+        "customer_agent": "Customer's own assistant"
+      },
+      "discoverable": "List in the public AgentCard",
+      "discoverableHint": "Unchecked, the pool is only shown to callers already authenticated and allowed to reach it.",
+      "missing": "A2A contract incomplete: {{list}}",
+      "problem": {
+        "displayName": "display name",
+        "description": "description",
+        "schemas": "valid input and output schemas",
+        "skills": "at least one skill",
+        "skillFields": "every skill with id (snake_case, unique), name and description",
+        "principals": "who may call"
+      }
+    },
     "transfer": {
       "label": "Transfer / Escalate",
       "hint": "Pools the human agent can transfer (escalate) the contact to. Shown in the Console Transfer combo.",

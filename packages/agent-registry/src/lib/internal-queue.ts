@@ -135,6 +135,7 @@ export async function syncInternalQueueMirror(
       mentionable_pools:  Prisma.DbNull,
       navigation_pools:   Prisma.DbNull,
       media_policy:       Prisma.DbNull,   // trabalho do operador, sem cliente na sala (VOZ-10)
+      a2a:                Prisma.DbNull,   // sem chamador externo: o espelho herda o canal, não o contrato (AAS-01)
       hooks:              Prisma.DbNull,
       context_visibility: Prisma.DbNull,
       ...derived,

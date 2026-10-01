@@ -3046,7 +3046,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const timestamp = new Date().toISOString()
       // Channel must be one of the ConversationInboundEvent literals or the routing
       // request fails validation. session meta sometimes stores "chat" → normalise.
-      const VALID_CHANNELS = ["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc", "webhook"]
+      // AAS-01: `a2a` entrou — sem ele, a transferência de um contato A2A virava `webchat` calada.
+      const VALID_CHANNELS = ["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc", "webhook", "a2a"]
       const routeChannel = VALID_CHANNELS.includes(channel) ? channel : "webchat"
 
       // 1. Current agent leaves the conference (visibility: all — customer must know).

@@ -19,6 +19,7 @@ import {
   detachedHookViolation,
 } from "../lib/internal-queue"
 import { mediaPolicyViolation } from "../lib/media-policy"
+import { a2aDescriptorViolation } from "../lib/a2a-descriptor"
 
 export const poolsRouter = Router()
 
@@ -83,6 +84,10 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
     const mediaViolation = mediaPolicyViolation(body.channel_types, body.purpose, body.media_policy)
     if (mediaViolation) return res.status(422).json(mediaViolation)
 
+    // AAS-01 — canal `a2a` e descritor andam juntos.
+    const a2aViolation = a2aDescriptorViolation(body.channel_types, body.purpose, body.a2a)
+    if (a2aViolation) return res.status(422).json(a2aViolation)
+
     // ADR internal-work-queue: hook detached agent-side exige a fila interna ligada.
     const hookViolation = detachedHookViolation(body.hooks, body.internal_queue_enabled === true)
     if (hookViolation) return res.status(422).json(hookViolation)
@@ -109,6 +114,7 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         mentionable_pools:     body.mentionable_pools ?? Prisma.DbNull,
         navigation_pools:      body.navigation_pools ?? Prisma.DbNull,
         media_policy:          body.media_policy ?? Prisma.DbNull,
+        a2a:                   body.a2a ?? Prisma.DbNull,
         agent_groups:          body.agent_groups ?? [],
         llm_account_ids:       body.llm_account_ids ?? [],
         hooks:                 body.hooks ?? Prisma.DbNull,
@@ -254,6 +260,16 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
     )
     if (mediaViolation) return res.status(422).json(mediaViolation)
 
+    // AAS-01 — ESTADO RESULTANTE: adicionar `a2a` sem descritor, limpar o descritor de um pool
+    // `a2a`, ou tirar o canal deixando o descritor são as três formas de chegar ao estado proibido.
+    const exA2a = existing as { channel_types: string[]; purpose: string | null; a2a: unknown }
+    const a2aViolation = a2aDescriptorViolation(
+      body.channel_types !== undefined ? body.channel_types : exA2a.channel_types,
+      body.purpose       !== undefined ? body.purpose       : exA2a.purpose,
+      body.a2a           !== undefined ? body.a2a           : exA2a.a2a,
+    )
+    if (a2aViolation) return res.status(422).json(a2aViolation)
+
     // ── ADR internal-work-queue — estado RESULTANTE da flag e dos hooks ──────────
     const exIq = existing as { internal_queue_enabled?: boolean; hooks: unknown }
     const resultingIq = body.internal_queue_enabled !== undefined
@@ -307,6 +323,7 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.mentionable_pools     !== undefined && { mentionable_pools:     body.mentionable_pools }),
         ...(body.navigation_pools      !== undefined && { navigation_pools:      body.navigation_pools }),
         ...(body.media_policy          !== undefined && { media_policy:          body.media_policy ?? Prisma.DbNull }),
+        ...(body.a2a                   !== undefined && { a2a:                   body.a2a ?? Prisma.DbNull }),
         ...(body.agent_groups          !== undefined && { agent_groups:          body.agent_groups }),
         ...(body.llm_account_ids       !== undefined && { llm_account_ids:       body.llm_account_ids }),
         ...(body.hooks                 !== undefined && { hooks:                 body.hooks }),

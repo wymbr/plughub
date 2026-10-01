@@ -140,6 +140,21 @@ renderização de "Adicionar Especialista" no Console já pedem.
 que* o agente precisa (por exemplo, o CPF); os modos dizem *em que formato de interface* ele fala.
 Colapsar os dois faria um parceiro ler *"preciso de CPF"* como *"aceito text/plain"*.
 
+**Como ficou (AAS-01, 2026-10-01).** `PoolA2ADescriptorSchema` em `@plughub/schemas/agent-registry.ts`,
+mais estrito que o esboço acima, porque contrato vazio não diz nada ao chamador: textos com
+`min(1)`, `input_schema`/`output_schema` exigem `type` string, `skills[].id` em snake_case e único,
+`principal_kinds` sem repetição, objeto `.strict()`. O portão mora numa casa só
+(`agent-registry/src/lib/a2a-descriptor.ts`) e julga o **estado resultante** no POST e no PUT, como
+o `media_policy` (VOZ-10): tirar o canal com o descritor gravado é recusado; tirar os dois juntos
+passa. Duas decisões de implementação:
+- **Só pool `purpose: contact` exige o descritor.** O espelho de fila interna (`-int`) herda os
+  canais do pai e não tem chamador externo; exigir ali forçaria um contrato inventado. Por isso o
+  card (A1) lista **só pools de contato**. A proibição (descritor sem canal) vale para qualquer pool.
+- **O canal nasce sem capacidade** (`CHANNEL_CAPABILITIES.a2a = []`, nas duas casas): o adapter é a
+  A4, e canal que declara o que ainda não faz é o defeito medido na VOZ-12. Até lá, nenhum
+  `collect` escolhe `a2a`, e saída para o canal não tem adapter.
+Gate: `infra/test/probe_aas01_a2a_pool.sh` (bateria `mut_aas01_a2a_pool.sh`, 5 de 5).
+
 ### D4 — `Task` **é** a sessão; `contextId` **é** a journey. Sem entidade nova
 
 `taskId := session_id`, `contextId := root_session_id`. Não se cria tabela, ledger nem ciclo de
@@ -398,7 +413,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | # | Fase | Entrega | Nota |
 |---|---|---|---|
 | **ATT-0** | Risco de anexo **de hoje** | allowlist e tamanho em todo canal de entrada, magic bytes fail-closed, `nosniff`, CSP `sandbox`, `filename*`, `inline` só para imagem | **independe do A2A e vem antes**: WhatsApp e e-mail pulam `validate_mime` e a porta pública serve inline |
-| **A0** | Canal + descritor | `a2a` no `ChannelSchema` e no perfil; bloco `a2a` no pool; tela | destrava delegate-por-pool |
+| **A0** | Canal + descritor | `a2a` no `ChannelSchema` e no perfil; bloco `a2a` no pool; tela | destrava delegate-por-pool · **feita em 2026-10-01 (AAS-01)** |
 | **A1** | AgentCard read-only | card público + estendido, modos derivados, `securitySchemes` | **sem execução**; força o descritor a ser honesto |
 | **A2** | Principal `partner` | `agent_principals` (fusão, D6), credencial, `allowed_pools`, tenant da credencial (D7), linha no probe de borda | **bloqueia A4** |
 | **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera |
@@ -523,3 +538,5 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   Mudanças: D1 invertida (canal `a2a`); D3 sem `exposed`; D6 fundida em `agent_principals` com dois
   tipos; D8 e D9 ampliadas; D10 pelo canal; D11 substituída; D12–D16 novas; A5 rebaixada a
   otimização; fases ATT-0, B1–B3, ATT e C.
+- **2026-10-01, fase A0 (AAS-01).** Canal e descritor entregues; D3 ganhou o *como ficou*
+  (schema estrito, portão sobre o estado resultante, espelho `-int` isento, capacidade vazia até a A4).

@@ -137,6 +137,11 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     # isso ele não tem capacidade de interação nenhuma. Declarado VAZIO de propósito —
     # omiti-lo devolveria a ausência silenciosa que esta tabela existe para fechar.
     "webhook":   frozenset(),
+    # `a2a` (AAS-01): o canal existe e o pool opta por ele; o ADAPTER é a AAS-06. Vazio até lá —
+    # capacidade declarada sem implementação é o defeito da VOZ-12. Quando o adapter entrar,
+    # entram `text` e `rich_menu` (menu → INPUT_REQUIRED); `masked_input` não — o dado protegido
+    # vai por link fora de banda (ADR D14).
+    "a2a":       frozenset(),
 }
 
 # Priority ordering when no preference is set (most capable → least).

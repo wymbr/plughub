@@ -205,6 +205,8 @@ export interface Pool {
   /** VOZ-10 — mídias que o pool OFERECE no WebRTC, por direção. Obrigatória em pool
    *  de contato com `webrtc`; null = não declarada (o atendente não oferece mídia). */
   media_policy?: PoolMediaPolicy | null
+  /** AAS-01 — contrato no canal `a2a`. Obrigatório com o canal (pool de contato), proibido sem ele. */
+  a2a?: PoolA2ADescriptor | null
   /** IDs dos Agent Groups (Arc 9) a que o pool pertence. */
   agent_groups?: string[]
   /** LLM Accounts (config-api namespace `llm_accounts`) preferidas por este pool, em ordem. */
@@ -237,6 +239,25 @@ export interface PoolMediaPolicy {
   recording?:       boolean
 }
 
+/** AAS-01 — gêmeo de `PoolA2ADescriptorSchema` (@plughub/schemas). Contrato do pool no canal `a2a`. */
+export type A2APrincipalKind = 'partner' | 'customer_agent'
+export interface A2ASkill {
+  id:          string
+  name:        string
+  description: string
+  tags:        string[]
+  examples:    string[]
+}
+export interface PoolA2ADescriptor {
+  display_name:    string
+  description:     string
+  input_schema:    Record<string, unknown>
+  output_schema:   Record<string, unknown>
+  skills:          A2ASkill[]
+  discoverable:    boolean
+  principal_kinds: A2APrincipalKind[]
+}
+
 /** Campos do gap compartilhados por Create/Update (todos opcionais). */
 interface PoolGapFields {
   agent_kind?: 'human' | 'ai' | null
@@ -254,6 +275,7 @@ interface PoolGapFields {
   /** VOZ-10 — mídias que o pool OFERECE no WebRTC, por direção. Obrigatória em pool
    *  de contato com `webrtc`; null = não declarada (o atendente não oferece mídia). */
   media_policy?: PoolMediaPolicy | null
+  a2a?: PoolA2ADescriptor | null
   agent_groups?: string[]
   llm_account_ids?: string[]
   evaluation?: PoolEvaluationConfig | null

@@ -20,7 +20,8 @@
       "instagram": "Instagram",
       "telegram": "Telegram",
       "webrtc": "WebRTC",
-      "webhook": "Webhook"
+      "webhook": "Webhook",
+      "a2a": "A2A agent"
     },
     "grain": {
       "session": "Session",

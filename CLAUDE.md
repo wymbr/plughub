@@ -575,7 +575,7 @@ Context Enrichment, `context_tags`, rotas de escopo)
 
 ## Channel vs Medium
 
-- **channel** = specific channel (`whatsapp`, `webchat`, `voice`, `email`, `sms`, `instagram`, `telegram`, `webrtc`) — **hard filter** for routing, mandatory match
+- **channel** = specific channel (`whatsapp`, `webchat`, `voice`, `email`, `sms`, `instagram`, `telegram`, `webrtc`, `webhook`, `a2a`) — **hard filter** for routing, mandatory match. `a2a` (AAS-01) só se expõe com o descritor `a2a` do pool (contrato do AgentCard; obrigatório em pool de contato, proibido sem o canal) e não declara capacidade até o adapter existir — `adr-a2a-server-binding` D3
 - **medium** = base type (`voice`, `video`, `message`, `email`) — **score factor**, fine-tuning only
 
 ## Canonical Stream

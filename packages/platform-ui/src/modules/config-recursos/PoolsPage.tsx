@@ -20,10 +20,12 @@ import {
   PoolHookSide,
   PoolHookDispatch,
   PoolMediaPolicy,
+  PoolA2ADescriptor,
   MediaKind,
 } from '@/types'
 import { useDialogForms } from '@/api/dialog-hooks'
 import { ContextVisibilitySelect } from './ContextVisibilitySelect'
+import { A2ADescriptorEditor, a2aProblems } from './A2ADescriptorEditor'
 import type { ContextVisibilityOptions } from '@/api/registry'
 import Button from '@/components/ui/Button'
 import Table from '@/components/ui/Table'
@@ -640,6 +642,7 @@ const CHANNEL_OPTIONS = [
   { value: 'telegram',  label: 'Telegram'  },
   { value: 'webrtc',    label: 'WebRTC'    },
   { value: 'webhook',   label: 'Webhook'   },
+  { value: 'a2a',       label: 'A2A'       },   // AAS-01 — agente externo pelo protocolo A2A
 ]
 
 const PoolsPage: React.FC = () => {
@@ -786,6 +789,9 @@ const PoolsPage: React.FC = () => {
     // VOZ-10 — mídias oferecidas no WebRTC. null = NÃO declarada: a tela não inventa
     // "áudio e vídeo" nem "só texto"; quem salva escolhe.
     media_policy:                null as PoolMediaPolicy | null,
+    // AAS-01 — o contrato do canal `a2a`, e se o TEXTO dos JSON Schemas virou objeto válido
+    a2a:                         null as PoolA2ADescriptor | null,
+    a2aSchemaOk:                 true,
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -936,7 +942,7 @@ const PoolsPage: React.FC = () => {
       queue_pool_id: '', queue_skill_id: '', queue_max_wait_s: null,
       hooks: { ...EMPTY_HOOKS },
       escalation_pools: [], mention_pools: [], navigation_pools: [],
-      llm_account_ids: [], media_policy: null,
+      llm_account_ids: [], media_policy: null, a2a: null, a2aSchemaOk: true,
     })
     setCalExceptions([])
     setError('')
@@ -979,6 +985,7 @@ const PoolsPage: React.FC = () => {
       ),
       llm_account_ids: pool.llm_account_ids ?? [],
       media_policy: pool.media_policy ?? null,
+      a2a: pool.a2a ?? null, a2aSchemaOk: true,
     })
     setCalExceptions([])  // will be loaded async below
     setError('')
@@ -988,6 +995,10 @@ const PoolsPage: React.FC = () => {
   }
 
   const handleClose = () => { setIsOpen(false); setEditingPool(null) }
+
+  // estável: o editor chama no efeito de montagem para semear o descritor vazio
+  const onA2AChange = useCallback((d: PoolA2ADescriptor, ok: boolean) =>
+    setFormData(prev => ({ ...prev, a2a: d, a2aSchemaOk: ok })), [])
 
   const handleChannelToggle = (ch: string) =>
     setFormData(prev => ({
@@ -1026,6 +1037,14 @@ const PoolsPage: React.FC = () => {
         && !formData.media_policy) {
       setError(t('pools.mediaPolicy.required'))
       return
+    }
+    // AAS-01 — o registry recusa pool de contato com `a2a` sem contrato completo (422).
+    if (formData.channel_types.includes('a2a') && formData.purpose === 'contact') {
+      const falta = formData.a2a ? a2aProblems(formData.a2a, formData.a2aSchemaOk) : ['displayName']
+      if (falta.length > 0) {
+        setError(t('pools.a2a.missing', { list: falta.map(p => t(`pools.a2a.problem.${p}`)).join(' · ') }))
+        return
+      }
     }
     setIsSaving(true); setError('')
     try {
@@ -1162,6 +1181,11 @@ const PoolsPage: React.FC = () => {
         // ela fica sem efeito e volta se o canal voltar.
         ...(canHaveCall(formData.channel_types) && formData.media_policy
           ? { media_policy: formData.media_policy } : {}),
+        // AAS-01 — diferente do media_policy: o descritor SEM o canal é recusado (segunda casa de
+        // "está exposto"), então desmarcar `a2a` LIMPA o descritor que existia.
+        ...(formData.channel_types.includes('a2a') && formData.a2a
+          ? { a2a: formData.a2a }
+          : (editingPool?.a2a ? { a2a: null } : {})),
       }
       if (editingPool) {
         // Desligar a fila interna órfana qualquer item ainda nela, e o registry não
@@ -1422,6 +1446,12 @@ const PoolsPage: React.FC = () => {
                 value={formData.media_policy}
                 onChange={mp => setFormData(prev => ({ ...prev, media_policy: mp }))}
                 optional={!hasMediaRoom(formData.channel_types)}
+              />
+            )}
+            {formData.channel_types.includes('a2a') && (
+              <A2ADescriptorEditor
+                value={formData.a2a}
+                onChange={onA2AChange}
               />
             )}
           </div>

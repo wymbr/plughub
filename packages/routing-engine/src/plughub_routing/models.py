@@ -47,7 +47,7 @@ class ConversationInboundEvent(BaseModel):
     session_id:   str
     tenant_id:    str
     customer_id:  str
-    channel:      Literal["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc", "webhook"]
+    channel:      Literal["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc", "webhook", "a2a"]
 
     # Target pool — set by channel-gateway on contact open (entry point config)
     # or by conversation_escalate (explicit escalation target).

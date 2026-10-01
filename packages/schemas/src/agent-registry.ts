@@ -285,6 +285,52 @@ const _mediaKindList = z.array(MediaKindSchema).refine(
   { message: "tipo de mídia repetido" },
 )
 
+/**
+ * Uma SKILL do AgentCard (A2A): o que o chamador pode pedir a este pool. `id` é estável e único
+ * dentro do pool; `examples` são frases de pedido, para o LLM do chamador (adr-a2a-server-binding D3).
+ */
+export const A2ASkillSchema = z.object({
+  id:          z.string().regex(/^[a-z0-9_]+$/, "snake_case"),
+  name:        z.string().min(1),
+  description: z.string().min(1),
+  tags:        z.array(z.string().min(1)).default([]),
+  examples:    z.array(z.string().min(1)).default([]),
+}).strict()
+export type A2ASkill = z.infer<typeof A2ASkillSchema>
+
+/**
+ * JSON Schema (2020-12) do que o pool recebe ou devolve. Exige-se um OBJETO com `type`: um `{}`
+ * aceitaria qualquer coisa e não diria nada ao chamador — contrato vazio é o defeito que o
+ * descritor existe para impedir. O conteúdo do schema não é interpretado aqui.
+ */
+const _a2aJsonSchema = z.record(z.unknown()).refine(
+  (s) => typeof s.type === "string" && s.type.length > 0,
+  { message: "JSON Schema sem `type` — contrato vazio não diz ao chamador o que mandar" },
+)
+
+/** Ver `PoolRegistrationSchema.a2a`. Ponto de entrada: adr-a2a-server-binding D3. */
+export const PoolA2ADescriptorSchema = z.object({
+  display_name:    z.string().min(1),
+  /** O que este agente faz, em prosa, para o LLM do chamador. */
+  description:     z.string().min(1),
+  /** O QUE o agente precisa (ex.: o CPF) — nunca o formato da interface (CTR-05). */
+  input_schema:    _a2aJsonSchema,
+  /** Vira o `DataPart` do artefato terminal (D5). */
+  output_schema:   _a2aJsonSchema,
+  skills:          z.array(A2ASkillSchema).min(1).refine(
+    (l) => new Set(l.map((s) => s.id)).size === l.length,
+    { message: "skill com `id` repetido" },
+  ),
+  /** Aparece no card PÚBLICO (D2). Ausente = não aparece. */
+  discoverable:    z.boolean().default(false),
+  /** Tipos de principal que este pool admite (D6) — também dão os `securitySchemes` do card. */
+  principal_kinds: z.array(z.enum(["partner", "customer_agent"])).min(1).refine(
+    (l) => new Set(l).size === l.length,
+    { message: "tipo de principal repetido" },
+  ),
+}).strict()
+export type PoolA2ADescriptor = z.infer<typeof PoolA2ADescriptorSchema>
+
 /** Ver `PoolRegistrationSchema.media_policy`. */
 export const PoolMediaPolicySchema = z.object({
   /** O que o CLIENTE pode publicar para este pool. */
@@ -593,6 +639,16 @@ export const PoolRegistrationSchema = z.object({
    * o que se quer evitar.
    */
   media_policy:           PoolMediaPolicySchema.nullable().optional(),
+  /**
+   * Contrato do pool exposto pelo canal `a2a` (AAS-01; adr-a2a-server-binding D3). O AgentCard
+   * é PROJEÇÃO dele (D2) — não existe card escrito à mão.
+   *
+   * ⚠️ **Obrigatório quando `channel_types` contém `a2a`, e proibido quando não contém** — a rota
+   * recusa (422) os dois estados, sobre o estado RESULTANTE do POST e do PUT. Pool exposto sem
+   * contrato é o defeito que este bloco existe para impedir; descritor sem o canal seria a segunda
+   * casa de "está exposto" (o `exposed` da v1 saiu por isso). `null` no PUT LIMPA.
+   */
+  a2a:                    PoolA2ADescriptorSchema.nullable().optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>
 

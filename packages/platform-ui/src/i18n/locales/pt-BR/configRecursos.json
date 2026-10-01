@@ -152,6 +152,44 @@
       "recording": "Gravar as chamadas atendidas por este pool (só áudio)",
       "recordingHint": "O cliente é avisado antes (sem aviso entregue, não se grava) e pode recusar: o fluxo grava core.contact.recording_opt_out e a plataforma honra. O trecho de dado protegido nunca é gravado. A retenção fica em Plataforma → Retenção de dados."
     },
+    "a2a": {
+      "label": "Contrato A2A",
+      "hint": "O que um agente externo vê deste pool (o AgentCard é montado a partir deste bloco — não existe card escrito à mão). Obrigatório para pool de contato com o canal A2A.",
+      "displayName": "Nome de exibição",
+      "description": "O que este agente faz",
+      "descriptionHint": "Texto para o LLM de quem chama: o que pode pedir aqui e o que recebe de volta.",
+      "input_schema": "Entrada (JSON Schema)",
+      "input_schemaHint": "O QUE o agente precisa receber (ex.: o CPF do cliente) — não o formato da interface.",
+      "output_schema": "Saída (JSON Schema)",
+      "output_schemaHint": "O resultado estruturado que quem chama recebe quando a tarefa termina.",
+      "schemaInvalid": "Não é um JSON Schema: precisa ser um objeto JSON com \"type\".",
+      "skills": "Habilidades",
+      "skillsHint": "O que quem chama pode pedir. O id é estável (snake_case); exemplos são pedidos de amostra.",
+      "skillId": "id (snake_case)",
+      "skillName": "Nome",
+      "skillDescription": "Descrição",
+      "skillTags": "Tags, separadas por vírgula",
+      "skillExamples": "Pedidos de exemplo, um por linha",
+      "addSkill": "+ Adicionar habilidade",
+      "removeSkill": "Remover",
+      "principals": "Quem pode chamar",
+      "principalsHint": "Tipos de chamador externo que este pool admite.",
+      "principal": {
+        "partner": "Parceiro (sistema de empresa)",
+        "customer_agent": "Assistente do próprio cliente"
+      },
+      "discoverable": "Listar no AgentCard público",
+      "discoverableHint": "Desmarcado, o pool só aparece para quem já se autenticou e pode alcançá-lo.",
+      "missing": "Contrato A2A incompleto: {{list}}",
+      "problem": {
+        "displayName": "nome de exibição",
+        "description": "descrição",
+        "schemas": "schemas de entrada e saída válidos",
+        "skills": "ao menos uma habilidade",
+        "skillFields": "toda habilidade com id (snake_case, único), nome e descrição",
+        "principals": "quem pode chamar"
+      }
+    },
     "transfer": {
       "label": "Transferência / Escalonamento",
       "hint": "Pools para onde o agente humano pode transferir (escalar) o contato. Aparece no combo Transfer do Console.",

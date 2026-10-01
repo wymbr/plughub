@@ -288,6 +288,107 @@ describe("media_policy (VOZ-10)", () => {
   })
 })
 
+// ── AAS-01 — canal `a2a` e descritor andam juntos (adr-a2a-server-binding D1, D3) ──────────
+describe("a2a (AAS-01)", () => {
+  const a2aPool = { pool_id: "segunda_via", channel_types: ["a2a"], sla_target_ms: 60000 }
+  const descritor = {
+    display_name:    "Segunda via de boleto",
+    description:     "Emite a segunda via de um boleto em aberto.",
+    input_schema:    { type: "object", properties: { cpf: { type: "string" } }, required: ["cpf"] },
+    output_schema:   { type: "object", properties: { linha_digitavel: { type: "string" } } },
+    skills:          [{ id: "segunda_via", name: "Segunda via", description: "Emite a segunda via." }],
+    principal_kinds: ["partner"],
+  }
+
+  it("`a2a` é canal válido no schema (controle: sem ele o POST nem chega à regra)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.pool.create).mockResolvedValue({ ...dbPool, ...a2aPool, a2a: descritor } as never)
+    const res = await request(app).post("/v1/pools").set(headers).send({ ...a2aPool, a2a: descritor })
+    expect(res.status).toBe(201)
+    const data = vi.mocked(prisma.pool.create).mock.calls[0]![0]!.data as Record<string, unknown>
+    // defaults do schema aplicados e GRAVADOS — o card (AAS-03) lê o que está no banco
+    expect(data["a2a"]).toMatchObject({ ...descritor, discoverable: false })
+  })
+
+  it("POST com `a2a` SEM descritor recusa 422 nomeando o campo", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    const res = await request(app).post("/v1/pools").set(headers).send(a2aPool)
+    expect(res.status).toBe(422)
+    expect(res.body.details.field).toBe("a2a")
+    expect(prisma.pool.create).not.toHaveBeenCalled()
+  })
+
+  it("POST com descritor SEM o canal recusa 422 (a segunda casa de \"exposto\")", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    const res = await request(app).post("/v1/pools").set(headers).send({ ...validPool, a2a: descritor })
+    expect(res.status).toBe(422)
+    expect(res.body.details.field).toBe("a2a")
+    expect(prisma.pool.create).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["input_schema vazio",        { input_schema: {} }],
+    ["sem skills",                { skills: [] }],
+    ["skill com id repetido",     { skills: [descritor.skills[0], descritor.skills[0]] }],
+    ["principal desconhecido",    { principal_kinds: ["anonimo"] }],
+    ["sem principal",             { principal_kinds: [] }],
+    ["campo que não existe",      { exposed: true }],
+  ])("descritor inválido recusa 422 — %s", async (_n, troca) => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(null)
+    const res = await request(app).post("/v1/pools").set(headers).send({ ...a2aPool, a2a: { ...descritor, ...troca } })
+    expect(res.status).toBe(422)
+    expect(prisma.pool.create).not.toHaveBeenCalled()
+  })
+
+  it("PUT que ADICIONA `a2a` a pool sem descritor recusa (estado resultante)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue({ ...dbPool, id: "x", purpose: "contact", a2a: null } as never)
+    const res = await request(app).put("/v1/pools/retencao_humano").set(headers)
+      .send({ channel_types: ["webchat", "a2a"] })
+    expect(res.status).toBe(422)
+    expect(prisma.pool.update).not.toHaveBeenCalled()
+  })
+
+  it("PUT que LIMPA o descritor de um pool `a2a` recusa", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(
+      { ...dbPool, id: "x", channel_types: ["a2a"], purpose: "contact", a2a: descritor } as never)
+    const res = await request(app).put("/v1/pools/segunda_via").set(headers).send({ a2a: null })
+    expect(res.status).toBe(422)
+  })
+
+  it("PUT que TIRA o canal e deixa o descritor recusa", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(
+      { ...dbPool, id: "x", channel_types: ["a2a", "webchat"], purpose: "contact", a2a: descritor } as never)
+    const res = await request(app).put("/v1/pools/segunda_via").set(headers).send({ channel_types: ["webchat"] })
+    expect(res.status).toBe(422)
+  })
+
+  it("PUT que tira o canal E limpa o descritor grava (controle positivo da saída)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(
+      { ...dbPool, id: "x", channel_types: ["a2a", "webchat"], purpose: "contact", a2a: descritor } as never)
+    vi.mocked(prisma.pool.update).mockResolvedValue(dbPool as never)
+    const res = await request(app).put("/v1/pools/segunda_via").set(headers).send({ channel_types: ["webchat"], a2a: null })
+    expect(res.status).toBe(200)
+    const data = vi.mocked(prisma.pool.update).mock.calls[0]![0]!.data as Record<string, unknown>
+    expect(data["a2a"]).toBeNull()
+  })
+
+  it("PUT que adiciona o canal COM o descritor grava (controle positivo da entrada)", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue({ ...dbPool, id: "x", purpose: "contact", a2a: null } as never)
+    vi.mocked(prisma.pool.update).mockResolvedValue(dbPool as never)
+    const res = await request(app).put("/v1/pools/retencao_humano").set(headers)
+      .send({ channel_types: ["webchat", "a2a"], a2a: descritor })
+    expect(res.status).toBe(200)
+  })
+
+  it("espelho interno com `a2a` herdado não exige descritor", async () => {
+    vi.mocked(prisma.pool.findUnique).mockResolvedValue(
+      { ...dbPool, id: "x", channel_types: ["a2a"], purpose: "internal", a2a: null } as never)
+    vi.mocked(prisma.pool.update).mockResolvedValue(dbPool as never)
+    const res = await request(app).put("/v1/pools/segunda_via-int").set(headers).send({ description: "x" })
+    expect(res.status).toBe(200)
+  })
+})
+
 describe("GET /v1/pools", () => {
   it("retorna lista de pools do tenant", async () => {
     vi.mocked(prisma.pool.findMany).mockResolvedValue([dbPool] as never)
