@@ -227,7 +227,8 @@ class ContactClosedEvent(BaseModel):
     tenant_id: str
     # Relaxed from Literal["webchat"] — supports all channels.
     channel: str = "webchat"
-    reason: Literal["agent_done", "client_disconnect", "timeout"]
+    # `caller_cancel` (AAS-06): o chamador A2A cancelou — transporte e negócio têm o mesmo nome
+    reason: Literal["agent_done", "client_disconnect", "timeout", "caller_cancel"]
     started_at: str
     ended_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     pool_id: str = ""

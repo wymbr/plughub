@@ -126,6 +126,7 @@ The `human_agent` legacy flag is cleared only when the SET becomes empty (last a
 | `"timeout"` | channel-gateway | Customer idle timeout | True |
 | `"agent_done"` | channel-gateway | Platform closed customer WS (normal close) | True |
 | `"agent_closed"` | mcp-server REST `/agent_done` | One human agent ended their session | False |
+| `"caller_cancel"` | channel-gateway (`CancelTask`, AAS-06) | The A2A caller canceled the task | True — but NOT in the abandonment tuples |
 
 **`customer_side = True`** means the customer is gone from the conversation.
 The bridge must:
@@ -247,6 +248,10 @@ also wakes every member of `session:{sid}:active_ai_specialists`.
 | Waking | `wake_parked_run(redis, sid, field, reason)` — `/execute` again with `wake_only`; `awaiting_input` = parked again; terminal = the call that DELETES the parked key closes the segment (exactly once); 412 = another execution holds it and will read the list |
 | Triggers | customer reply (`process_inbound`, after the LPUSH) · collect outcome · @mention signal · contact close (`wake_all_parked_runs`) · deadline (`_menu_deadline_scanner`, 1 s, `ZREM` of `{t}:menu:deadlines` is the claim) · **`menu.wake` topic** (`process_menu_wake`): writers outside the bridge — mcp-server `menu_submit` / hook-agent reply, routing-engine `__agent_available__` / `queue_timeout` — publish it AFTER their LPUSH, so a lost notice still leaves the answer in the list for the deadline wake |
 | Survives a restart | `_cleanup_stale_completing_at_startup` skips parked conversations; the CrashDetector (routing-engine) skips `session:{c}:parked_run:{inst}` |
+
+A customer-side close counts the parked menus too (`count_menu_close_waiters`, AAS-06): without
+the `session:closed:{sid}` push, the woken menu found an empty box and parked AGAIN until its own
+`timeout_s`. The queue agent's `_default_` field is left to its own marker (`queue:agent_active`).
 
 `wake_only` makes the engine answer 409 `NOT_PARKED` instead of starting the flow from `entry` —
 a late wake after the conversation ended would otherwise greet the customer again. Parked key

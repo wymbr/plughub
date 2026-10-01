@@ -137,11 +137,13 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
     # isso ele não tem capacidade de interação nenhuma. Declarado VAZIO de propósito —
     # omiti-lo devolveria a ausência silenciosa que esta tabela existe para fechar.
     "webhook":   frozenset(),
-    # `a2a` (AAS-01): o canal existe e o pool opta por ele; o ADAPTER é a AAS-06. Vazio até lá —
-    # capacidade declarada sem implementação é o defeito da VOZ-12. Quando o adapter entrar,
-    # entram `text` e `rich_menu` (menu → INPUT_REQUIRED); `masked_input` não — o dado protegido
-    # vai por link fora de banda (ADR D14).
-    "a2a":       frozenset(),
+    # `a2a` (AAS-01 canal, AAS-06 adapter — `a2a_tasks.py`): `text` (TextPart nos dois sentidos) e
+    # `rich_menu` (menu → INPUT_REQUIRED com o prompt numerado E um DataPart com o JSON Schema da
+    # resposta). `masked_input` NÃO: agente de terceiro não é portador de dado de cartão ou senha
+    # (ADR D8), e sem a capacidade o `notification_send` recusa o menu mascarado antes de publicar —
+    # o fluxo segue o `on_failure`. O link fora de banda é ficha própria. `file_upload` também não:
+    # arquivo em Part espera o arco de anexos (AAS-12).
+    "a2a":       frozenset({"text", "rich_menu"}),
 }
 
 # Priority ordering when no preference is set (most capable → least).
@@ -150,6 +152,13 @@ CHANNEL_CAPABILITIES: dict[str, frozenset[str]] = {
 # desempate por acidente, não por decisão. `instagram`/`telegram` entram aqui pelo
 # mesmo motivo que entraram na tabela acima. `webhook` fica fora de propósito: ele não
 # tem capacidade nenhuma, logo nunca é eleito, e listá-lo sugeriria que poderia ser.
+# Canais SÓ DE ENTRADA (AAS-06): têm capacidade de interação, mas a plataforma não tem como
+# ALCANÇAR alguém por eles — no `a2a` quem abre a conversa é o agente de fora, e não existe cliente
+# A2A de saída. Por isso nunca entram na eleição do `collect` (`_negotiate_channel` os recusa
+# nomeando) nem precisam de prioridade. DECLARADO, e não deduzido da ausência na lista abaixo: a
+# omissão silenciosa é o "desempate por acidente" que o ramo D do gate existe para pegar.
+INBOUND_ONLY_CHANNELS: frozenset[str] = frozenset({"a2a"})
+
 _CHANNEL_PRIORITY: list[str] = [
     "webrtc", "whatsapp", "webchat", "telegram", "instagram", "email", "voice", "sms",
 ]

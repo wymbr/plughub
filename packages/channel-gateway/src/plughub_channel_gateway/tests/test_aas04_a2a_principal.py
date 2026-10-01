@@ -118,11 +118,22 @@ OK = apr.AuthResult("ok", principal=apr.Principal("p-1", "tenant_x", "partner", 
 RPC = {"jsonrpc": "2.0", "id": 7, "method": "message/send", "params": {}}
 
 
-def test_controle_principal_com_o_pool_passa_e_recebe_operacao_nao_suportada(porta):
+def test_controle_principal_com_o_pool_passa_e_chega_ao_adapter(porta, monkeypatch):
+    """Desde a AAS-06 quem passa pela porta chega à EXECUÇÃO — e com o tenant e o pool que a
+    porta conferiu, nunca com os do corpo (D7)."""
     c, visto = porta(OK)
+    recebido = {}
+
+    class _Svc:
+        async def handle(self, caller, req):
+            recebido["caller"], recebido["req"] = caller, req
+            return {"jsonrpc": "2.0", "id": req.get("id"), "result": {"ok": True}}
+    monkeypatch.setattr(gw_main, "_a2a_service", lambda: _Svc())
     r = c.post("/a2a/segunda-via", json=RPC, headers={"Authorization": "Bearer pha_x"})
-    assert r.status_code == 200
-    assert r.json()["id"] == 7 and r.json()["error"]["code"] == -32004
+    assert r.status_code == 200 and r.json() == {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}}
+    cl = recebido["caller"]
+    assert (cl.sub, cl.tenant_id, cl.pool_id, cl.kind, cl.slug) == (
+        "p-1", "tenant_x", "segunda_via", "partner", "segunda-via")
     kw = visto["resolve"][0]
     assert (kw["channel"], kw["identifier"], kw["tenant_id"]) == ("a2a", "segunda-via", "tenant_x")
     assert kw["allowed_origins"] == frozenset({"external"})

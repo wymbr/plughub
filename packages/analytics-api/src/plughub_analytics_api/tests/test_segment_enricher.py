@@ -298,6 +298,15 @@ class TestEnrichedMcpAuditEvent:
         assert parsed["allowed"] is True
         assert parsed["duration_ms"] == 45
 
+    def test_mcp_audit_keeps_the_a2a_principal_and_omits_it_when_absent(self):
+        # AAS-06: o principal que originou a sessão pelo canal `a2a` chega ao registro durável;
+        # sem principal o campo NÃO aparece (vazio gravado igualaria "sem" a "não sei").
+        payload = {**self._base_payload(), "principal_id": "ap_1", "subject_type": "agent"}
+        parsed = json.loads(parse_mcp_audit_event(payload)["payload"])
+        assert (parsed["principal_id"], parsed["subject_type"]) == ("ap_1", "agent")
+        sem = json.loads(parse_mcp_audit_event(self._base_payload())["payload"])
+        assert "principal_id" not in sem and "subject_type" not in sem
+
     def test_mcp_audit_blocked_call(self):
         payload = self._base_payload()
         payload["allowed"] = False

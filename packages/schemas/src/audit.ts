@@ -1077,6 +1077,15 @@ export const AuditRecordSchema = z.object({
    */
   source:              z.enum(["in_process", "proxy_sidecar", "mcp_server_invoke"]),
   /**
+   * AAS-06 (ADR A2A D6/D10). QUEM originou a sessão em cujo nome a chamada corre, quando não
+   * é o cliente: o `agent_principal` que chamou pelo canal `a2a` (`sub` da credencial). Ausente
+   * em sessão sem principal — nunca um placeholder. Carimbado do `session:{sid}:meta`, que o
+   * adapter A2A escreve no nascimento da task.
+   */
+  principal_id:        z.string().optional(),
+  /** O TIPO desse principal (`PrincipalTypeSchema` — um agente de fora é `agent`). */
+  subject_type:        PrincipalTypeSchema.optional(),
+  /**
    * Campos cujos valores foram omitidos por serem mascarados (originados do masked_scope).
    * Registra QUAIS campos foram enviados, mas nunca seus valores.
    * Presente quando a tool recebe inputs via namespace @masked.*.

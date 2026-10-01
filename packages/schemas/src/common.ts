@@ -63,6 +63,10 @@ export const CloseReasonSchema = z.enum([
   // NÃO completou — reusá-lo faria a estatística de resolução contar como sucesso
   // um processo que ninguém terminou.
   "suspend_orphaned",     // parque órfão: prazo vencido e endereço de retomada perdido
+  // AAS-06 (ADR A2A D15.7). Quem chama pelo canal `a2a` desistiu (`CancelTask`). NUNCA
+  // `customer_abandon`: desistência programática não é abandono, e a taxa de abandono do pool
+  // subiria por um motivo plausível e falso.
+  "caller_cancel",        // chamador A2A cancelou a tarefa
 ])
 export type CloseReason = z.infer<typeof CloseReasonSchema>
 

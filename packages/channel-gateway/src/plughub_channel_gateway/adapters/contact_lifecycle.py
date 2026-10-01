@@ -27,6 +27,7 @@ from typing import Any
 _BUSINESS_CLOSE_REASON: dict[str, str] = {
     "client_disconnect": "customer_disconnect",
     "timeout":           "session_timeout",
+    "caller_cancel":     "caller_cancel",
 }
 
 

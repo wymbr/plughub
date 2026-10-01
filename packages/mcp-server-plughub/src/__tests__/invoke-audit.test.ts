@@ -136,6 +136,15 @@ describe("buildInvokeAuditRecord — contrato mcp.audit", () => {
     expect(AuditRecordSchema.safeParse(r).success).toBe(true)
   })
 
+  it("AAS-06: sessão com principal A2A carimba principal_id e subject_type=agent; sem ele, nada", () => {
+    const com = record(judgeInvoke(PERMS, "mcp-server-crm", "customer_get", CLEAN), { principal_id: "ap_1" })
+    expect([com.principal_id, com.subject_type]).toEqual(["ap_1", "agent"])
+    expect(AuditRecordSchema.safeParse(com).success).toBe(true)
+    const sem = record(judgeInvoke(PERMS, "mcp-server-crm", "customer_get", CLEAN))
+    expect("principal_id" in sem).toBe(false)
+    expect("subject_type" in sem).toBe(false)
+  })
+
   it("duration_ms nunca é negativo nem fracionário", () => {
     const r = record(judgeInvoke(PERMS, "mcp-server-crm", "customer_get", CLEAN), { duration_ms: -3.6 })
     expect(r.duration_ms).toBe(0)

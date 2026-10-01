@@ -58,6 +58,39 @@ async def pool_existence(
     return "unavailable", f"registry respondeu HTTP {r.status_code}"
 
 
+async def fetch_pool(
+    *,
+    tenant_id:          str,
+    pool_id:            str,
+    agent_registry_url: str,
+    service_token:      str = "",
+    timeout_s:          float = 5.0,
+    transport:          httpx.AsyncBaseTransport | None = None,
+) -> tuple[PoolExistence, dict | None, str]:
+    """O pool INTEIRO (AAS-06: o adapter A2A lê o descritor `a2a` e o `channel_types` a cada task
+    nova). Mesmos três desfechos de `pool_existence`, e o mesmo "não consegui perguntar" ≠ "não
+    existe"."""
+    if not agent_registry_url:
+        return "unavailable", None, "agent_registry_url não configurada"
+    headers = {"x-tenant-id": tenant_id}
+    if service_token:
+        headers["x-service-token"] = service_token
+    url = f"{agent_registry_url.rstrip('/')}/v1/pools/{pool_id}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as client:
+            r = await client.get(url, headers=headers)
+    except Exception as exc:  # noqa: BLE001 — o motivo vai adiante
+        return "unavailable", None, f"registry inalcançável: {exc}"
+    if r.status_code == 200:
+        try:
+            return "exists", r.json(), ""
+        except ValueError:
+            return "unavailable", None, "registry devolveu JSON ilegível"
+    if r.status_code == 404:
+        return "not_found", None, f"pool '{pool_id}' não existe no tenant '{tenant_id}'"
+    return "unavailable", None, f"registry respondeu HTTP {r.status_code}"
+
+
 # ── WHK-02 (2026-09-30): o endereço das portas PÚBLICAS de contato ─────────────
 #
 # `/ws/chat/{x}` e `/ws/webrtc/{x}` resolviam `x` como `ChannelEndpoint` e, sem registro,

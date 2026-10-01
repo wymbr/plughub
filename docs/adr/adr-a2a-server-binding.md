@@ -438,6 +438,45 @@ aceita mensagem (`UnsupportedOperationError`); **não há** mecanismo de fim de 
    plausível.
 8. **`tasks/list` por `contextId`** lista só as tasks daquele principal e titular.
 
+**Como ficou (AAS-06, 2026-10-01).** O adapter é `channel-gateway/a2a_tasks.py`, atrás da porta
+da AAS-04. Métodos com os nomes da v1.0: `SendMessage`, `GetTask`, `CancelTask` e `ListTasks`.
+
+- **O estado é DEDUZIDO dos fatos da sessão** a cada leitura, nesta ordem:
+  - **o primeiro motivo de fim** (`closed_recorded`) manda, salvo quando é o do próprio fluxo
+    (`flow_complete`/`agent_done`): `caller_cancel` → `CANCELED`, `no_resource` → `REJECTED`, o
+    resto → `FAILED` com o motivo;
+  - **o resultado do `complete`** (D5): contrato válido → `COMPLETED` com o artefato; inválido →
+    `FAILED` com os `errors`;
+  - **`menu:waiting`** voltado ao cliente, com fala do agente → `INPUT_REQUIRED`;
+  - meta com instância → `WORKING`; sem instância → `SUBMITTED`;
+  - nada → `TASK_STATE_UNSPECIFIED`, **nunca** um estado plausível.
+- **O pedido inicial é ENTRADA DE CONTRATO** (decisão do dono): o `DataPart` é conferido contra o
+  `input_schema` do descritor (sem ele, valida-se `{}`, então campo obrigatório recusa pedido só de
+  texto, nomeando o campo). Ele é semeado com o texto em `core.a2a.request` ANTES do roteamento, e o
+  fluxo lê do primeiro passo. O contrato do pool (canal, descritor, `principal_kinds`) é conferido
+  de novo a cada task, não só na concessão.
+- **`INPUT_REQUIRED`** leva o prompt numerado (`text_menu`, a casa dos canais de texto) e, quando o
+  cliente aceita JSON, um `DataPart` com o JSON Schema da resposta. A resposta (`{"choice"}`,
+  `{"choices"}`, o objeto do form, ou texto) entra por `conversations.inbound`. O que não nomeia
+  opção segue CRU, e é o motor que reenvia (NIV-13). O prazo é o do menu, lido do
+  `{t}:menu:deadlines` e publicado em `metadata.plughub.input_deadline`.
+- **Bloqueante com teto de 25 s**, ou `returnImmediately`. Interrompida, a task só ASSENTA com fala
+  NOVA do agente: logo após a resposta, o menu antigo ainda está em `menu:waiting`. Os prazos (teto,
+  validade do `contextId`, leitura da task) vão no card pela extensão `task-lifetime`, que o GATEWAY
+  acrescenta: é ele quem os aplica.
+- **Dono:** task e `contextId` são do principal (e do pool) que os criou. Alheio e inexistente têm
+  a MESMA resposta (`-32001` / `-32602`).
+- **D8 em vigor:** o canal declara `text` e `rich_menu`, sem `masked_input`, então o
+  `notification_send` recusa menu mascarado antes de publicar. O link fora de banda é a `AAS-14`.
+- **D10/D6:** o principal vai no meta da sessão e no `AuditRecord` do `invoke` (`principal_id`,
+  `subject_type: agent`). No segmento ainda não vai (`AAS-16`).
+- **Canal só de entrada:** `a2a` tem capacidade, mas não alcança ninguém. É declarado em
+  `INBOUND_ONLY_CHANNELS` e o `collect` o recusa, nomeando.
+- **Achado no caminho:** fechar pelo lado do cliente não acordava de verdade o menu ESTACIONADO, em
+  canal nenhum (`conference-mechanics.md` § Mudança 48). Consertado com o probe.
+
+Gate: `infra/test/probe_aas06_a2a_tasks.sh` (bateria `mut_aas06_a2a_tasks.sh`).
+
 ### D16 — Face MCP do mesmo pool, para assistentes de consumo *(rev. 2, direção)*
 
 Medido em 2026-09-30: os assistentes **corporativos** chamam A2A (Copilot Studio GA abr/2026, Gemini
@@ -493,7 +532,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | **A1** | AgentCard read-only | card público + estendido, modos derivados, `securitySchemes` | **sem execução**; força o descritor a ser honesto · **card público feito em 2026-10-01 (AAS-03)**; o estendido espera o principal (`AAS-13`) |
 | **A2** | Principal `partner` | `agent_principals` (fusão, D6), credencial, `allowed_pools`, tenant da credencial (D7), linha no probe de borda | **bloqueia A4** · **feita em 2026-10-01 (AAS-04)**, com a porta autenticada já de pé |
 | **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera · **feita em 2026-10-01 (AAS-05)** |
-| **A4** | Adapter JSON-RPC | `message/send` (bloqueante com teto + `returnImmediately`), `tasks/get`, `tasks/cancel`, `tasks/list`; `menu` → `INPUT_REQUIRED` com `DataPart`/texto; D15 inteira | **basta para o OpenClaw** (só bearer, texto e JSON, polling) |
+| **A4** | Adapter JSON-RPC | `message/send` (bloqueante com teto + `returnImmediately`), `tasks/get`, `tasks/cancel`, `tasks/list`; `menu` → `INPUT_REQUIRED` com `DataPart`/texto; D15 inteira | **basta para o OpenClaw** (só bearer, texto e JSON, polling) · **feita em 2026-10-01 (AAS-06)**; bloco mascarado por link = `AAS-14` |
 | **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling |
 | **A6** | Validação | clientes de referência: SDK oficial, **OpenClaw** (o mais restrito) e **Copilot Studio ou Gemini Enterprise** (o comprador real); isolamento cross-tenant e cross-titular (D15.4); probe de borda | gate |
 | **B1** | Prova federada (ID-FED) | `princ` (PID-21) e `oidc_email` pelo escritor único; RP OIDC por tenant; cofre de segredo | **bloqueia B2** |
@@ -620,6 +659,10 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.
 - **2026-10-01, fase A2 (AAS-04).** D6 ganhou o *como ficou* do `partner`; a porta `POST /a2a/{slug}`
   existe antes da execução; o carimbo do principal no `AuditRecord` foi para a A4.
+- **2026-10-01, fase A4 (AAS-06).** D15 ganhou o *como ficou*: estado deduzido dos fatos, pedido
+  como entrada de contrato (decisão do dono), `caller_cancel`, prazos publicados pelo executor.
+  Deixou `AAS-14` (link fora de banda), `AAS-15` (pedido no stream) e `AAS-16` (principal no
+  segmento). Cota por principal ficou na `AAS-09`, onde é requisito.
 - **2026-10-01, fase A3 (AAS-05).** D5 ganhou o *como ficou*: `complete.result_from`, o bridge
   grava o resultado com o veredicto do contrato, status deduzido de fatos com `unknown`; o resume
   deixou de gravar `active` eterno.

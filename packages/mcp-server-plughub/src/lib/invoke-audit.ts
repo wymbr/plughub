@@ -82,6 +82,8 @@ export interface InvokeAuditInput {
   verdict:     InvokeVerdict
   duration_ms: number
   timestamp?:  string
+  /** AAS-06: o principal da sessão (canal `a2a`); omitido quando a sessão não tem um. */
+  principal_id?: string
 }
 
 /**
@@ -113,6 +115,10 @@ export function buildInvokeAuditRecord(input: InvokeAuditInput): AuditRecord {
 
   if (verdict.allowed === false && verdict.reason === "injection_detected") {
     record.injection_pattern = verdict.pattern_id
+  }
+  if (input.principal_id) {
+    record.principal_id = input.principal_id
+    record.subject_type = "agent"
   }
 
   return record

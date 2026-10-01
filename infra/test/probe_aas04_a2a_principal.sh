@@ -12,8 +12,9 @@
 #   B  INTROSPECÇÃO: só serviço (401 sem token); credencial ativa traz tenant e pools; desconhecida
 #      → `{"active": false}`.
 #   C  PORTA (gateway :8010): anônimo → 401 com WWW-Authenticate, inclusive em slug inexistente
-#      (sem oráculo); credencial válida no pool concedido → JSON-RPC -32004 (a execução é a AAS-06),
-#      com o `id` ecoado; pool não concedido → 403; slug inexistente, autenticado → 404.
+#      (sem oráculo); credencial válida no pool concedido CHEGA AO ADAPTER (desde a AAS-06: um
+#      `GetTask` de id inexistente responde -32001, sem efeito colateral), com o `id` ecoado; pool
+#      não concedido → 403; slug inexistente, autenticado → 404.
 #   D  REVOGAÇÃO: rotacionar invalida a anterior na hora no auth-api; desativar derruba a porta em
 #      ≤ 30 s (cache do gateway). O principal é reativado no fim.
 #
@@ -105,7 +106,7 @@ intro() { $C -o "$BODY" -w '%{http_code}' -X POST "$P/introspect" -H 'Content-Ty
   ${2:+-H "x-service-token: $2"} -d "{\"credential\":\"$1\"}"; }
 porta() {  # $1 slug $2 credencial (vazia = anônimo)
   $C -o "$BODY" -D "$BODY.h" -w '%{http_code}' -X POST "$GW/a2a/$1" -H 'Content-Type: application/json' \
-    ${2:+-H "Authorization: Bearer $2"} -d '{"jsonrpc":"2.0","id":"probe-7","method":"message/send","params":{}}'; }
+    ${2:+-H "Authorization: Bearer $2"} -d '{"jsonrpc":"2.0","id":"probe-7","method":"GetTask","params":{"id":"probe-aas04-inexistente"}}'; }
 
 # ── A ────────────────────────────────────────────────────────────────────────
 echo ""; echo "── A · ADMINISTRAÇÃO ──────────────────────────────────────────────────"
@@ -157,8 +158,8 @@ st=$(porta "probe-aas04-nunca-$(date +%s)" "")
 [ "$st" = 401 ] && ok "C2 anônimo em slug inexistente -> 401, não 404 (sem oráculo)" || falha "C2 -> $st"
 st=$(porta probe-aas04 "$CRED")
 r=$(body | jq -c '{id, code: .error.code}')
-[ "$st" = 200 ] && [ "$r" = '{"id":"probe-7","code":-32004}' ] \
-  && ok "C3 credencial no pool concedido -> JSON-RPC -32004 (execução é a AAS-06), id ecoado" || falha "C3 -> $st $(body | head -c 200)"
+[ "$st" = 200 ] && [ "$r" = '{"id":"probe-7","code":-32001}' ] \
+  && ok "C3 credencial no pool concedido -> chega ao adapter (GetTask inexistente = -32001), id ecoado" || falha "C3 -> $st $(body | head -c 200)"
 st=$(porta probe-aas04-outro "$CRED"); [ "$st" = 403 ] && ok "C4 pool NÃO concedido -> 403" || falha "C4 -> $st"
 st=$(porta "probe-aas04-nunca-$(date +%s)" "$CRED"); [ "$st" = 404 ] && ok "C5 autenticado em slug inexistente -> 404" || falha "C5 -> $st"
 st=$(porta probe-aas04 "pha_inventada_$(date +%s)"); [ "$st" = 401 ] && ok "C6 credencial inventada -> 401" || falha "C6 -> $st"

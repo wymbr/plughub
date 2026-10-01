@@ -255,3 +255,13 @@ async def test_channel_fixo_incapaz_passa_quando_o_form_NAO_mascara():
         assert MASKED_INPUT not in str(exc), f"recusou por capacidade sem mascara: {exc}"
     except Exception:
         pass   # qualquer outra falha e I/O ausente, nao o portao
+
+
+@pytest.mark.asyncio
+async def test_negotiate_nunca_elege_canal_so_de_entrada():
+    """AAS-06: `a2a` tem capacidade de texto e menu, mas a plataforma não alcança ninguém por
+    ele. Preferido no mapa, ele sai da eleição (e o WARNING nomeia); sozinho, não há canal."""
+    com_a2a = {"channels": {"a2a": "pool_a2a", "webchat": "pool_web"}, "preferred_order": ["a2a"]}
+    assert await _adapter()._negotiate_channel("t", "c", com_a2a) == ("webchat", "pool_web")
+    with pytest.raises(ValueError):
+        await _adapter()._negotiate_channel("t", "c", {"channels": {"a2a": "pool_a2a"}})

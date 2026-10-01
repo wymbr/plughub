@@ -77,11 +77,9 @@ export const CHANNEL_CAPABILITIES: Readonly<Record<Channel, readonly ChannelCapa
   // não tem capacidade de interação nenhuma. Declarado VAZIO de propósito —
   // omiti-lo devolveria a ausência silenciosa que esta tabela existe para fechar.
   webhook:   [],
-  // `a2a` (AAS-01) — o CANAL existe (pool opta por ele em `channel_types`), o ADAPTER ainda não:
-  // ele é a AAS-06 (JSON-RPC, `menu` → `INPUT_REQUIRED`). Declarado VAZIO até lá, porque
-  // capacidade declarada sem implementação é o defeito que a VOZ-12 tirou: fluxo que exija
-  // texto ou menu em pool `a2a` é recusado no deploy até o adapter existir. O gêmeo Python diz o mesmo.
-  a2a:       [],
+  // `a2a` (AAS-06): texto e menu (→ `INPUT_REQUIRED`); sem `masked_input` (ADR D8) nem
+  // `file_upload` (AAS-12). O porquê mora no gêmeo Python.
+  a2a:       ["text", "rich_menu"],
 } as const
 
 /**

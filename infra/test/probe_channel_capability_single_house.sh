@@ -84,7 +84,7 @@ GW_ROUTER = "packages/channel-gateway/src/plughub_channel_gateway/adapters/voice
 fonte = io.open(REG, encoding="utf-8").read()
 
 # ── a tabela, por AST — `grep` contaria os nomes citados nos comentários ─────
-tabela, prioridade = None, None
+tabela, prioridade, so_entrada = None, None, set()
 for no in ast.parse(fonte).body:
     if not isinstance(no, ast.AnnAssign) or not isinstance(no.target, ast.Name):
         continue
@@ -95,6 +95,9 @@ for no in ast.parse(fonte).body:
         }
     elif no.target.id == "_CHANNEL_PRIORITY":
         prioridade = [e.value for e in no.value.elts]
+    elif no.target.id == "INBOUND_ONLY_CHANNELS":
+        # AAS-06: canal só de entrada é DECLARADO fora da eleição do collect — `frozenset({...})`
+        so_entrada = {e.value for e in no.value.args[0].elts} if no.value.args else set()
 
 if tabela is None or prioridade is None:
     print("ERRO|A|nao achei CHANNEL_CAPABILITIES ou _CHANNEL_PRIORITY por AST"); sys.exit()
@@ -124,10 +127,17 @@ print("ERRO|B|capacidade fora do vocabulario: %s" % fora if fora
 # ── D ────────────────────────────────────────────────────────────────────────
 # Só canais ELEGÍVEIS precisam de prioridade: quem não tem capacidade nenhuma
 # nunca é eleito, e listá-lo sugeriria que poderia ser.
-elegiveis = {ch for ch, cs in tabela.items() if cs}
+# Canal SÓ DE ENTRADA (`INBOUND_ONLY_CHANNELS`, AAS-06) sai da conta por DECLARAÇÃO — nunca por
+# omissão — e não pode estar ao mesmo tempo na prioridade (seria elegível e não-elegível).
+elegiveis = {ch for ch, cs in tabela.items() if cs} - so_entrada
 sem_prio = sorted(elegiveis - set(prioridade))
-print("ERRO|D|canal elegivel fora de _CHANNEL_PRIORITY (desempate por acidente): %s" % sem_prio
-      if sem_prio else "OK|D|todos os %d canais elegiveis tem prioridade" % len(elegiveis))
+ambos = sorted(so_entrada & set(prioridade))
+if sem_prio or ambos:
+    print("ERRO|D|canal elegivel fora de _CHANNEL_PRIORITY (desempate por acidente): %s · so-entrada "
+          "COM prioridade: %s" % (sem_prio or "-", ambos or "-"))
+else:
+    print("OK|D|todos os %d canais elegiveis tem prioridade (%d so de entrada, declarados)"
+          % (len(elegiveis), len(so_entrada)))
 
 # ── E — testemunha de seguranca ─────────────────────────────────────────────
 def _funcoes(caminho):

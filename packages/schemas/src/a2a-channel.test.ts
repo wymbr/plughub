@@ -30,10 +30,12 @@ describe("canal a2a", () => {
     expect(skillProfileFor(["webhook"])).toBe("workflow")   // controle: a regra não ficou constante
   })
 
-  it("não declara capacidade até o adapter existir (AAS-06)", () => {
-    expect(CHANNEL_CAPABILITIES.a2a).toEqual([])
-    expect(channelSatisfies("a2a", ["text"])).toBe(false)
-    expect(channelSatisfies("webchat", ["text"])).toBe(true)  // controle
+  it("com o adapter (AAS-06) declara texto e menu — e nunca entrada mascarada nem arquivo", () => {
+    expect(CHANNEL_CAPABILITIES.a2a).toEqual(["text", "rich_menu"])
+    expect(channelSatisfies("a2a", ["text", "rich_menu"])).toBe(true)
+    expect(channelSatisfies("a2a", ["masked_input"])).toBe(false)   // D8: bloco mascarado não atravessa
+    expect(channelSatisfies("a2a", ["file_upload"])).toBe(false)    // AAS-12
+    expect(channelSatisfies("webchat", ["masked_input"])).toBe(true) // controle
   })
 })
 

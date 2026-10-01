@@ -63,7 +63,7 @@ import jwt as pyjwt          # Journey J4c — mint the webchat JWT that pre-bin
 import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
-from ..channel_capability_registry import channel_satisfies
+from ..channel_capability_registry import INBOUND_ONLY_CHANNELS, channel_satisfies
 from ..collect_requirements import (
     DialogFormMaskProbe,
     derive_collect_requires,
@@ -2173,6 +2173,14 @@ class WebhookAdapter(ChannelAdapter):
         # cliente, ela filtra; `webchat` é o fallback universal (não exige endereço —
         # o próprio link tokenizado é o ponto de entrada).
         allowed = [c for c in channels.keys() if c not in exclude]
+        # AAS-06 — canal só de entrada não alcança ninguém: configurado no mapa, é erro de config,
+        # e é DITO (sem isto a eleição o escolheria e a sessão-filha esperaria um chamador que
+        # nunca vem).
+        so_entrada = [c for c in allowed if c in INBOUND_ONLY_CHANNELS]
+        if so_entrada:
+            logger.warning("collect: canal(is) só de entrada %s no `channel_policy.channels` — fora da "
+                           "eleição (a plataforma não alcança ninguém por eles)", so_entrada)
+            allowed = [c for c in allowed if c not in INBOUND_ONLY_CHANNELS]
         if reachable:
             narrowed = [c for c in allowed if c in reachable or c == "webchat"]
             if narrowed:

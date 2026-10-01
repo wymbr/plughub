@@ -108,6 +108,15 @@ session state key is `channel:{channel}:{session_id}:menu_collect`. ⚠️ O cam
 `button`/`list`/`checklist`, pelo `text_menu`. Até a NIV-17, o WhatsApp mandava a lista de mais
 de 10 opções por este protocolo, e a escolha chegava ao motor como formulário `{"option": …}`.
 
+## Canal `a2a` — o adapter JSON-RPC (AAS-06)
+
+`a2a_tasks.py`, atrás da porta `POST /a2a/{slug}` (AAS-04). Task = sessão; o estado é deduzido dos
+fatos dela (resultado do `complete`, `closed_recorded`, `menu:waiting`, meta), nunca guardado. O
+pedido inicial é semeado em `core.a2a.request` antes do roteamento; as respostas a `INPUT_REQUIRED`
+entram por `conversations.inbound` como as de qualquer canal de texto (`text_menu`). Não tem adapter
+no `OutboundConsumer`: a fala do agente é lida do stream canônico. É canal SÓ DE ENTRADA
+(`INBOUND_ONLY_CHANNELS`): o `collect` não o elege. Detalhe: ADR A2A § D15 *Como ficou*.
+
 ## Chamada entre réplicas (WCH-12)
 
 A chamada (`webrtc`, SIP, chamada presa ao chat) vive na memória de UMA réplica. A saída do Kafka e
@@ -179,8 +188,9 @@ torn down or only **one agent's session** should be cleaned up.
 | `"client_disconnect"` | Customer WebSocket / channel connection dropped unexpectedly | True |
 | `"timeout"` | Customer idle timeout exceeded (adapter-level TTL) | True |
 | `"agent_done"` | Platform explicitly closed the customer's outbound connection after normal resolution | True |
+| `"caller_cancel"` | The A2A caller canceled the task (`CancelTask`, AAS-06). Business `close_reason` is the same name — never `customer_abandon` | True |
 
-All three indicate the customer is no longer reachable. The bridge must push to
+All four indicate the customer is no longer reachable. The bridge must push to
 `session:closed:{session_id}` (unblocking any active menu BLPOP), notify all active
 human agents, restore all Routing Engine instances, and clean up all session state.
 
@@ -201,7 +211,7 @@ The `reason` field is the **only** signal the Orchestrator Bridge has to disting
 - fail to clean up when the customer disconnects (agent instances remain occupied), or
 - tear down a live conference when only one of several agents exits.
 
-Channel Gateway adapters must always set `reason` to one of the three values above.
+Channel Gateway adapters must always set `reason` to one of the four values above.
 Any future adapter that introduces a new disconnect reason must update the bridge's
 `customer_side` classification accordingly.
 
@@ -214,7 +224,7 @@ class ContactClosedEvent:
     session_id:  str
     contact_id:  str
     channel:     str
-    reason:      Literal["client_disconnect", "timeout", "agent_done"]
+    reason:      Literal["client_disconnect", "timeout", "agent_done", "caller_cancel"]
     timestamp:   datetime
     instance_id: str = ""  # only populated by mcp-server (agent_closed path)
 ```

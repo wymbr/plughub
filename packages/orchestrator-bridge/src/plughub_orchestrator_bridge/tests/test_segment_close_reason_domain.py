@@ -43,6 +43,8 @@ CONTACT_DOMAIN = {
     "no_resource", "max_wait_exceeded", "customer_disconnect", "customer_hangup",
     "customer_abandon", "flow_complete", "agent_transfer", "agent_hangup",
     "session_timeout", "system_error",
+    "suspend_orphaned",   # RET-14 — estava no `CloseReasonSchema` e faltava nesta cópia
+    "caller_cancel",      # AAS-06 — o chamador A2A cancelou (nunca abandono)
 }
 
 

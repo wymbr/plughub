@@ -911,6 +911,11 @@ def parse_mcp_audit_event(
         "data_categories":     payload.get("data_categories") or [],
         "masked_input_fields": payload.get("masked_input_fields") or [],
     }
+    # AAS-06: quem originou a sessão pelo canal `a2a`. Só quando veio — ausente é "sem principal",
+    # e um `""` gravado tornaria as duas coisas iguais.
+    if payload.get("principal_id"):
+        audit_payload["principal_id"] = payload["principal_id"]
+        audit_payload["subject_type"] = payload.get("subject_type") or ""
 
     return {
         "table":      "session_timeline",

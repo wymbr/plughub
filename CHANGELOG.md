@@ -1,5 +1,87 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (15) — AAS-06: um agente de fora conversa com um pool pelo canal `a2a`, do pedido ao artefato
+
+Fase A4 do `adr-a2a-server-binding` (D4, D8, D14, D15). A execução entrou ATRÁS da porta da AAS-04
+(`POST /a2a/{slug}`), que já autenticava, tomava o tenant da credencial e conferia o pool.
+
+**Decisões do dono (2026-10-01):**
+- **Fatia:** o núcleo agora. O bloco mascarado por link fora de banda virou a `AAS-14`; até lá o
+  canal não declara `masked_input` e o menu mascarado é RECUSADO antes de publicar (NIV-03). A cota
+  por principal ficou na `AAS-09`, onde a ADR a faz requisito (opcional no `partner`).
+- **O pedido inicial é ENTRADA DE CONTRATO**, não resposta ao primeiro menu: conferido contra o
+  `input_schema` do descritor e semeado em `core.a2a.request` antes do roteamento. Sem corrida.
+
+**O adapter** (`channel-gateway/a2a_tasks.py`), com os nomes da v1.0:
+- **`SendMessage`:**
+  - bloqueante com teto de 25 s, ou `returnImmediately`;
+  - task nova (sessão nova no pool, journey = `contextId`) ou continuação (`taskId` em
+    `INPUT_REQUIRED`, pelo `conversations.inbound` de sempre);
+  - continuar depois do fim é `-32004`.
+- **`GetTask`, `CancelTask`, `ListTasks`.**
+- **Task É a sessão; o estado é DEDUZIDO, nunca guardado:**
+  - o primeiro motivo de fim (`closed_recorded`) manda, salvo o do próprio fluxo;
+  - depois, o resultado da AAS-05 (contrato válido → `COMPLETED` + artefato; inválido → `FAILED`
+    com os erros);
+  - depois, `menu:waiting` com fala do agente → `INPUT_REQUIRED`;
+  - meta com instância → `WORKING`, sem → `SUBMITTED`;
+  - nada → `UNSPECIFIED`, nunca um estado plausível.
+- **`INPUT_REQUIRED`** leva o prompt numerado (`text_menu`) e um `DataPart` com o JSON Schema da
+  resposta; o prazo vem do `{t}:menu:deadlines`.
+- **Dono:** task e `contextId` são do principal e do pool que os criaram. Alheio e inexistente têm a
+  mesma resposta. O contrato do pool (canal, descritor, `principal_kinds`) é conferido de novo a
+  cada task, não só na concessão (herança da AAS-04).
+- **`caller_cancel`** é `close_reason` novo (`CloseReasonSchema`, gateway, bridge, CLAUDE.md),
+  lado-cliente, e FORA das tuplas de abandono (D15.7).
+- **Prazos publicados** no card pela extensão `task-lifetime`. O GATEWAY a acrescenta, porque é ele
+  quem aplica os prazos; uma cópia no registry envelheceria calada.
+- **Capacidades:** o canal declara `text` + `rich_menu` e é **só de entrada**
+  (`INBOUND_ONLY_CHANNELS`): o `collect` não o elege, e diz isso. O gate de capacidade pegou o caso
+  (ramo D): com capacidade, `a2a` virava elegível para contatar alguém por um canal que não alcança
+  ninguém.
+- **Principal no `AuditRecord`** (`principal_id`, `subject_type: agent`) do `invoke`, lido do meta,
+  e guardado no `payload` da `session_timeline`.
+
+**Dois defeitos que o probe ao vivo pegou e o verde escondia.** A primeira rodada passou 13/13. A
+conferência do registro durável mostrou que a sessão cancelada estava:
+1. **Com `close_reason = flow_complete` no `sessions`.** `_close_contact_layer` mandava todo
+   transporte desconhecido para o `else`, que é "fim pela plataforma", sem aviso. Ganhou ramo para
+   `caller_cancel` e WARNING para o próximo desconhecido.
+2. **Estacionada de novo, com a instância de IA presa até o prazo do menu.** No fechamento do lado
+   do cliente, o bridge só contava como esperando quem tinha a marca de BLPOP, e o menu estacionado
+   não tem. Nada era empurrado para `session:closed:{sid}`, e o acordar achava a caixa vazia e
+   estacionava de novo. **Vale para todo canal** desde que estacionar ficou universal (DUR-01 F4,
+   2026-09-28): um webchat que desconecta durante um menu de IA mantinha conversa, segmento e
+   licença até o `timeout_s` (até 4 h em menu infinito). Consertado em `count_menu_close_waiters`;
+   ver `conference-mechanics.md` § Mudança 48.
+
+E um terceiro, do próprio adapter: o `complete` que o menu acordado ainda executa DEPOIS do
+cancelamento fazia a task virar `FAILED`. Agora a primeira causa manda.
+
+**Medição:**
+- testes: gateway 1 673 (24 do adapter e 1 de eleição) · bridge 300 (7 da contagem) · schemas 411
+  · mcp-server 534 · agent-registry 184 · analytics 29;
+- `probe_aas06_a2a_tasks.sh` ao vivo, sem LLM: **16/16** (os ramos D3, D4 e D5 nasceram dos dois
+  defeitos acima);
+- bateria `mut_aas06_a2a_tasks.sh`: **7/7, cada uma pelo ramo que declara**. A primeira rodada
+  deu 7/7 também, mas pelo motivo errado: sobras de rodadas anteriores lotavam o pool, e o A2
+  reprovava por `SUBMITTED` em quase toda mutação. Agora o probe cancela as próprias sobras, e a
+  bateria só aceita o vermelho do ramo esperado. No caminho, a M2 (que adota `contextId` alheio)
+  registrou o `contextId` literal do C2 como deste principal por 30 dias, e o C2 passou a reprovar
+  sem mutação nenhuma. O id inventado agora é aleatório por rodada;
+- os probes vizinhos ao vivo seguem verdes: AAS-03, AAS-04 (ramo C3 reescrito), AAS-05, a
+  varredura anônima de rotas e a borda.
+
+**Ficou de fora, com ficha:**
+- `AAS-14`: link fora de banda para o bloco mascarado;
+- `AAS-15`: o pedido inicial não entra no stream canônico, então a transcrição começa na fala do
+  agente;
+- `AAS-16`: o principal no segmento.
+
+O `AAS-07` (streaming), `AAS-08` (validação), `AAS-10` (pool humano) e `AAS-12` (arquivo em
+`Part`) deixam de estar bloqueados. O probe da AAS-04 passou a medir a chegada ao adapter
+(`GetTask` inexistente = `-32001`) em vez do `-32004` provisório.
+
 ## 2026-10-01 (14) — AAS-05: o fim do fluxo deixa o resultado legível, e o status só afirma o que sabe
 
 Fase A3 do `adr-a2a-server-binding` (D5). Sem ela não há `tasks/get` com artefato, e o chamador

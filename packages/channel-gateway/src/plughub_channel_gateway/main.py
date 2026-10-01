@@ -64,7 +64,9 @@ from .auth import accessible_pools, pool_in_scope
 from .speech_config import PROFILE_ID_RE, VOICE_PARAMS, conferir_forma
 from .identity_auth import identity_principal, tenant_for
 from .context_reader import ContextReader
-from .pool_existence import pool_existence, resolve_contact_address
+from .pool_existence import fetch_pool, pool_existence, resolve_contact_address
+from . import a2a_tasks
+from plughub_contextstore.writer import write_context_tags
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint
 from .outbound_consumer import OutboundConsumer
 from .call_relay import CallRelay
@@ -2922,7 +2924,14 @@ async def a2a_agent_card(slug: str) -> JSONResponse:
         base_url     = base,
     )
     if res.outcome == "ok":
-        return JSONResponse(res.card, headers={"Cache-Control": f"public, max-age={int(a2a_card.CACHE_TTL_S)}"})
+        # AAS-06: os prazos do EXECUTOR entram aqui, onde vivem (ver `task_lifetime_extension`)
+        card = dict(res.card)
+        caps = dict(card.get("capabilities") or {})
+        caps["extensions"] = [e for e in (caps.get("extensions") or [])
+                              if e.get("uri") != a2a_tasks.TASK_LIFETIME_EXTENSION_URI]
+        caps["extensions"].append(a2a_tasks.task_lifetime_extension())
+        card["capabilities"] = caps
+        return JSONResponse(card, headers={"Cache-Control": f"public, max-age={int(a2a_card.CACHE_TTL_S)}"})
     if res.outcome == "refused":
         a2a_card.log_refusal(slug, res)
         return JSONResponse({"error": "not_found"}, status_code=404)
@@ -2930,12 +2939,11 @@ async def a2a_agent_card(slug: str) -> JSONResponse:
     return JSONResponse({"error": "unavailable"}, status_code=503)
 
 
-# ── Interface A2A — a PORTA, antes da execução (AAS-04) ─────────────────────────
+# ── Interface A2A — a PORTA (AAS-04) e, atrás dela, a execução (AAS-06) ─────────
 #
-# "A2 antes de A4 é inegociável" (ADR § 6): publicar execução antes do principal seria publicar
-# um disparador anônimo de pools. Esta rota já é o endereço que o card anuncia, e por ora só
-# AUTENTICA e AUTORIZA: quem passa recebe `UnsupportedOperationError` (JSON-RPC -32004) até a
-# execução chegar (AAS-06). A ordem importa:
+# "A2 antes de A4 é inegociável" (ADR § 6): a execução entra ATRÁS da porta, nunca ao lado. Esta
+# rota é o endereço que o card anuncia; quem passa pelas três conferências abaixo chega ao adapter
+# JSON-RPC (`a2a_tasks.py`). A ordem importa:
 #   1. credencial ANTES de tudo — anônimo não aprende se o slug existe;
 #   2. o TENANT é o da credencial (D7) e tem de ser o desta instalação — credencial de outro
 #      tenant é 403, nunca "executa no tenant do slug";
@@ -2985,13 +2993,44 @@ async def a2a_interface(slug: str, request: Request) -> JSONResponse:
     except ValueError:
         return JSONResponse({"jsonrpc": "2.0", "id": None,
                              "error": {"code": -32700, "message": "Parse error"}})
-    rid = req.get("id") if isinstance(req, dict) else None
-    logger.info("a2a: principal %s autorizado no pool %s (slug=%s); execução ainda não existe (AAS-06)",
-                p.sub, ep.pool_id, slug)
-    return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {
-        "code": -32004, "message": "UnsupportedOperationError",
-        "data": {"detail": "credencial aceita; a execução de tarefas A2A ainda não está disponível"},
-    }})
+    caller = a2a_tasks.Caller(sub=p.sub, kind=p.kind, tenant_id=p.tenant_id, pool_id=ep.pool_id,
+                              slug=slug)
+    try:
+        body = await _a2a_service().handle(caller, req)
+    except a2a_tasks.A2AUnavailable as exc:
+        # §9 do ADR: chamador de máquina reenvia em laço — back-pressure explícito, nunca 500.
+        logger.warning("a2a: contrato do pool %s não conferido (principal %s): %s", ep.pool_id, p.sub, exc)
+        return JSONResponse({"error": "unavailable"}, status_code=503, headers={"Retry-After": "5"})
+    return JSONResponse(body)
+
+
+_a2a_svc: "a2a_tasks.A2ATaskService | None" = None
+
+
+def _a2a_service() -> "a2a_tasks.A2ATaskService":
+    """O adapter A2A (AAS-06), montado na primeira chamada sobre o Redis e o produtor do app."""
+    global _a2a_svc
+    if _a2a_svc is None:
+        settings = get_settings()
+        if _redis is None or _producer is None:
+            raise a2a_tasks.A2AUnavailable("Redis ou Kafka do gateway não inicializados")
+
+        async def _publish(topic: str, payload: dict, key: str) -> None:
+            # chave = a sessão: abre, mensagem e fecha da MESMA task na mesma partição (ordem)
+            await _producer.send_and_wait(topic, value=json.dumps(payload).encode(), key=key.encode())
+
+        async def _pool(tenant_id: str, pool_id: str):
+            return await fetch_pool(tenant_id=tenant_id, pool_id=pool_id,
+                                    agent_registry_url=settings.agent_registry_url,
+                                    service_token=settings.agent_registry_service_token)
+
+        async def _ctx(tenant_id: str, session_id: str, tags: dict) -> None:
+            await write_context_tags(_redis, tenant_id, session_id, tags, source="a2a_request",
+                                     updated_at=datetime.now(timezone.utc).isoformat(), ttl_s=86_400)
+
+        _a2a_svc = a2a_tasks.A2ATaskService(redis=_redis, publish=_publish, fetch_pool=_pool,
+                                            write_ctx=_ctx)
+    return _a2a_svc
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

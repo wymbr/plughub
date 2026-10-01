@@ -3831,7 +3831,17 @@ async def _close_contact_layer(
             _last_outcome_val = _last_outcome_val or "failed"
         elif _transport_reason == "agent_closed":
             _close_reason_biz = "agent_hangup"
+        elif _transport_reason == "caller_cancel":
+            # AAS-06: o chamador A2A cancelou. Sem este ramo caía no `else` e virava
+            # `flow_complete` — medido: a sessão cancelada contava como fluxo concluído.
+            _close_reason_biz = "caller_cancel"
         else:  # "agent_done" — platform closed after agent completion
+            if _transport_reason != "agent_done":
+                # um transporte que este mapa não conhece não vira `flow_complete` calado
+                logger.warning(
+                    "_close_contact_layer: transporte de fechamento DESCONHECIDO %r tratado como "
+                    "fim pela plataforma — falta um ramo aqui (session=%s)",
+                    _transport_reason, session_id)
             _close_reason_biz = (
                 "agent_hangup" if _last_agent_kind == "human" else "flow_complete"
             )
@@ -4594,6 +4604,7 @@ _TRANSPORT_TO_CLOSE_REASON = {
     "session_timeout":   "session_timeout",
     "max_wait_exceeded": "max_wait_exceeded",
     "no_resource":       "no_resource",
+    "caller_cancel":     "caller_cancel",     # AAS-06: o chamador A2A cancelou (CancelTask)
 }
 
 
@@ -7551,6 +7562,67 @@ async def _has_continuation(
 _CLOSED_RECORDED_TTL_S = 86_400
 
 
+async def count_menu_close_waiters(redis_client, session_id: str) -> int:
+    """
+    Quantos `menu` voltados ao CLIENTE precisam do sinal `session:closed:{sid}` quando o lado do
+    cliente fecha. Cada um consome UMA entrada da lista (BLPOP, ou LPOP ao ser acordado).
+
+    Conta, entre as entradas de `menu:waiting:{sid}` com visibilidade `all` (as de hook —
+    wrap-up, NPS — têm lista de participante e NÃO podem receber o sinal: sairiam por
+    `on_disconnect` antes de o humano responder):
+      · quem está no BLPOP — `{t}:session:{sid}:active_instance:{campo}`, que o menu.ts mantém
+        só enquanto bloqueia;
+      · quem está ESTACIONADO (DUR-01) — campo em `session:{sid}:parked_runs`. ⚠️ Faltava até
+        2026-10-01 (AAS-06): estacionado não tem a marca de BLPOP, a contagem dava zero, nada era
+        empurrado, e o `wake_all_parked_runs` logo depois acordava um menu que achava a caixa vazia
+        e estacionava DE NOVO. Conversa, segmento e instância de IA viviam até o `timeout_s` do
+        menu (até 4 h num menu infinito) — em todo canal, desde que o estacionamento ficou
+        universal (F4, 2026-09-28). Medido no `CancelTask` do canal `a2a`.
+    O campo `_default_` (agente de FILA, que estaciona sem instância) fica fora da conta de
+    estacionados: quem o conta é o marcador `queue:agent_active`, logo depois — contar aqui
+    também empurraria um sinal a mais, que um agente de hook consumiria mais tarde.
+    Sem tenant no meta, conta toda entrada `all` (comportamento anterior, por segurança).
+    """
+    n = 0
+    try:
+        wh = await redis_client.hgetall(f"menu:waiting:{session_id}")
+        if not wh:
+            return 0
+        tenant: str | None = None
+        try:
+            raw = await redis_client.get(f"session:{session_id}:meta")
+            if raw:
+                tenant = json.loads(raw if isinstance(raw, str) else raw.decode()).get("tenant_id")
+        except Exception:
+            pass
+        try:
+            estacionados = {
+                (x if isinstance(x, str) else x.decode())
+                for x in (await redis_client.smembers(f"session:{session_id}:parked_runs") or set())
+            }
+        except Exception as exc:
+            logger.warning("count_menu_close_waiters: parked_runs ilegível (session=%s): %s — "
+                           "menu estacionado pode não receber o fechamento", session_id, exc)
+            estacionados = set()
+        for field, meta_json in wh.items():
+            try:
+                campo = field if isinstance(field, str) else field.decode()
+                meta_s = meta_json if isinstance(meta_json, str) else meta_json.decode()
+                vis = json.loads(meta_s).get("visibility")
+                if not (vis == "all" or vis is None):
+                    continue
+                if not tenant:
+                    n += 1
+                elif (campo in estacionados and campo != "_default_") or await redis_client.exists(
+                        f"{tenant}:session:{session_id}:active_instance:{campo}"):
+                    n += 1
+            except Exception:
+                n += 1          # entrada malformada — conta, por segurança
+    except Exception:
+        pass
+    return n
+
+
 async def write_session_closed(redis_client, session_id: str, reason: str) -> bool:
     """O FIM do contato no stream canônico — para TODO canal, sempre que o stream existe (VOZ-40).
 
@@ -7978,7 +8050,11 @@ async def process_contact_event(
     #                         (channel-gateway, triggered by conversations.outbound)
     #   "agent_closed"      — a human agent called REST /agent_done (mcp-server)
 
-    customer_side = reason in ("client_disconnect", "timeout", "session_timeout", "agent_done")
+    #   "caller_cancel"     — o chamador A2A cancelou a tarefa (AAS-06). É lado-cliente (quem
+    #                         chama É o cliente do canal), mas NÃO entra nas tuplas de abandono
+    #                         abaixo: desistência programática não é abandono (ADR A2A D15.7).
+    customer_side = reason in ("client_disconnect", "timeout", "session_timeout", "agent_done",
+                               "caller_cancel")
 
     try:
         # ── Marcar sessão como encerrada ──────────────────────────────────────
@@ -8032,65 +8108,10 @@ async def process_contact_event(
                 # visibility de participante específico (["human_pid"] / ["cust_pid"]) —
                 # se receberem o sinal, sairão via on_disconnect e pularão os steps de
                 # texto antes de o agente humano ter chance de responder.
-                n_waiting = 0
-                _no_menu_entries = True
-                try:
-                    _wh = await redis_client.hgetall(f"menu:waiting:{session_id}")
-                    if _wh:
-                        _no_menu_entries = False
-                        # Read tenant_id for activity-key checks.
-                        # menu.ts sets {tenant}:session:{sid}:active_instance:{instanceId}
-                        # while the BLPOP is running and deletes it in the finally block
-                        # (on timeout, response, or disconnect).  If the key is absent the
-                        # agent's BLPOP already exited — a session:closed push would be
-                        # consumed by a hook agent (wrapup/NPS) instead, causing it to
-                        # exit prematurely via on_disconnect before collecting human input.
-                        _fix_a_tenant: str | None = None
-                        try:
-                            _fa_meta_raw = await redis_client.get(
-                                f"session:{session_id}:meta"
-                            )
-                            if _fa_meta_raw:
-                                _fa_meta_s = (
-                                    _fa_meta_raw if isinstance(_fa_meta_raw, str)
-                                    else _fa_meta_raw.decode()
-                                )
-                                _fix_a_tenant = json.loads(_fa_meta_s).get("tenant_id")
-                        except Exception:
-                            pass
-                        for _fa_field, _meta_json in _wh.items():
-                            try:
-                                _fa_field_s = (
-                                    _fa_field if isinstance(_fa_field, str)
-                                    else _fa_field.decode()
-                                )
-                                _fa_meta_s2 = (
-                                    _meta_json if isinstance(_meta_json, str)
-                                    else _meta_json.decode()
-                                )
-                                _meta_vis = json.loads(_fa_meta_s2).get("visibility")
-                                # Somente agentes com visibility "all" (ou null/legacy)
-                                # esperam input do cliente — esses precisam do sinal.
-                                if _meta_vis == "all" or _meta_vis is None:
-                                    if _fix_a_tenant:
-                                        # Check activity key: only count agents whose
-                                        # BLPOP is still active (key set by menu.ts).
-                                        _akey = (
-                                            f"{_fix_a_tenant}:session:{session_id}"
-                                            f":active_instance:{_fa_field_s}"
-                                        )
-                                        if await redis_client.exists(_akey):
-                                            n_waiting += 1
-                                        # else: agent already exited BLPOP — skip
-                                    else:
-                                        # tenant_id unavailable — fall back to old
-                                        # behaviour (count all customer-facing entries)
-                                        n_waiting += 1
-                            except Exception:
-                                # Malformed entry — include for safety
-                                n_waiting += 1
-                except Exception:
-                    pass
+                # DUR-01/AAS-06 — a contagem mora em `count_menu_close_waiters`, que conta também
+                # o menu ESTACIONADO (sem ela, ele era acordado pelo fechamento, achava a caixa
+                # vazia e estacionava de novo até o próprio prazo).
+                n_waiting = await count_menu_close_waiters(redis_client, session_id)
                 # Note: if menu:waiting has entries but ALL customer-facing agents
                 # already exited their BLPOPs, n_waiting stays 0.  Do NOT push —
                 # any push would be consumed by a hook agent starting later.

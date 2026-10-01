@@ -2615,3 +2615,27 @@ substituída — a espera não recomeça na devolução, que é a regra de produ
 ⚠️ **Forward-only:** as 102 esperas e os 5 abandonos falsos anteriores ficam como estão — o carimbo
 é consumido na saída e a duração verdadeira não é recuperável.
 Gate: `routing-engine/tests/test_pull_claim_wait_segment.py` (5 testes; mutação 4/4).
+
+
+### Mudança 48 — fechar pelo lado do cliente encerra o `menu` ESTACIONADO, não só o que bloqueia (AAS-06, 2026-10-01)
+
+**Medido** no `CancelTask` do canal `a2a`, e vale para todo canal desde que o estacionamento ficou
+universal (DUR-01 F4, 2026-09-28). No fechamento do lado do cliente, o bridge conta quantos `menu`
+voltados ao cliente esperam o sinal, empurra um `session:closed:{sid}` para cada e acorda os
+estacionados. A contagem só via quem tinha a marca de BLPOP (`{t}:session:{sid}:active_instance:*`).
+O estacionado não tem essa marca, então contava zero e nada era empurrado. O acordar achava a caixa
+vazia e **estacionava de novo**. A conversa, o segmento aberto e a instância de IA ocupada viviam
+até o `timeout_s` do menu: 120 s na fixture, até 4 h num menu infinito.
+
+**Conserto:** a contagem foi para `count_menu_close_waiters` e passou a contar também o campo em
+`session:{sid}:parked_runs`. Ficam de fora:
+- a entrada de hook (lista de participante), como antes;
+- o `_default_` do agente de FILA, que tem o marcador próprio (`queue:agent_active`). Contá-lo duas
+  vezes deixaria um sinal que um hook consumiria depois.
+
+**No mesmo fechamento:** `_close_contact_layer` mapeava todo transporte desconhecido para
+`flow_complete`, calado. O `caller_cancel` novo virava "fluxo concluído" no `sessions` (medido). Ele
+ganhou ramo próprio, e o `else` passa a avisar quando recebe um transporte que não conhece.
+
+Gates: `orchestrator-bridge/tests/test_aas06_close_waiters.py`; ao vivo,
+`probe_aas06_a2a_tasks.sh` D3/D4 (bateria M6/M7).

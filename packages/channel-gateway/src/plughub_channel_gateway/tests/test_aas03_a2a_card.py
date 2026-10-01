@@ -99,7 +99,10 @@ def rota(monkeypatch):
 def test_rota_serve_o_card_com_cache_publico(rota):
     client, chamadas = rota(a2a_card.CardResult("ok", card=CARD))
     r = client.get("/a2a/segunda-via/.well-known/agent-card.json")
-    assert r.status_code == 200 and r.json() == CARD
+    assert r.status_code == 200
+    # AAS-06: o gateway acrescenta os prazos do EXECUTOR (moram nele); o resto é o card do registry
+    from plughub_channel_gateway import a2a_tasks
+    assert r.json() == {**CARD, "capabilities": {"extensions": [a2a_tasks.task_lifetime_extension()]}}
     assert r.headers["cache-control"] == "public, max-age=30"
     assert chamadas == [{"slug": "segunda-via", "tenant_id": "tenant_x",
                          "registry_url": "http://reg:3300", "base_url": "https://atende.exemplo"}]

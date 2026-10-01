@@ -214,6 +214,27 @@ async function _resolveAuditSessionId(
   return ""
 }
 
+/**
+ * AAS-06 — o `agent_principal` que originou a sessão (canal `a2a`), lido do meta que o adapter
+ * escreve no nascimento da task. `undefined` quando a sessão não tem principal OU quando não deu
+ * para ler — e a falha de leitura é DITA, porque um registro sem o campo parece "sem principal".
+ */
+async function _resolveAuditPrincipal(redis: RedisClient, sessionId: string): Promise<string | undefined> {
+  if (!sessionId) return undefined
+  try {
+    const raw = await redis.get(`session:${sessionId}:meta`)
+    if (!raw) return undefined
+    const p = (JSON.parse(raw) as Record<string, unknown>)["a2a_principal_id"]
+    return typeof p === "string" && p ? p : undefined
+  } catch (e) {
+    console.warn(
+      `[external-agent.invoke] audit sem principal_id: meta da sessão ${sessionId} ilegível — ` +
+      `${e instanceof Error ? e.message : String(e)}`
+    )
+    return undefined
+  }
+}
+
 // ─── Registro das tools ───────────────────────────────────────────────────────
 
 export function registerExternalAgentTools(server: McpServer, deps: ExternalAgentDeps): void {
@@ -237,6 +258,7 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
         const auditSessionId = await _resolveAuditSessionId(
           redis, tenant_id, instance_id, session_id,
         )
+        const auditPrincipal = await _resolveAuditPrincipal(redis, auditSessionId)
 
         /** Publica o AuditRecord — fire-and-forget, nunca bloqueia a resposta. */
         const audit = (verdict: Parameters<typeof buildInvokeAuditRecord>[0]["verdict"]): void => {
@@ -249,6 +271,7 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
             permissions,
             verdict,
             duration_ms: Date.now() - startedAt,
+            ...(auditPrincipal ? { principal_id: auditPrincipal } : {}),
           })).catch((e: unknown) => {
             // Degradação nunca silenciosa: se o audit não sai, isso precisa
             // aparecer no log — o invariante é que a chamada não pode escapar
