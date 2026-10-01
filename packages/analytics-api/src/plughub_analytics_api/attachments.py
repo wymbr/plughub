@@ -123,13 +123,16 @@ async def view_attachment(
     if meta.get("expired"):
         await trilha("expired", target)
         raise HTTPException(status_code=410, detail="attachment expired")
-
     try:
         content_r = await _gateway_get(f"{file_id}/content", tenant_id)
     except Exception as exc:  # noqa: BLE001
         logger.error("attachment %s: gateway inalcançável para conteúdo — %s", file_id, exc)
         await trilha("unavailable", target)
         raise HTTPException(status_code=503, detail="attachment_backend_unavailable") from exc
+    if content_r.status_code == 423:
+        # ATT-05: o gateway (serve_refusal, a regra única) não serve o que o antivírus não liberou
+        await trilha("pending_scan", target)
+        raise HTTPException(status_code=423, detail="attachment_pending_scan")
     if content_r.status_code != 200:
         logger.error("attachment %s: conteúdo respondeu %s", file_id, content_r.status_code)
         await trilha("unavailable", target)

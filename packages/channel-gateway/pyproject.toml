@@ -31,6 +31,8 @@ dependencies    = [
     # HASHEADO — um upgrade que mude o metadado muda o hash de âncoras já gravadas.
     # Subir a versão é decisão com migração, não bump.
     "phonenumbers==9.0.39",
+    # ATT-05: imagem do cliente é RE-CODIFICADA (sai EXIF/GPS e carga de arquivo poliglota)
+    "Pillow>=10.4,<12",
     # VOZ-01 — plano de mídia (LiveKit). Até 2026-09-14 o SDK NÃO era dependência: a
     # imagem não o tinha, e os imports caíam em ramos que devolviam token/sala/egress
     # FALSOS. `livekit-api` = API de servidor + assinatura de token (provider);

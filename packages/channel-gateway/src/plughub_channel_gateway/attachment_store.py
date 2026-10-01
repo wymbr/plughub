@@ -51,6 +51,9 @@ import aiofiles
 import aiofiles.os
 import asyncpg
 
+from .antivirus import scan_bytes
+from .media_sanitize import is_image, sanitize_image
+
 logger = logging.getLogger("plughub.channel-gateway.attachment")
 
 
@@ -284,6 +287,106 @@ def verify_attachment_signature(file_id: str, session_id: str, exp: str | None, 
     return None
 
 
+# ─── Esteira de ingestão (ATT-05) ────────────────────────────────────────────
+#
+# Todo `commit` passa por `prepare_content`, nos dois backends e para qualquer escritor:
+#
+#   1. allowlist da classe, tamanho real e assinatura (ATT-01)
+#   2. imagem RE-CODIFICADA — sai o EXIF (GPS, aparelho), sai a carga de arquivo poliglota
+#   3. sha256 do que vai ser gravado
+#   4. antivírus (clamd) — `clean` grava e serve; `infected` NÃO grava (linha `rejected`, com o
+#      motivo); `error` (fora do ar, não configurado, timeout) grava em QUARENTENA e não serve
+#      até a nova varredura (`attachment_rescan`) dizer `clean`.
+#
+# `scan_status` NULL é linha anterior à ATT-05: não foi verificada, então não é servida até a
+# varredura passar por ela — chamá-la de limpa seria o valor plausível que a Postura proíbe.
+# A gravação de chamada é saída da PRÓPRIA plataforma (egress do SFU) e fica `exempt`, dito.
+
+SCAN_REQUIRED_CLASSES = frozenset({"webchat_attachment"})
+_SCANNER: dict[str, object] = {"host": "", "port": 3310}
+
+
+def configure_scanner(host: str, port: int = 3310) -> None:
+    """Chamado no boot com o endereço do clamd. Vazio = não configurado: anexo vai à quarentena."""
+    _SCANNER["host"] = host or ""
+    _SCANNER["port"] = int(port or 3310)
+    if not host:
+        logger.error("ATT-05: antivírus NÃO configurado (PLUGHUB_CLAMAV_HOST vazio) — todo anexo "
+                     "de contato fica em QUARENTENA e não é servido")
+
+
+class AttachmentInfected(ValueError):
+    """O antivírus achou assinatura: o arquivo não é gravado."""
+
+
+@dataclass
+class PreparedContent:
+    data:        bytes
+    sha256:      str
+    scan_status: str      # clean | quarantined | exempt
+    scan_reason: str = ""
+
+
+async def scan_status_of(data: bytes) -> tuple[str, str]:
+    """Pergunta ao antivírus: (clean|infected|quarantined, motivo)."""
+    r = await scan_bytes(data, host=str(_SCANNER["host"]), port=int(_SCANNER["port"]))
+    if r.verdict == "clean":
+        return "clean", ""
+    if r.verdict == "infected":
+        return "infected", r.reason
+    return "quarantined", r.reason
+
+
+async def prepare_content(artifact_class: str | None, mime_type: str, data: bytes) -> PreparedContent:
+    klass = artifact_class or "webchat_attachment"
+    erro = validate_content(klass, mime_type, data)
+    if erro:
+        raise ValueError(erro)
+    if klass not in SCAN_REQUIRED_CLASSES:
+        return PreparedContent(data, hashlib.sha256(data).hexdigest(), "exempt",
+                               f"saida da propria plataforma ({klass})")
+    if is_image(mime_type):
+        data = sanitize_image(data, mime_type)
+    digest = hashlib.sha256(data).hexdigest()
+    status, motivo = await scan_status_of(data)
+    if status == "infected":
+        raise AttachmentInfected(f"antivirus: {motivo}")
+    if status == "quarantined":
+        logger.warning("ATT-05: anexo em QUARENTENA (sha256=%s): %s", digest[:16], motivo)
+    return PreparedContent(data, digest, status, motivo)
+
+
+def serve_refusal(meta) -> tuple[int, str] | None:
+    """A regra de SERVIR, uma só para as duas portas (pública e interna): só sai anexo `clean`.
+
+    Quarentena e linha não verificada (anterior à ATT-05) → 423 `attachment_pending_scan`; a nova
+    varredura decide. Infectado nem tem arquivo → 404.
+    """
+    klass = getattr(meta, "artifact_class", None) or "webchat_attachment"
+    if klass not in SCAN_REQUIRED_CLASSES:
+        return None
+    status = getattr(meta, "scan_status", None)
+    if status == "clean":
+        return None
+    if status == "infected":
+        return 404, "not found"
+    return 423, "attachment_pending_scan"
+
+
+async def mark_rejected(db, fid, reason: str) -> None:
+    """A linha do arquivo recusado pelo antivírus fica, sem arquivo, com o motivo."""
+    async with db.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE session_attachments
+            SET    status = 'rejected', scan_status = 'infected',
+                   attrs  = attrs || jsonb_build_object('scan_reason', $2::text)
+            WHERE  file_id = $1
+            """,
+            fid, reason,
+        )
+
+
 def normalize_mime(mime_type: str | None) -> str:
     """`"Image/JPEG; charset=x"` → `"image/jpeg"`. O provedor manda parâmetros (o WhatsApp
     declara `audio/ogg; codecs=opus`); a allowlist compara o tipo, nunca a string crua."""
@@ -319,6 +422,7 @@ class AttachmentMeta:
         "file_id", "tenant_id", "session_id", "original_name",
         "mime_type", "size_bytes", "file_path", "serving_url",
         "expires_at", "deleted_at", "artifact_class", "attrs",
+        "scan_status", "sha256",
     )
 
     def __init__(self, **kwargs):
@@ -676,6 +780,10 @@ class FilesystemAttachmentStore:
         ADD COLUMN IF NOT EXISTS attrs JSONB NOT NULL DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS idx_attach_session_class
         ON session_attachments (tenant_id, session_id, artifact_class);
+    -- ATT-05: o veredicto do antivírus e o hash do que foi gravado. NULL = linha anterior à
+    -- esteira (não verificada): não é servida até a nova varredura passar por ela.
+    ALTER TABLE session_attachments ADD COLUMN IF NOT EXISTS scan_status TEXT;
+    ALTER TABLE session_attachments ADD COLUMN IF NOT EXISTS sha256 TEXT;
     """
 
     def __init__(
@@ -766,10 +874,13 @@ class FilesystemAttachmentStore:
         mime_type     = row["mime_type"]
         expires_at    = row["expires_at"]
 
-        # ATT-01: allowlist da classe, tamanho real e assinatura — o mesmo para todo escritor
-        content_error = validate_content(row.get("artifact_class"), mime_type, data)
-        if content_error:
-            raise ValueError(content_error)
+        # ATT-01 + ATT-05: allowlist, re-codificação, sha256 e antivírus — o mesmo para todo escritor
+        try:
+            prep = await prepare_content(row.get("artifact_class"), mime_type, data)
+        except AttachmentInfected as exc:
+            await mark_rejected(self._db, fid, str(exc))
+            raise
+        data = prep.data
 
         # Calcula path date-sharded
         now       = datetime.now(timezone.utc)
@@ -789,14 +900,20 @@ class FilesystemAttachmentStore:
             await conn.execute(
                 """
                 UPDATE session_attachments
-                SET    file_path  = $1,
-                       size_bytes = $2,
-                       status     = 'committed'
+                SET    file_path   = $1,
+                       size_bytes  = $2,
+                       status      = 'committed',
+                       scan_status = $4,
+                       sha256      = $5,
+                       attrs       = attrs || jsonb_build_object('scan_reason', $6::text)
                 WHERE  file_id = $3
                 """,
                 str(rel_path),
                 actual_size,
                 uuid.UUID(file_id),
+                prep.scan_status,
+                prep.sha256,
+                prep.scan_reason,
             )
 
         serving_url = f"{self._serving_url}/{file_id}"
@@ -816,6 +933,8 @@ class FilesystemAttachmentStore:
             serving_url   = serving_url,
             expires_at    = expires_at,
             deleted_at    = None,
+            scan_status   = prep.scan_status,
+            sha256        = prep.sha256,
         )
 
     # ── resolve ───────────────────────────────────────────────────────────────
@@ -833,7 +952,8 @@ class FilesystemAttachmentStore:
             row = await conn.fetchrow(
                 """
                 SELECT session_id, original_name, mime_type, size_bytes,
-                       file_path, expires_at, deleted_at, artifact_class, attrs
+                       file_path, expires_at, deleted_at, artifact_class, attrs,
+                       scan_status, sha256
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
@@ -856,6 +976,8 @@ class FilesystemAttachmentStore:
             deleted_at    = row["deleted_at"],
             artifact_class = row["artifact_class"],
             attrs         = _attrs(row),
+            scan_status   = row["scan_status"],
+            sha256        = row["sha256"],
         )
 
     # ── stream_bytes ──────────────────────────────────────────────────────────
@@ -1080,10 +1202,13 @@ class S3AttachmentStore:
         mime_type     = row["mime_type"]
         expires_at    = row["expires_at"]
 
-        # ATT-01: allowlist da classe, tamanho real e assinatura — o mesmo para todo escritor
-        content_error = validate_content(row.get("artifact_class"), mime_type, data)
-        if content_error:
-            raise ValueError(content_error)
+        # ATT-01 + ATT-05: allowlist, re-codificação, sha256 e antivírus — o mesmo para todo escritor
+        try:
+            prep = await prepare_content(row.get("artifact_class"), mime_type, data)
+        except AttachmentInfected as exc:
+            await mark_rejected(self._db, fid, str(exc))
+            raise
+        data = prep.data
 
         # Envia para o S3
         key = self._object_key(tenant_id, session_id, file_id, mime_type)
@@ -1104,14 +1229,20 @@ class S3AttachmentStore:
             await conn.execute(
                 """
                 UPDATE session_attachments
-                SET    file_path  = $1,
-                       size_bytes = $2,
-                       status     = 'committed'
+                SET    file_path   = $1,
+                       size_bytes  = $2,
+                       status      = 'committed',
+                       scan_status = $4,
+                       sha256      = $5,
+                       attrs       = attrs || jsonb_build_object('scan_reason', $6::text)
                 WHERE  file_id = $3
                 """,
                 key,
                 actual_size,
                 uuid.UUID(file_id),
+                prep.scan_status,
+                prep.sha256,
+                prep.scan_reason,
             )
 
         serving_url = f"{self._serving_url}/{file_id}"
@@ -1131,6 +1262,8 @@ class S3AttachmentStore:
             serving_url   = serving_url,
             expires_at    = expires_at,
             deleted_at    = None,
+            scan_status   = prep.scan_status,
+            sha256        = prep.sha256,
         )
 
     # ── resolve ───────────────────────────────────────────────────────────────
@@ -1148,7 +1281,8 @@ class S3AttachmentStore:
             row = await conn.fetchrow(
                 """
                 SELECT session_id, original_name, mime_type, size_bytes,
-                       file_path, expires_at, deleted_at, artifact_class, attrs
+                       file_path, expires_at, deleted_at, artifact_class, attrs,
+                       scan_status, sha256
                 FROM   session_attachments
                 WHERE  file_id = $1 AND tenant_id = $2
                 """,
@@ -1171,6 +1305,8 @@ class S3AttachmentStore:
             deleted_at    = row["deleted_at"],
             artifact_class = row["artifact_class"],
             attrs         = _attrs(row),
+            scan_status   = row["scan_status"],
+            sha256        = row["sha256"],
         )
 
     # ── stream_bytes ──────────────────────────────────────────────────────────

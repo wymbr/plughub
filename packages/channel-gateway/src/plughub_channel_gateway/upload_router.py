@@ -37,6 +37,8 @@ from .attachment_store import (
     MIME_TO_CONTENT_TYPE,
     SERVE_SECURITY_HEADERS,
     content_disposition,
+    AttachmentInfected,
+    serve_refusal,
     served_media_type,
     sign_attachment_url,
     verify_attachment_signature,
@@ -86,6 +88,10 @@ async def upload_file(file_id: str, request: Request) -> Response:
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AttachmentInfected as exc:
+        # ATT-05: o antivírus achou assinatura — nada gravado; a linha fica `rejected` com o motivo
+        logger.warning("upload recusado pelo antivírus file_id=%s: %s", file_id, exc)
+        raise HTTPException(status_code=422, detail="attachment_infected") from exc
     except ValueError as exc:
         # magic bytes mismatch — declared MIME does not match actual content
         raise HTTPException(status_code=415, detail=str(exc)) from exc
@@ -174,6 +180,9 @@ async def serve_attachment(
         raise HTTPException(status_code=404, detail="not found")
     if meta.deleted_at is not None:
         raise HTTPException(status_code=410, detail="attachment expired")
+    recusa = serve_refusal(meta)   # ATT-05: só sai o que o antivírus disse `clean`
+    if recusa is not None:
+        raise HTTPException(status_code=recusa[0], detail=recusa[1])
     if meta.file_path is None:
         raise HTTPException(status_code=404, detail="file not committed")
 

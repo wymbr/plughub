@@ -156,7 +156,7 @@ Console ── apiFetch (Bearer) ──▶ /analytics/v1/attachments/{file_id}  
                                    2. meta no gateway  (/v1/attachments/{id}/meta, X-Service-Token)
                                    3. authorize_session_scope(pool da SESSÃO)       → 403
                                    4. bytes no gateway (/v1/attachments/{id}/content)
-                                   todo desfecho → audit_access_log (ok · denied · not_found · expired · unavailable)
+                                   todo desfecho → audit_access_log (ok · denied · not_found · expired · pending_scan · unavailable)
 ```
 
 - **A capacidade é `contacts.transcricao`** (decisão do dono, 2026-10-01): o anexo é conteúdo da
@@ -170,6 +170,42 @@ Console ── apiFetch (Bearer) ──▶ /analytics/v1/attachments/{file_id}  
 Gate: `probe_att02_attachment_internal_door.sh`, com bateria em `mut_att02_attachment_internal_door.sh`.
 
 Gate: `infra/test/probe_att01_attachment_door.sh`, com bateria em `mut_att01_attachment_door.sh`.
+
+### Esteira de ingestão: re-codifica, hash, antivírus (ATT-05, 2026-10-01)
+
+Todo `commit` de anexo de **contato** (`webchat_attachment`: webchat, WhatsApp, e-mail) passa por
+`attachment_store.prepare_content`, nos dois backends:
+
+1. allowlist da classe, tamanho real e assinatura (ATT-01);
+2. **imagem RE-CODIFICADA** (`media_sanitize.py`, Pillow): sai o EXIF (GPS, aparelho), a orientação
+   é aplicada aos pixels, e a carga de arquivo poliglota não sobrevive. GIF animado mantém os
+   quadros. Imagem que não decodifica, ou acima de 50 Mpx (conferido no cabeçalho), é RECUSADA;
+3. **sha256** do que vai ser gravado (`session_attachments.sha256`);
+4. **antivírus** (`antivirus.py`, INSTREAM no `clamav` do compose, porta 3310):
+
+| Veredicto | O que acontece | `scan_status` | Servido? |
+|---|---|---|---|
+| limpo | grava | `clean` | sim |
+| infectado | **não grava**; a linha fica `rejected` com o motivo; upload responde 422 `attachment_infected` | `infected` | não (404) |
+| não deu para perguntar (fora do ar, não configurado, timeout) | grava em **QUARENTENA**, com o motivo em `attrs.scan_reason` | `quarantined` | não (**423** `attachment_pending_scan`) |
+
+- **Só a nova varredura libera a quarentena** — a task de boot `attachment-rescan`
+  (`attachment_rescan.py`, a cada 60 s, lote de 20). Ela também varre o anexo anterior à ATT-05
+  (`scan_status` NULL), que não é servido até passar: chamá-lo de limpo seria o valor plausível.
+  O anexo anterior é só varrido, **não** re-codificado: o EXIF dele fica até expirar.
+- **A regra de servir mora numa casa** (`serve_refusal`), usada pelas duas portas — a pública e a
+  interna. A analytics-api repassa o 423 (trilha `pending_scan`) e o Console mostra *"Em
+  verificação pelo antivírus"*.
+- **A gravação de chamada é isenta, dito**: saída da própria plataforma (egress do SFU), fica com
+  `scan_status` NULL e é servida pela regra da classe.
+- **O gateway não depende do `clamav` no compose.** A primeira carga da base leva minutos; enquanto
+  isso o anexo vai à quarentena e sai depois. `PLUGHUB_CLAMAV_HOST` vazio loga ERROR no boot.
+- O clamd vem com teto de 100 MB por stream; `infra/clamav/clamd.conf` sobe para 600 MB, porque a
+  allowlist aceita vídeo de 512 MB.
+- ⚠️ O EICAR só é achado sozinho ou dentro de um stream de PDF: anexado ao fim de um PNG ou de um PDF
+  ele passa limpo (medido). A esteira não depende disso — a re-codificação tira a carga da imagem.
+
+Gate: `infra/test/probe_att05_ingest_pipeline.sh`, com bateria em `mut_att05_ingest_pipeline.sh`.
 
 ---
 

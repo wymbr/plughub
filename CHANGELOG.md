@@ -1,5 +1,68 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (7) — ATT-05: só sai anexo que o antivírus disse `clean`, e imagem é gravada re-codificada
+
+**Antes:** o anexo de contato era gravado como chegou. A foto do celular levava o EXIF (GPS,
+aparelho) para o store, para o Console, para o avaliador e para o replay. Não havia hash, e não
+havia antivírus: a porta servia todo arquivo commitado.
+
+**O que passou a ser verdade:**
+- **Uma esteira só** (`attachment_store.prepare_content`), chamada pelo `commit` dos dois backends
+  para todo escritor de anexo de contato (webchat, WhatsApp, e-mail):
+  1. allowlist, tamanho real e assinatura (ATT-01);
+  2. **imagem RE-CODIFICADA** (`media_sanitize.py`, Pillow, dependência nova): sai o EXIF, a
+     orientação vai para os pixels, a carga de arquivo poliglota não sobrevive, GIF animado mantém
+     os quadros. Imagem que não decodifica, ou acima de 50 Mpx, é RECUSADA;
+  3. **sha256** do que vai ser gravado (`session_attachments.sha256`);
+  4. **antivírus** (`antivirus.py`, protocolo INSTREAM, sem dependência nova) no serviço `clamav`
+     do compose (decisão do dono).
+- **Três desfechos, e o terceiro nunca vira limpo:**
+  - limpo grava e serve;
+  - infectado **não grava** (a linha fica `rejected`, com o motivo) e o upload responde 422
+    `attachment_infected`;
+  - antivírus fora do ar, não configurado ou em timeout grava em **QUARENTENA**, com o motivo, e
+    não serve.
+- **Só a nova varredura libera** — a task de boot `attachment-rescan`, a cada 60 s. Ela também
+  varre o anexo anterior a esta mudança (`scan_status` NULL), que **deixou de ser servido** até
+  passar: chamá-lo de limpo seria o valor plausível. A primeira passada ao vivo varreu os 5 anexos
+  servíveis e os deu como `clean` em 0,3 s.
+- **A regra de servir mora numa casa** (`serve_refusal`), usada pela porta pública e pela interna;
+  quarentena → 423 `attachment_pending_scan`.
+  - A analytics-api **repassa** o 423 do gateway em vez de decidir de novo, e grava a trilha
+    `pending_scan`.
+  - O Console diz *"Em verificação pelo antivírus"* (chave nova em `agentAssist` e `contacts`,
+    en e pt-BR).
+- **A gravação de chamada é isenta, dito** (`exempt`): saída da própria plataforma.
+- **O gateway não depende do `clamav`**: a primeira carga da base leva minutos, e nesse tempo o
+  anexo espera na quarentena. O serviço entrou nos três composes (demo, full, visual) com
+  `infra/clamav/clamd.conf`, que sobe o teto de stream de 100 MB para 600 MB (vídeo de 512 MB é
+  aceito). O full e o visual **não** foram subidos ao vivo: só passaram no `docker compose config`.
+- E-mail passou a informar o tamanho **gravado** (o da imagem re-codificada), não o recebido.
+
+**Medido no caminho:**
+- O EICAR só é achado sozinho ou dentro de um stream de PDF; anexado ao fim de um PNG ou de um PDF,
+  o clamd o dá como limpo. Por isso o V1 do probe usa um PDF com EICAR num stream comprimido, um
+  tipo que a allowlist aceita. A imagem não depende do antivírus: a re-codificação tira a carga (X2).
+- O `MAX_IMAGE_PIXELS` do Pillow só **recusa** no dobro do valor (abaixo disso, avisa). O teto de
+  pixels virou conferência explícita no cabeçalho, antes de decodificar.
+- O `probe_attachment_expiry.sh` estava **vermelho desde a ATT-03**: o exercício chamava a porta
+  pública com o `file_id` nu, que desde então responde 404. Ninguém o rodou na ATT-03. Hoje ele
+  assina a URL e está VERDE.
+- As fixtures de quatro probes (ATT-01, ATT-02, VOZ-36, expiry) gravavam bytes que só tinham a
+  assinatura de imagem e rodam num processo sem boot (sem `configure_scanner`). Passaram a gerar
+  imagem de verdade e a configurar o antivírus como o boot faz.
+
+**Gates:**
+- `probe_att05_ingest_pipeline.sh` (A0, W0, V1, X1, X2, Q1, Q2, C1) VERDE ao vivo, com store e clamd
+  reais.
+- `mut_att05_ingest_pipeline.sh`: as 5 mutações foram pegas — a porta serve a quarentena; a imagem
+  não é re-codificada; *"não perguntei"* vira limpo; o infectado é gravado; a varredura não libera.
+- Probes vizinhos verdes ao vivo: ATT-01, ATT-02, ATT-04, VOZ-28, VOZ-36, `attachment_expiry`.
+- Testes: gateway **1592 passed** (`test_att05_ingest_pipeline.py`: clamd falso no protocolo
+  INSTREAM, EXIF, orientação, GIF, bomba, os três desfechos, `serve_refusal`, varredura). Os testes
+  de outras fichas recebem um antivírus que responde `clean` (fixture `autouse` no `conftest`).
+  analytics-api **906 passed**; typecheck do platform-ui limpo.
+
 ## 2026-10-01 (6) — ATT-04: o prazo do anexo é a classe `retention.attachment_days`
 
 **Antes:** o prazo era `webchat.attachment_expiry_days`, um nome que dizia "webchat" para um prazo que

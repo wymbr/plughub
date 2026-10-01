@@ -30,6 +30,23 @@ FAKE_CLAIMS = {
 }
 
 
+# ── Antivírus (ATT-05) ────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _antivirus_diz_limpo(monkeypatch):
+    """O clamd é dependência de REDE: fora dos testes da ATT-05, todo commit recebe `clean`.
+
+    Os testes da ATT-05 sobrescrevem `attachment_store.scan_bytes` com o desfecho que julgam
+    (infectado, fora do ar) — o monkeypatch do próprio teste vence este.
+    """
+    from plughub_channel_gateway import attachment_store
+    from plughub_channel_gateway.antivirus import ScanResult
+
+    async def _limpo(data, **kw):
+        return ScanResult("clean", "")
+    monkeypatch.setattr(attachment_store, "scan_bytes", _limpo)
+
+
 # ── Redis mock ────────────────────────────────────────────────────────────────
 
 @pytest.fixture

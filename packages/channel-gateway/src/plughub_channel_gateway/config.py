@@ -134,6 +134,10 @@ class Settings(BaseSettings):
     storage_root:               str = "/var/plughub/attachments"
     # Files are soft-deleted after this many days (matched to session TTL policy).
     attachment_expiry_days:     int = 30
+    # ATT-05 — antivírus da esteira de anexos (clamd, protocolo INSTREAM). Wiring, não política:
+    # vazio = não configurado, e todo anexo de contato fica em QUARENTENA (nunca servido sem varredura).
+    clamav_host:                str = ""
+    clamav_port:                int = 3310
     # PostgreSQL DSN for attachment metadata (session_attachments table).
     database_url:               str = "postgresql://plughub:plughub@localhost:5432/plughub"
 

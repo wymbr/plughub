@@ -78,7 +78,7 @@ class _Store:
             file_id=FILE, tenant_id="t", session_id=SID, original_name="f.jpg",
             mime_type="image/jpeg", size_bytes=len(JPEG), file_path="x", serving_url="",
             expires_at=datetime.now(timezone.utc) + timedelta(days=1), deleted_at=None,
-            artifact_class="webchat_attachment", attrs={})
+            artifact_class="webchat_attachment", attrs={}, scan_status="clean", sha256=None)  # ATT-05
 
     async def stream_bytes(self, *, file_id, tenant_id):
         async def _g():

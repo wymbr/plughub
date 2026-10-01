@@ -30,14 +30,24 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-import asyncpg
+import io
 
-from plughub_channel_gateway.attachment_store import CLASS_MIME_LIMITS, sign_attachment_url
+import asyncpg
+from PIL import Image
+
+from plughub_channel_gateway.attachment_store import (
+    CLASS_MIME_LIMITS,
+    configure_scanner,
+    sign_attachment_url,
+)
 from plughub_channel_gateway.config import get_settings
 from plughub_channel_gateway.main import _create_attachment_store
 
 HTTP = "http://localhost:8010/webchat/v1/attachments"
-JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+# ATT-05: o commit re-codifica a imagem — bytes só com a assinatura são recusados
+_buf = io.BytesIO()
+Image.new("RGB", (8, 8), (200, 30, 30)).save(_buf, format="JPEG")
+JPEG = _buf.getvalue()
 PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 HTML = b"<html><body><script>alert(document.domain)</script></body></html>"
 HOSTIL = 'nota".html; filename=evil.html\r\nX-Att01-Injected: 1.pdf'
@@ -61,6 +71,7 @@ def get(url: str):
 
 async def main() -> int:
     settings = get_settings()
+    configure_scanner(settings.clamav_host, settings.clamav_port)   # ATT-05: sem boot neste processo
     tenant = settings.tenant_id
     sid = f"att01-probe-{int(time.time())}"
     try:
@@ -108,7 +119,7 @@ async def main() -> int:
         st, h, corpo = get(assinada(img))
         ok("S1", st == 200 and h.get("X-Content-Type-Options") == "nosniff"
            and "sandbox" in (h.get("Content-Security-Policy") or "")
-           and (h.get("Content-Disposition") or "").startswith("inline;") and corpo == JPEG,
+           and (h.get("Content-Disposition") or "").startswith("inline;") and corpo[:3] == JPEG[:3],   # ATT-05: re-codificada
            f"imagem: {st} · nosniff={h.get('X-Content-Type-Options')} · "
            f"csp={h.get('Content-Security-Policy')!r} · cd={h.get('Content-Disposition')!r}")
         if pdf and pdf in gravados:

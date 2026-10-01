@@ -24,7 +24,12 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from . import main as _main_module
-from .attachment_store import SERVE_SECURITY_HEADERS, content_disposition, served_media_type
+from .attachment_store import (
+    SERVE_SECURITY_HEADERS,
+    content_disposition,
+    serve_refusal,
+    served_media_type,
+)
 from .identity_auth import identity_principal
 
 logger = logging.getLogger("plughub.channel-gateway.attachment-internal")
@@ -63,6 +68,7 @@ async def attachment_meta(file_id: str, request: Request, tenant_id: str = Query
         "size_bytes": meta.size_bytes,
         "expired":    meta.deleted_at is not None,
         "committed":  meta.file_path is not None,
+        "scan_status": getattr(meta, "scan_status", None),   # ATT-05
     }
 
 
@@ -73,6 +79,9 @@ async def attachment_content(file_id: str, request: Request,
     store, meta = await _meta(file_id, tenant_id)
     if meta.deleted_at is not None:
         raise HTTPException(status_code=410, detail="attachment expired")
+    recusa = serve_refusal(meta)   # ATT-05: só sai o que o antivírus disse `clean`
+    if recusa is not None:
+        raise HTTPException(status_code=recusa[0], detail=recusa[1])
     if meta.file_path is None:
         raise HTTPException(status_code=404, detail="file not committed")
     try:

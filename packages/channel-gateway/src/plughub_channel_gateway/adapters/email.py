@@ -368,7 +368,7 @@ class EmailAdapter(ChannelAdapter):
                     "file_id":     file_id,
                     "filename":    att.filename,
                     "mime_type":   mime_type,
-                    "size_bytes":  len(att.data),
+                    "size_bytes":  meta.size_bytes,   # ATT-05: o gravado (imagem re-codificada)
                     "serving_url": meta.serving_url,
                 })
             except Exception as exc:

@@ -41,6 +41,7 @@ volumes:
   metabase-data:
   metabase-plugins:
   attachment-data:
+  clamav-db:           # ATT-05 — base de assinaturas do antivírus
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Infrastructure
@@ -536,6 +537,23 @@ services:
 # Channel & Analytics
 # ─────────────────────────────────────────────────────────────────────────────
 
+  # ATT-05 — antivírus da esteira de anexos (ver docker-compose.demo.yml). O gateway NÃO depende
+  # dele: fora do ar, o anexo vai à quarentena e a task `attachment-rescan` o libera depois.
+  clamav:
+    image: clamav/clamav:1.4
+    container_name: full-clamav
+    volumes:
+      - clamav-db:/var/lib/clamav
+      - ./infra/clamav/clamd.conf:/etc/clamav/clamd.conf:ro
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    networks:
+      - plughub-full
+
   channel-gateway:
     build:
       context: .
@@ -555,6 +573,9 @@ services:
       PLUGHUB_WEBCHAT_SERVING_BASE_URL: http://localhost:8010/webchat/v1/attachments
       PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:  http://localhost:8010/webchat/v1/upload
       PLUGHUB_TENANT_ID:               tenant_demo
+      # ATT-05 — antivírus. Vazio = todo anexo de contato em QUARENTENA (não servido).
+      PLUGHUB_CLAMAV_HOST: clamav
+      PLUGHUB_CLAMAV_PORT: "3310"
       PLUGHUB_KAFKA_TOPIC_INBOUND:     conversations.inbound
       PLUGHUB_KAFKA_TOPIC_OUTBOUND:    conversations.outbound
       PLUGHUB_KAFKA_TOPIC_EVENTS:      conversations.events

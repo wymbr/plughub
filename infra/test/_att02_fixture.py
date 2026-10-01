@@ -15,14 +15,23 @@ from datetime import datetime, timedelta, timezone
 import asyncpg
 import redis.asyncio as aioredis
 
+import io
+
+from PIL import Image
+
+from plughub_channel_gateway.attachment_store import configure_scanner
 from plughub_channel_gateway.config import get_settings
 from plughub_channel_gateway.main import _create_attachment_store
 
-JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+# ATT-05: o commit re-codifica a imagem e pergunta ao antivírus — a fixture grava uma de verdade
+_buf = io.BytesIO()
+Image.new("RGB", (8, 8), (200, 30, 30)).save(_buf, format="JPEG")
+JPEG = _buf.getvalue()
 
 
 async def main() -> None:
     s = get_settings()
+    configure_scanner(s.clamav_host, s.clamav_port)   # este processo não passa pelo boot
     mode, sid, tenant = os.environ["MODE"], os.environ["SID"], os.environ["TENANT"]
     pool = await asyncpg.create_pool(s.database_url, min_size=1, max_size=2)
     store = _create_attachment_store(s, pool)

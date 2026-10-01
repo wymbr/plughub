@@ -14,8 +14,12 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-import asyncpg
+import io
 
+import asyncpg
+from PIL import Image
+
+from plughub_channel_gateway.attachment_store import configure_scanner
 from plughub_channel_gateway.config import Settings
 from plughub_channel_gateway.main import _create_attachment_store
 
@@ -24,6 +28,7 @@ TENANT = os.environ.get("TENANT", "tenant_demo")
 
 async def main() -> None:
     s = Settings()
+    configure_scanner(s.clamav_host, s.clamav_port)   # ATT-05: este processo não passa pelo boot
     pool = await asyncpg.create_pool(s.database_url, min_size=1, max_size=2)
     store = _create_attachment_store(s, pool)
     try:
@@ -47,7 +52,10 @@ async def main() -> None:
             )
             await store.commit(file_id=fid, tenant_id=TENANT, data=dados)
             out[nome] = fid
-        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 60
+        # ATT-05: o commit re-codifica a imagem e pergunta ao antivírus — uma de verdade
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (30, 30, 200)).save(buf, format="PNG")
+        png = buf.getvalue()
         fid, _ = await store.reserve(tenant_id=TENANT, session_id=sid, file_name="probe-voz36.png",
                                      mime_type="image/png", size_bytes=len(png), expires_at=exp)
         await store.commit(file_id=fid, tenant_id=TENANT, data=png)

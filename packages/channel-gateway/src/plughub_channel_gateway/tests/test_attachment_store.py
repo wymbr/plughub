@@ -123,6 +123,7 @@ class TestValidateMime:
 
 # Minimal valid headers for each supported MIME type
 _JPEG_HDR  = b"\xff\xd8\xff" + b"\x00" * 16
+from plughub_channel_gateway.tests._media import REAL_JPEG  # noqa: E402 — ATT-05
 _PNG_HDR   = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 _WEBP_HDR  = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 16
 _GIF87_HDR = b"GIF87a" + b"\x00" * 16
@@ -275,24 +276,24 @@ class TestCommit:
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
 
-        data = _JPEG_HDR + b"\x00" * 100  # valid JPEG magic + padding
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=data)
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
 
         abs_path = tmp_path / meta.file_path
         assert abs_path.exists()
-        assert abs_path.read_bytes() == data
+        # ATT-05: o que vai a disco é a imagem RE-CODIFICADA — nunca os bytes do remetente
+        gravado = abs_path.read_bytes()
+        assert gravado[:3] == b"\xff\xd8\xff" and len(gravado) == meta.size_bytes
 
     async def test_commit_returns_meta_with_correct_fields(self, tmp_path):
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
 
-        data = _JPEG_HDR + b"\x00" * (100 - len(_JPEG_HDR))
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=data)
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
 
         assert meta.file_id    == file_id
         assert meta.tenant_id  == TENANT
         assert meta.session_id == SESSION
-        assert meta.size_bytes == len(data)
+        assert meta.size_bytes > 0
         assert meta.mime_type  == "image/jpeg"
         assert meta.serving_url == f"http://host/webchat/v1/attachments/{file_id}"
         assert meta.deleted_at is None
@@ -300,7 +301,7 @@ class TestCommit:
     async def test_commit_updates_status_to_committed(self, tmp_path):
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
-        await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
 
         conn.execute.assert_called_once()
         sql = conn.execute.call_args.args[0]
@@ -310,7 +311,7 @@ class TestCommit:
     async def test_commit_path_is_date_sharded(self, tmp_path):
         file_id = str(uuid.uuid4())
         store, conn = make_store(tmp_path, fetchrow=self._pending_row(file_id))
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
 
         now = datetime.now(timezone.utc)
         # Path contains tenant_id / YYYY / MM / DD
@@ -322,7 +323,7 @@ class TestCommit:
         store, _ = make_store(tmp_path, fetchrow=None)  # fetchrow returns None
 
         with pytest.raises(FileNotFoundError):
-            await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+            await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
 
     async def test_commit_file_extension_matches_mime(self, tmp_path):
         """PDF file gets .pdf extension; JPEG gets .jpg etc."""
@@ -348,7 +349,7 @@ class TestResolve:
             "size_bytes":    512,
             "file_path":     f"{TENANT}/2024/01/15/{SESSION}/{file_id}.jpg",
             "expires_at":    EXPIRES,
-            "deleted_at":    None, "artifact_class": "webchat_attachment",
+            "deleted_at":    None, "artifact_class": "webchat_attachment", "scan_status": "clean", "sha256": None,
         }
         store, _ = make_store(tmp_path, fetchrow=db_row)
         meta = await store.resolve(file_id=file_id, tenant_id=TENANT)
@@ -370,7 +371,7 @@ class TestResolve:
         db_row = {
             "session_id": SESSION, "original_name": "x.jpg",
             "mime_type": "image/jpeg", "size_bytes": 10,
-            "file_path": "path/x.jpg", "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
+            "file_path": "path/x.jpg", "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment", "scan_status": "clean", "sha256": None,
         }
         store, _ = make_store(tmp_path, fetchrow=db_row)
         meta = await store.resolve(file_id=file_id, tenant_id=TENANT)
@@ -417,7 +418,7 @@ class TestStreamBytes:
         db_row = {
             "session_id": SESSION, "original_name": "photo.jpg",
             "mime_type": "image/jpeg", "size_bytes": len(content),
-            "file_path": rel, "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
+            "file_path": rel, "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment", "scan_status": "clean", "sha256": None,
         }
         store, _ = make_store(tmp_path, fetchrow=db_row)
         return store, file_id, db_row
@@ -444,7 +445,7 @@ class TestStreamBytes:
             "session_id": SESSION, "original_name": "x.jpg",
             "mime_type": "image/jpeg", "size_bytes": 10,
             "file_path": "x.jpg", "expires_at": EXPIRES,
-            "deleted_at": datetime.now(timezone.utc), "artifact_class": "webchat_attachment",  # soft-deleted
+            "deleted_at": datetime.now(timezone.utc), "artifact_class": "webchat_attachment", "scan_status": "clean", "sha256": None,  # soft-deleted
         }
         store, _ = make_store(tmp_path, fetchrow=deleted_row)
         with pytest.raises(FileNotFoundError, match="expirado"):
@@ -563,17 +564,17 @@ class TestS3AttachmentStore:
     async def test_commit_calls_put_object(self):
         file_id = str(uuid.uuid4())
         store, _, s3_client = make_s3_store(fetchrow=self._pending_row())
-        await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
         s3_client.put_object.assert_called_once()
         call_kwargs = s3_client.put_object.call_args.kwargs
         assert call_kwargs["Bucket"] == "test-bucket"
-        assert call_kwargs["Body"] == _JPEG_HDR
+        assert call_kwargs["Body"][:3] == b"\xff\xd8\xff"   # ATT-05: re-codificada
         assert call_kwargs["ContentType"] == "image/jpeg"
 
     async def test_commit_object_key_is_date_sharded(self):
         file_id = str(uuid.uuid4())
         store, _, s3_client = make_s3_store(fetchrow=self._pending_row())
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
         now = datetime.now(timezone.utc)
         assert TENANT in meta.file_path
         assert str(now.year) in meta.file_path
@@ -581,12 +582,12 @@ class TestS3AttachmentStore:
 
     async def test_commit_returns_correct_meta(self):
         file_id = str(uuid.uuid4())
-        store, _, _ = make_s3_store(fetchrow=self._pending_row())
-        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+        store, _, s3_client = make_s3_store(fetchrow=self._pending_row())
+        meta = await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
         assert meta.file_id    == file_id
         assert meta.tenant_id  == TENANT
         assert meta.session_id == SESSION
-        assert meta.size_bytes == len(_JPEG_HDR)
+        assert meta.size_bytes == len(s3_client.put_object.call_args.kwargs["Body"])
         assert meta.serving_url == f"http://host/webchat/v1/attachments/{file_id}"
         assert meta.deleted_at is None
 
@@ -594,7 +595,7 @@ class TestS3AttachmentStore:
         file_id = str(uuid.uuid4())
         store, _, _ = make_s3_store(fetchrow=None)
         with pytest.raises(FileNotFoundError):
-            await store.commit(file_id=file_id, tenant_id=TENANT, data=_JPEG_HDR)
+            await store.commit(file_id=file_id, tenant_id=TENANT, data=REAL_JPEG)
 
     async def test_commit_rejects_magic_mismatch(self):
         file_id = str(uuid.uuid4())
@@ -610,7 +611,7 @@ class TestS3AttachmentStore:
             "session_id": SESSION, "original_name": "p.jpg",
             "mime_type": "image/jpeg", "size_bytes": 512,
             "file_path": f"{TENANT}/2026/04/15/{SESSION}/{file_id}.jpg",
-            "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
+            "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment", "scan_status": "clean", "sha256": None,
         }
         store, _, _ = make_s3_store(fetchrow=db_row)
         meta = await store.resolve(file_id=file_id, tenant_id=TENANT)
@@ -631,7 +632,7 @@ class TestS3AttachmentStore:
             "session_id": SESSION, "original_name": "p.jpg",
             "mime_type": "image/jpeg", "size_bytes": len(content),
             "file_path": f"key/{file_id}.jpg",
-            "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment",
+            "expires_at": EXPIRES, "deleted_at": None, "artifact_class": "webchat_attachment", "scan_status": "clean", "sha256": None,
         }
         store, _, s3_client = make_s3_store(fetchrow=db_row, s3_content=content)
         stream = await store.stream_bytes(file_id=file_id, tenant_id=TENANT)
@@ -652,7 +653,7 @@ class TestS3AttachmentStore:
             "session_id": SESSION, "original_name": "p.jpg",
             "mime_type": "image/jpeg", "size_bytes": 10,
             "file_path": "k.jpg", "expires_at": EXPIRES,
-            "deleted_at": datetime.now(timezone.utc), "artifact_class": "webchat_attachment",
+            "deleted_at": datetime.now(timezone.utc), "artifact_class": "webchat_attachment", "scan_status": "clean", "sha256": None,
         }
         store, _, _ = make_s3_store(fetchrow=db_row)
         with pytest.raises(FileNotFoundError, match="expirado"):

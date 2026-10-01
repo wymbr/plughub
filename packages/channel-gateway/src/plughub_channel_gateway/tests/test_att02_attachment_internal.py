@@ -35,7 +35,7 @@ class _Store:
             mime_type="image/jpeg", size_bytes=len(JPEG), file_path="x", serving_url="",
             expires_at=datetime.now(timezone.utc) + timedelta(days=1),
             deleted_at=datetime.now(timezone.utc) if deleted else None,
-            artifact_class=klass, attrs={},
+            artifact_class=klass, attrs={}, scan_status="clean", sha256=None,   # ATT-05
         )
 
     async def resolve(self, *, file_id, tenant_id):

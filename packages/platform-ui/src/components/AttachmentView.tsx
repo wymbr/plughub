@@ -59,6 +59,7 @@ export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, cla
         setError(r.status === 403 ? t('denied')
                : r.status === 410 ? t('expired')
                : r.status === 404 ? t('notFound')
+               : r.status === 423 ? t('pendingScan')
                : t('loadError', { status: r.status }))
         return null
       }

@@ -40,6 +40,7 @@ from plughub_channel_gateway.tests.test_attachment_writers_contract import (
 from plughub_channel_gateway.attachment_store import content_disposition, served_media_type
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+from plughub_channel_gateway.tests._media import REAL_JPEG  # noqa: E402 — ATT-05
 PDF  = b"%PDF-1.4\n"
 OGG  = b"OggS" + b"\x00" * 16
 HTML = b"<html><script>alert(1)</script></html>"
@@ -118,8 +119,8 @@ class TestCommitAplicaARegra:
         row = {"session_id": "s", "original_name": "x.jpg", "mime_type": "image/jpeg",
                "expires_at": EXPIRES, "artifact_class": "webchat_attachment"}
         store, _ = make_store(tmp_path, fetchrow=row)
-        meta = await store.commit(file_id=str(uuid.uuid4()), tenant_id="t", data=JPEG)
-        assert meta.size_bytes == len(JPEG)
+        meta = await store.commit(file_id=str(uuid.uuid4()), tenant_id="t", data=REAL_JPEG)
+        assert meta.size_bytes > 0   # ATT-05: o tamanho é o da imagem re-codificada
 
     async def test_commit_de_gravacao_recusa_tipo_de_contato(self, tmp_path):
         row = {"session_id": "s", "original_name": "r.ogg", "mime_type": "image/jpeg",

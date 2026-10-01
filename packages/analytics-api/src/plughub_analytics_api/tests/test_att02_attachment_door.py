@@ -140,6 +140,15 @@ async def test_expirado_410_e_trilha(monkeypatch, trilha, pools_da_sessao):
 
 
 @pytest.mark.asyncio
+async def test_em_verificacao_423_dito_e_trilha_propria(monkeypatch, trilha, pools_da_sessao):
+    """ATT-05: a recusa do antivírus é do gateway; aqui ela chega como 423, nunca como 503."""
+    with pytest.raises(HTTPException) as e:
+        await _ver(_user(["sac_ia"], GRANT), _Gateway(content_status=423), monkeypatch)
+    assert e.value.status_code == 423 and e.value.detail == "attachment_pending_scan"
+    assert [l["result"] for l in trilha] == ["pending_scan"]
+
+
+@pytest.mark.asyncio
 async def test_gateway_fora_503_nomeado_e_trilha(monkeypatch, trilha, pools_da_sessao):
     async def _quebrado(path, tenant_id):
         raise httpx.ConnectError("recusou")

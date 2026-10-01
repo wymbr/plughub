@@ -29,11 +29,19 @@ from datetime import datetime, timedelta, timezone
 import asyncpg
 import httpx
 
+import io
+
+from PIL import Image
+
 from plughub_channel_gateway import attachment_expiry as ae
+from plughub_channel_gateway.attachment_store import configure_scanner, sign_attachment_url
 from plughub_channel_gateway.config import get_settings
 from plughub_channel_gateway.main import _create_attachment_store
 
-JPEG = b"\xff\xd8\xff\xe0" + b"probe-voz07" * 8
+# ATT-05: o commit re-codifica a imagem — bytes só com a assinatura são recusados
+_buf = io.BytesIO()
+Image.new("RGB", (8, 8), (90, 160, 40)).save(_buf, format="JPEG")
+JPEG = _buf.getvalue()
 SEM_EXPURGO = "--sem-expurgo" in sys.argv
 
 
@@ -54,6 +62,7 @@ async def blob_existe(store, meta_path):
 
 async def main():
     settings = get_settings()
+    configure_scanner(settings.clamav_host, settings.clamav_port)   # ATT-05: sem boot neste processo
     TENANT = settings.tenant_id
     db = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=2)
     store = _create_attachment_store(settings, db)
@@ -97,8 +106,11 @@ async def main():
 
         async with httpx.AsyncClient(timeout=10) as http:
             base = settings.webchat_serving_base_url.rstrip("/")
-            st_vencida = (await http.get("%s/%s" % (base, ids["vencida"]))).status_code
-            st_vigente = (await http.get("%s/%s" % (base, ids["vigente"]))).status_code
+            # ATT-03: a porta pública só abre com URL assinada; o file_id nu é 404 (como desconhecido)
+            def assinada(n):
+                return sign_attachment_url(base, ids[n], "probe-voz07", secret=settings.jwt_secret)
+            st_vencida = (await http.get(assinada("vencida"))).status_code
+            st_vigente = (await http.get(assinada("vigente"))).status_code
         out["http"] = {"vencida": st_vencida, "vigente": st_vigente}
 
         out["casos"] = {

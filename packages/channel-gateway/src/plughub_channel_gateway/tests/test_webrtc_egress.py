@@ -536,7 +536,7 @@ class TestPortaPublica:
         store.resolve = AsyncMock(return_value=AttachmentMeta(
             file_id="f", tenant_id=TENANT, session_id=SID, original_name="x.ogg", mime_type="audio/ogg",
             size_bytes=4, file_path="p", serving_url="u", expires_at=None, deleted_at=None,
-            artifact_class=klass))
+            artifact_class=klass, scan_status="clean" if klass == "webchat_attachment" else "exempt"))
 
         async def _gen():
             yield b"OggS"
