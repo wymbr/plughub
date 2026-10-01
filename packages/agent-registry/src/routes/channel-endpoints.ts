@@ -14,6 +14,7 @@ import { config }                                   from "../config"
 import { prisma }                                   from "../db"
 import { publishRegistryChanged }                   from "../infra/kafka"
 import { generateEndpointToken }                    from "../lib/endpoint-token"
+import { A2A_SLUG_RE }                              from "../lib/a2a-card"
 import type { ChannelEndpointDelegate, ChannelEndpointRow } from "../types/channel-endpoint"
 
 // Typed shim until `prisma generate` is re-run with the updated schema
@@ -25,7 +26,40 @@ export const channelEndpointsRouter = Router()
 // por esta tabela, mas o cadastro recusava o canal — a resolução era ramo morto e a URL do
 // widget carregava o `pool_id` cru. A lista da tela (`ChannelEndpointChannel`) é conferida
 // contra esta por `probe_webrtc_channel_endpoint.sh`.
-const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email", "webhook", "webrtc"])
+// `a2a` entrou em 2026-10-01 (AAS-03): o endereço do card e da interface A2A do pool.
+const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email", "webhook", "webrtc", "a2a"])
+
+/**
+ * ⚠️ RECUSA: endpoint `a2a` para pool que não pode ter card (AAS-03).
+ *
+ * Diferente da D8, onde canal não declarado é só AVISO porque o endereço FUNCIONA (pool
+ * endereçado não passa pelo filtro de canal), aqui ele não funcionaria: o card é projeção do
+ * descritor, e pool sem canal `a2a`, sem descritor ou que não é de contato não tem card. Um
+ * endereço que aparece na tela e responde 404 sempre é o "existe ≠ está pronto". O slug vai
+ * na URL pública, por isso a forma é conferida (a D2 permite validação sintática).
+ *
+ * Só no create e na troca de pool: um pool que depois PERDE o canal ou o descritor faz o
+ * card recusar com motivo (`channel_absent`/`descriptor_absent`), dito no log do gateway.
+ */
+function _a2aEndpointViolation(identifier: string | null, pool: Record<string, unknown>): Record<string, unknown> | null {
+  if (identifier !== null && !A2A_SLUG_RE.test(identifier)) {
+    return {
+      error:  `identifier '${identifier}' inválido para a2a: vai na URL pública, use [a-z0-9][a-z0-9_-]* (até 64)`,
+      reason: "a2a_slug_invalid",
+    }
+  }
+  const poolId = String(pool["pool_id"])
+  if ((pool["purpose"] ?? "contact") !== "contact") {
+    return { error: `pool '${poolId}' não é de contato — só pool de contato tem card A2A`, reason: "a2a_pool_not_contact" }
+  }
+  if (!((pool["channel_types"] ?? []) as string[]).includes("a2a") || pool["a2a"] == null) {
+    return {
+      error:  `pool '${poolId}' não expõe A2A — marque o canal a2a e preencha o contrato do pool antes do endereço`,
+      reason: "a2a_pool_not_exposed",
+    }
+  }
+  return null
+}
 
 /**
  * Procedência (ADR adr-webhook-endpoint-single-registry, D6). Não participa da
@@ -256,6 +290,11 @@ channelEndpointsRouter.post("/", async (req: Request, res: Response, next: NextF
     // ENDEREÇADO, e um ChannelEndpoint é precisamente um endereçamento. Reprovar aqui
     // quebraria configuração que funciona — e um portão que reprova o que funciona
     // ensina a ignorar o vermelho.
+    if (body.channel === "a2a") {
+      const v = _a2aEndpointViolation(identifier, pool as unknown as Record<string, unknown>)
+      if (v) return res.status(422).json(v)
+    }
+
     const declaredChannels = (pool.channel_types ?? []) as string[]
     if (!declaredChannels.includes(body.channel)) {
       console.warn(
@@ -368,6 +407,18 @@ channelEndpointsRouter.put("/:id", async (req: Request, res: Response, next: Nex
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No updatable fields provided" })
+    }
+
+    // AAS-03 — trocar o pool de um endereço a2a passa pela mesma régua do create.
+    if (existing.channel === "a2a" && updates["pool_id"] !== undefined) {
+      const pool = await prisma.pool.findUnique({
+        where: { pool_id_tenant_id: { pool_id: updates["pool_id"] as string, tenant_id: tenantId } },
+      })
+      if (!pool) {
+        return res.status(400).json({ error: `pool '${updates["pool_id"]}' não existe neste tenant` })
+      }
+      const v = _a2aEndpointViolation(null, pool as unknown as Record<string, unknown>)
+      if (v) return res.status(422).json(v)
     }
 
     const updated = await channelEndpoint.update({ where: { id }, data: updates })

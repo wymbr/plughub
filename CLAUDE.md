@@ -823,10 +823,12 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
 - Never call `redis.xadd()` directly in mcp-server-plughub — use `writeStreamEntry()`
 - **Never leave deferred phases undocumented** — every unimplemented phase MUST be registered in `## Pending`
 - Never create a new `packages/my-ui/` standalone frontend app — add a module to platform-ui
-- **A borda do channel-gateway é uma ALLOWLIST de seis prefixos — nunca uma proibição.** *(reescrito
+- **A borda do channel-gateway é uma ALLOWLIST de sete prefixos — nunca uma proibição.** *(reescrito
   2026-08-10 após medição; a v1 dizia só "never expose `/v1/*`", e proibição é meia regra: um deploy que
   publique tudo menos `/v1` cumpre a letra e expõe `/docs`.)* Publicável: **`/channel` · `/survey` ·
-  `/webhooks` · `/webrtc` · `/ws` · `/webchat`**. *(`/voice` saiu em 2026-09-28 com o legado Twilio,
+  `/webhooks` · `/webrtc` · `/ws` · `/webchat` · `/a2a`** *(`/a2a` desde a AAS-03: o AgentCard
+  público de um pool, `{base}/a2a/{slug}/.well-known/agent-card.json`, com `{slug}` =
+  `ChannelEndpoint` `a2a`; recusa é 404 mudo e o motivo vai ao log)*. *(`/voice` saiu em 2026-09-28 com o legado Twilio,
   VOZ-03: a chamada telefônica entra pelo tronco SIP na sala do SFU, fora do gateway.)* Interno:
   **`/v1` · `/health`**, mais os
   implícitos do FastAPI **`/openapi.json` · `/docs` · `/redoc`**, os três respondendo `200` hoje —

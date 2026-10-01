@@ -153,6 +153,10 @@ class Settings(BaseSettings):
     # Override to match the actual host/TLS termination layer.
     webchat_serving_base_url:   str = "http://localhost:8010/webchat/v1/attachments"
     webchat_upload_base_url:    str = "http://localhost:8010/webchat/v1/upload"
+    # AAS-03 — URL pública pela qual o mundo alcança este gateway; o AgentCard anuncia
+    # `{base}/a2a/{slug}`. Wiring, não política: vazio = card não servido (503 + ERROR), nunca
+    # adivinhado pelo `Host` da requisição.
+    a2a_public_base_url:        str = ""
 
     # ── SMS (Twilio / ISMSProvider) ───────────────────────────────────────────
     # Twilio Account SID. Can be overridden per-tenant via Redis:

@@ -74,6 +74,7 @@ const IDENTIFIER_PLACEHOLDER: Record<ChannelEndpointChannel, string> = {
   email:    'support@company.com',
   webhook:  'salesforce',
   webrtc:   'support-video',
+  a2a:      'segunda-via',
 }
 
 // ── Form state type ────────────────────────────────────────────────────────────
@@ -680,7 +681,11 @@ function EndpointForm({
             onChange={e => setForm(p => ({ ...p, pool_id: e.target.value }))}
           >
             <option value="">{t('form.selectPool')}</option>
-            {pools.map(p => (
+            {/* AAS-03 — em a2a o registro recusa pool que não expõe A2A (canal + contrato,
+                de contato); a lista não oferece o que o servidor recusaria. */}
+            {pools.filter(p => channel !== 'a2a' || (
+              (p.channel_types ?? []).includes('a2a') && !!p.a2a && (p.purpose ?? 'contact') === 'contact'
+            )).map(p => (
               <option key={p.pool_id} value={p.pool_id}>{p.pool_id}</option>
             ))}
           </select>

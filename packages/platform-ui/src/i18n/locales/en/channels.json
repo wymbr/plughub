@@ -18,7 +18,8 @@
     "email":    "E-mail",
     "sms":      "SMS",
     "webhook":  "Webhook",
-    "webrtc":   "WebRTC"
+    "webrtc":   "WebRTC",
+    "a2a":      "A2A"
   },
   "subTabs": {
     "accounts": "Integrations & Endpoints",
@@ -36,7 +37,8 @@
     "sms":      "Short code or long code, e.g. 55119",
     "email":    "Address, e.g. support@company.com",
     "webhook":  "URL slug, e.g. \"salesforce\" → /channel/webhook/salesforce",
-    "webrtc":   "Room name, e.g. \"support-video\" → /ws/webrtc/support-video"
+    "webrtc":   "Room name, e.g. \"support-video\" → /ws/webrtc/support-video",
+    "a2a":      "URL slug, e.g. \"segunda-via\" → /a2a/segunda-via/.well-known/agent-card.json"
   },
   "integration": {
     "new":                   "New {{channel}} Integration",
@@ -66,6 +68,7 @@
     "speechProfileNone": "none — tenant settings",
     "speechProfileMissing": "{{id}} (missing)",
     "speechProfileMissingHint": "This endpoint points to a speech profile that does not exist: calls use the tenant settings, and the gateway logs a warning.",
+    "a2aNote":             "A2A endpoints need no provider account. Each endpoint is the public address of one pool's AgentCard ({base}/a2a/{identifier}/.well-known/agent-card.json), built from the pool's A2A contract and current deploy — there is no hand-written card. Only contact pools with the A2A channel and contract can be chosen; the card is public only when the contract is marked discoverable.",
     "webrtcNote":          "WebRTC endpoints need no provider account — the media server is part of the deployment. Each endpoint is the address the call widget connects to (/ws/webrtc/{identifier}) and the pool it lands in; the pool can change behind a published address. An address with no endpoint is still read as a pool id.",
     "add":                 "+ Add endpoint",
     "addBtn":              "Add endpoint",

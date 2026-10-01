@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (12) — AAS-03: o AgentCard público de um pool existe, e é projeção
+
+Fase A1 do `adr-a2a-server-binding` (D2, D14.3). Ainda **sem execução**: o card diz onde e como
+falar com o pool, e a A4 é que responde nesse endereço.
+
+**Decisão do dono, e o ADR corrigido.** A D2 pedia UM `/.well-known/agent-card.json` listando os
+pools descobríveis. Medido no `a2a.proto` v1.0: o `AgentCard` descreve **um** agente, e nada numa
+mensagem diz para qual pool ela vai. Um card de vários pools obrigaria o adapter a classificar o
+pedido, o que é trabalho de orquestrador, não de canal. E o gateway não tem host→tenant. Escolhido:
+- **um card por POOL** em `{base}/a2a/{slug}/.well-known/agent-card.json`;
+- `{slug}` é um `ChannelEndpoint` de canal `a2a`, o mesmo registro único de endereço do slug do
+  webchat e do número da voz;
+- a URL não expõe `tenant_id` nem `pool_id`;
+- o `/.well-known` da raiz não é servido.
+
+**Como ficou:**
+- **Projeção, uma casa:** `projectAgentCard` e `AgentCardSchema` em `@plughub/schemas/a2a-card.ts`,
+  na forma JSON do proto (camelCase, `oneof` como chave, `StringList` como `{list}`).
+  - O registry monta o card em `GET /v1/a2a-cards/{slug}?base_url=` (só leitura, fora do portão de
+    escrita).
+  - Ordem das checagens: endpoint ativo e `external` → pool ativo, de contato, com o canal →
+    descritor válido e `discoverable` → slot `current`.
+  - Cada recusa tem motivo: `A2ACardRefusalSchema`, 10 valores.
+- **`version` = `set_at` do `current`**, e pool sem deploy não tem card: anunciar um agente que não
+  roda seria o card mentindo.
+- **Schemas de entrada e saída numa extensão** (`urn:plughub:a2a:extension:io-schema:v1`). O card
+  v1.0 não tem campo para JSON Schema, e sem ela o chamador saberia o que o agente faz, mas não o que
+  precisa mandar.
+- **`securitySchemes` dos tipos de principal** (bearer, um por tipo, OR entre eles).
+- **Modos derivados** (`a2aMediaModes`): `text/plain` + `application/json` para todo pool até
+  arquivo existir (AAS-12).
+- **`extendedAgentCard: false`**, porque o card estendido depende do principal. Deixou ficha:
+  `AAS-13`, bloqueada pela AAS-04.
+- **Borda (gateway):** `GET /a2a/{slug}/.well-known/agent-card.json` em `a2a_card.py`, com cache de
+  30 s.
+  - Recusa é **404 mudo** (`{"error":"not_found"}`): dizer *"existe, mas não é público"* a um
+    anônimo é oráculo de enumeração. O motivo vai ao log: INFO para `endpoint_not_found` e
+    `not_discoverable`, que são normais; WARNING para configuração quebrada.
+  - Registry fora → 503, fora do cache.
+  - Sem `PLUGHUB_A2A_PUBLIC_BASE_URL` → 503 e ERROR nomeando a env. A URL não é adivinhada pelo
+    `Host` da requisição, que atrás de proxy é a errada. A env foi para os três composes.
+- **Cadastro do endereço:** o registry aceita `channel=a2a`.
+  - Ao contrário da D8 do webhook, onde canal não declarado só avisa porque o endereço funciona,
+    aqui **recusa** (422) pool que não expõe A2A ou não é de contato: o endereço nunca teria card.
+  - Recusa também slug fora de `[a-z0-9][a-z0-9_-]*`, porque ele vai na URL.
+  - A régua vale no create e na troca de pool.
+- **`/a2a` declarado** como prefixo externo no `probe_edge_surface.sh`; a allowlist do `CLAUDE.md`
+  passou de seis para sete prefixos.
+- **Tela de canais:** aba A2A, e o seletor só oferece pool que o servidor aceitaria.
+- **Achado de passagem:** o `ChannelEndpointChannelSchema` do zod não tinha `webrtc`, aceito pelo
+  registry desde a VOZ-26; entrou junto com `a2a`.
+
+**Gates:**
+- `probe_aas03_a2a_card.sh` VERDE, 18 OK:
+  - C1–C7: card pela borda, com a forma conferida por `AgentCardSchema` no container do registry, e
+    versão, URL, contrato e cache;
+  - R1–R5: motivos no registry, mais o controle de desfazer;
+  - G1–G3: 404 mudo, motivo no log, e o card sumindo em ≤ 30 s ao tirar `discoverable`;
+  - E1–E2: cadastro.
+- `mut_aas03_a2a_card.sh` pegou 5 de 5:
+  - sem `discoverable` → R3/G3;
+  - versão pelo relógio → C3;
+  - pool sem deploy com card → R2/G1;
+  - cadastro sem a régua → E1/E2;
+  - 404 com o motivo, o oráculo → G1.
+- Sob M4 o probe criava endereços de verdade, e a rodada seguinte media 409 no lugar de 422. Ele
+  passou a apagá-los antes do ramo E.
+
+**Testes:** schemas 411 · agent-registry 184 (+26: as 10 recusas, a forma, o cadastro com controle
+de escopo) · channel-gateway 1626 (+10: cache, recusa cacheada, falha fora do cache, 404 mudo com
+log por nível, env ausente) · platform-ui tsc limpo · i18n VERDE.
+
 ## 2026-10-01 (11) — AAS-01: `a2a` é canal, e o pool só o expõe com contrato
 
 Fase A0 do `adr-a2a-server-binding` (D1, D3). Ainda **não há execução**: não existe adapter

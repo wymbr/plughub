@@ -108,9 +108,31 @@ principal autenticado (D6). Consequências que vêm de graça:
   versão no cliente, não card congelado.
 - **Os modos de mídia do card também são derivados, nunca declarados** (D14). Os `securitySchemes`
   vêm dos tipos de principal que o pool admite (D6).
-- **Card público × card estendido.** `/.well-known/agent-card.json` lista só os pools marcados
-  `discoverable`. O card estendido (`GetExtendedAgentCard`, depois de autenticar) lista só os pools
-  que **aquele** principal alcança.
+- **Card público × card estendido.** O card público só existe para pool marcado `discoverable`.
+  O card estendido (`GetExtendedAgentCard`, depois de autenticar) é o que **aquele** principal vê,
+  inclusive de pool que não é descobrível.
+
+> **Correção de 2026-10-01 (AAS-03, decisão do dono): um card por POOL, endereçado por
+> `ChannelEndpoint`.** Esta seção dizia que `/.well-known/agent-card.json` *"lista só os pools
+> marcados `discoverable`"* — um card listando vários pools. Medido no `a2a.proto` v1.0: o
+> `AgentCard` descreve **um** agente (um nome, uma descrição, skills, interfaces), e nada numa
+> mensagem diz para qual pool ela vai — um card de vários pools obrigaria o adapter a CLASSIFICAR o
+> pedido, que é orquestrador, não canal. E o gateway não tem host→tenant. Ficou:
+>
+> - card em **`{base}/a2a/{slug}/.well-known/agent-card.json`**, interface em `{base}/a2a/{slug}`;
+>   o `{slug}` é um `ChannelEndpoint` de canal `a2a` — o mesmo modelo do slug do webchat e do
+>   número da voz, registro único de endereço. A URL não expõe `tenant_id` nem `pool_id`;
+> - o endereço só se cadastra para pool de **contato** com o canal e o contrato (422 no resto), e o
+>   slug é `[a-z0-9][a-z0-9_-]*` porque vai na URL;
+> - o **`/.well-known/agent-card.json` da raiz não é servido**: não há um agente por host;
+> - o card é montado no agent-registry (`GET /v1/a2a-cards/{slug}`, só leitura) e servido pelo
+>   gateway com cache de 30 s; recusa é 404 **mudo** para fora e motivo no log (sem oráculo de
+>   "existe mas não é público"); `version` = `set_at` do `current`, e pool sem `current` não tem
+>   card (não roda);
+> - o `input_schema`/`output_schema` vai numa extensão (`urn:plughub:a2a:extension:io-schema:v1`):
+>   o card v1.0 não tem campo para JSON Schema;
+> - `extendedAgentCard: false` até o principal existir (AAS-04) — anunciá-lo antes seria prometer
+>   uma rota que não responde. Ficha `AAS-13`.
 
 ### D3 — O descritor é o contrato; o canal é o opt-in *(rev. 2)*
 
@@ -381,7 +403,8 @@ principal e identidade são os mesmos.
 
 ## 4. Borda
 
-Prefixos novos: **`/a2a`** e **`/.well-known/agent-card.json`**, ambos **externos**, mais a página
+Prefixo novo: **`/a2a`**, **externo** (o card mora sob ele desde a AAS-03 — `/.well-known` da raiz
+não é servido, ver a correção do D2), mais a página
 do link de prova e de entrada mascarada (D8/D12) sob um prefixo público já existente ou novo, a
 decidir na A4.
 
@@ -414,7 +437,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 |---|---|---|---|
 | **ATT-0** | Risco de anexo **de hoje** | allowlist e tamanho em todo canal de entrada, magic bytes fail-closed, `nosniff`, CSP `sandbox`, `filename*`, `inline` só para imagem | **independe do A2A e vem antes**: WhatsApp e e-mail pulam `validate_mime` e a porta pública serve inline |
 | **A0** | Canal + descritor | `a2a` no `ChannelSchema` e no perfil; bloco `a2a` no pool; tela | destrava delegate-por-pool · **feita em 2026-10-01 (AAS-01)** |
-| **A1** | AgentCard read-only | card público + estendido, modos derivados, `securitySchemes` | **sem execução**; força o descritor a ser honesto |
+| **A1** | AgentCard read-only | card público + estendido, modos derivados, `securitySchemes` | **sem execução**; força o descritor a ser honesto · **card público feito em 2026-10-01 (AAS-03)**; o estendido espera o principal (`AAS-13`) |
 | **A2** | Principal `partner` | `agent_principals` (fusão, D6), credencial, `allowed_pools`, tenant da credencial (D7), linha no probe de borda | **bloqueia A4** |
 | **A3** | Artefato + status honesto | resultado terminal legível; `unknown` ≠ `closed` | o net-new que ninguém espera |
 | **A4** | Adapter JSON-RPC | `message/send` (bloqueante com teto + `returnImmediately`), `tasks/get`, `tasks/cancel`, `tasks/list`; `menu` → `INPUT_REQUIRED` com `DataPart`/texto; D15 inteira | **basta para o OpenClaw** (só bearer, texto e JSON, polling) |
@@ -540,3 +563,5 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   otimização; fases ATT-0, B1–B3, ATT e C.
 - **2026-10-01, fase A0 (AAS-01).** Canal e descritor entregues; D3 ganhou o *como ficou*
   (schema estrito, portão sobre o estado resultante, espelho `-int` isento, capacidade vazia até a A4).
+- **2026-10-01, fase A1 (AAS-03).** D2 corrigida por decisão do dono: um card por pool, endereçado
+  por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.

@@ -54,10 +54,11 @@ const CHANNEL_TABS: { id: ChannelTab; icon: string }[] = [
   { id: 'sms',      icon: '📱' },
   { id: 'webhook',  icon: '🔗' },
   { id: 'webrtc',   icon: '🎥' },
+  { id: 'a2a',      icon: '🤝' },   // AAS-03 — endereço do AgentCard do pool
 ]
 
 // Channels rendered without GatewayConfig parent (no API account needed)
-const STANDALONE_CHANNELS = new Set<ChannelTab>(['webhook', 'webrtc'])
+const STANDALONE_CHANNELS = new Set<ChannelTab>(['webhook', 'webrtc', 'a2a'])
 
 // Channels with runtime Settings page (Config API)
 const HAS_SETTINGS = new Set<ChannelTab>(['webchat', 'webrtc'])
@@ -326,7 +327,7 @@ const ChannelPanel: React.FC<ChannelPanelProps> = ({ channel }) => {
   if (STANDALONE_CHANNELS.has(channel)) {
     return (
       <div>
-        <p className="text-xs text-muted mb-4">{t(channel === 'webrtc' ? 'endpoint.webrtcNote' : 'endpoint.webhookNote')}</p>
+        <p className="text-xs text-muted mb-4">{t(channel === 'webrtc' ? 'endpoint.webrtcNote' : channel === 'a2a' ? 'endpoint.a2aNote' : 'endpoint.webhookNote')}</p>
         <ChannelEndpointList channel={channel} />
       </div>
     )

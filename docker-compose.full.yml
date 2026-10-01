@@ -571,6 +571,7 @@ services:
       PLUGHUB_ATTACHMENT_EXPIRY_DAYS:  "7"
       PLUGHUB_DATABASE_URL:            postgresql://plughub:plughub@postgres:5432/plughub
       PLUGHUB_WEBCHAT_SERVING_BASE_URL: http://localhost:8010/webchat/v1/attachments
+      PLUGHUB_A2A_PUBLIC_BASE_URL: http://localhost:8010   # AAS-03 — URL anunciada no AgentCard
       PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:  http://localhost:8010/webchat/v1/upload
       PLUGHUB_TENANT_ID:               tenant_demo
       # ATT-05 — antivírus. Vazio = todo anexo de contato em QUARENTENA (não servido).

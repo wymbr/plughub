@@ -749,6 +749,22 @@ export type {
   ChannelEndpointQuery,
 } from "./channel-endpoint"
 
+// ── AgentCard A2A — projeção do pool (AAS-03) ────────────────────────────────
+export {
+  A2A_PROTOCOL_VERSION,
+  A2A_IO_SCHEMA_EXTENSION_URI,
+  AgentCardSchema,
+  A2ACardRefusalSchema,
+  a2aMediaModes,
+  projectAgentCard,
+} from "./a2a-card"
+
+export type {
+  AgentCard,
+  AgentCardInput,
+  A2ACardRefusal,
+} from "./a2a-card"
+
 // ── Agent Business Events (Arc 12) ───────────────────────────────────────────
 export {
   AGENT_EVENT_CATEGORY_REGEX,

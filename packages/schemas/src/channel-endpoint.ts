@@ -15,6 +15,8 @@ export const ChannelEndpointChannelSchema = z.enum([
   "sms",
   "email",
   "webhook",
+  "webrtc",   // VOZ-26 — já aceito pelo registry; faltava aqui
+  "a2a",      // AAS-03 — endereço do card e da interface A2A do pool
 ])
 export type ChannelEndpointChannel = z.infer<typeof ChannelEndpointChannelSchema>
 
@@ -49,6 +51,9 @@ export type ChannelEndpointOrigin = z.infer<typeof ChannelEndpointOriginSchema>
  *   webhook   — URL slug, e.g. "salesforce", "erp" → URL: {host}/channel/webhook/{slug}
  *               NOTE: distinct from workflow webhooks (Arc 4) which trigger skill flows directly.
  *               Channel webhooks route inbound contacts to a pool via the routing engine.
+ *   a2a       — URL slug, e.g. "segunda-via" → card: {base}/a2a/{slug}/.well-known/agent-card.json
+ *               (AAS-03). Só pool de CONTATO com o canal `a2a` e o descritor; o slug vai na URL,
+ *               então só `[a-z0-9][a-z0-9_-]*` (até 64).
  */
 export const ChannelEndpointSchema = z.object({
   id:           z.string().uuid(),

@@ -49,6 +49,7 @@ from .attachment_expiry import run_attachment_expiry
 from .attachment_rescan import run_attachment_rescan
 from .attachment_store import configure_scanner
 from .sip_trunk_watch import run_sip_trunk_watch
+from . import a2a_card
 from . import speech_catalog
 from .config import get_settings, Settings
 # Verificador canônico (passo 3 da consolidação, 2026-08-28). O import vem DIRETO do
@@ -2890,6 +2891,37 @@ async def webhook_status(session_id: str, tenant_id: str) -> dict:
         session_id = session_id,
         tenant_id  = tenant_id,
     )
+
+
+# ── AgentCard A2A (AAS-03) ────────────────────────────────────────────────────
+#
+# Prefixo PÚBLICO novo (`/a2a`), declarado em `probe_edge_surface.sh`. O card é projeção
+# montada no agent-registry; aqui só a borda — ver `a2a_card.py` para os três desfechos.
+# O tenant é o da instalação (`settings.tenant_id`), como em toda porta pública deste app.
+
+@app.get("/a2a/{slug}/.well-known/agent-card.json")
+async def a2a_agent_card(slug: str) -> JSONResponse:
+    settings = get_settings()
+    base = settings.a2a_public_base_url.strip()
+    if not base:
+        logger.error(
+            "a2a card: PLUGHUB_A2A_PUBLIC_BASE_URL vazio — o card não tem URL de interface "
+            "a anunciar; nenhum card A2A é servido até a env existir (slug=%s)", slug)
+        return JSONResponse({"error": "a2a_not_configured"}, status_code=503)
+
+    res = await a2a_card.fetch_card(
+        slug,
+        tenant_id    = settings.tenant_id,
+        registry_url = settings.agent_registry_url,
+        base_url     = base,
+    )
+    if res.outcome == "ok":
+        return JSONResponse(res.card, headers={"Cache-Control": f"public, max-age={int(a2a_card.CACHE_TTL_S)}"})
+    if res.outcome == "refused":
+        a2a_card.log_refusal(slug, res)
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    logger.warning("a2a card indisponível slug=%s: %s", slug, res.reason)
+    return JSONResponse({"error": "unavailable"}, status_code=503)
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

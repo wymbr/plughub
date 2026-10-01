@@ -44,6 +44,7 @@ declare -A CLASS=(
   [webrtc]="externo|emissão de token LiveKit para o cliente na webapp (main.py:754)"
   [ws]="externo|WebSocket do webchat e do webrtc, aberto pelo BROWSER (main.py:478,729)"
   [webchat]="externo|upload/download de anexo pelo browser (upload_router.py:41)"
+  [a2a]="externo|AgentCard A2A do pool (AAS-03), endereçado por ChannelEndpoint a2a; só o card PÚBLICO (descobrível), 404 mudo no resto"
   [v1]="INTERNO|rede interna. Abriga o POST /v1/channels/webhook/pool/{id}, ANÔNIMO por construção (main.py:1004)"
   [health]="INTERNO|liveness do orquestrador; nada a ganhar publicando"
 )

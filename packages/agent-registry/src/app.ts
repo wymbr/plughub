@@ -16,6 +16,7 @@ import { poolSlotsRouter }        from "./routes/pool-slots"
 import { poolSlotsBatchRouter }   from "./routes/pool-slots-batch"
 import { operationalRouter }      from "./routes/operational"
 import { contextMapRouter }       from "./routes/context-map"
+import { a2aCardsRouter }         from "./routes/a2a-cards"
 import { requireResourceWrite, requireAbacWrite } from "./middleware/require-resource-write"
 
 export const app = express()
@@ -66,6 +67,8 @@ app.use("/v1/operational",        operationalRouter)
 // D6 — vocabulário do seletor de `context_visibility`. Somente LEITURA e
 // derivado do mapa; não escreve nada, por isso fora do `requireResourceWrite`.
 app.use("/v1/context-map",        contextMapRouter)
+// AAS-03 — AgentCard PÚBLICO do pool: projeção, só leitura, por isso fora do portão de escrita.
+app.use("/v1/a2a-cards",          a2aCardsRouter)
 
 // ── Healthcheck ────────────────────────────
 app.get("/v1/health", (_req: Request, res: Response) => {
