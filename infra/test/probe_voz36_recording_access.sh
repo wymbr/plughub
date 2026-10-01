@@ -127,7 +127,14 @@ chk "exportar parte 2 (PB fora do escopo do grant)" 403 "$(code -H "$(H "$T_RW_A
 echo; echo "A6 · classe"
 chk "anexo de webchat pela porta de gravação" 404 "$(code -H "$(H "$T_RW_A")" "$GWURL/v1/recordings/$FW/audio")"
 chk "gravação pela porta pública de anexos" 404 "$(code "$GWURL/webchat/v1/attachments/$FA")"
-chk "controle: o anexo de webchat SAI pela porta pública" 200 "$(code "$GWURL/webchat/v1/attachments/$FW")"
+# ATT-03: a porta pública só abre com URL ASSINADA — o controle pede ao gateway o link que a entrega cunharia
+FWURL=$(docker exec -i -e FW="$FW" -e SID="$SID" "$GW" python -c 'import os
+from plughub_channel_gateway.config import get_settings
+from plughub_channel_gateway.attachment_store import sign_attachment_url
+s = get_settings()
+print(sign_attachment_url(s.webchat_serving_base_url, os.environ["FW"], os.environ["SID"], secret=s.jwt_secret))' 2>/dev/null | tail -1)
+FWURL="$GWURL/webchat/v1/attachments/${FWURL##*/webchat/v1/attachments/}"
+chk "controle: o anexo de webchat SAI pela porta pública (URL assinada)" 200 "$(code "$FWURL")"
 
 echo; echo "P1 · proxy do platform-ui"
 PR=$(curl -s --max-time 10 "$UIURL/v1/recordings/sessions/$SID")

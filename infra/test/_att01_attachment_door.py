@@ -13,6 +13,7 @@ serve nada como página.
   S1 a imagem é servida inline, com `nosniff` e CSP `sandbox`
   S2 o PDF é servido como DOWNLOAD (`attachment`), com `nosniff`
   S3 nome hostil (aspas, `;`, CRLF) não reescreve o cabeçalho nem injeta outro
+  S0 (ATT-03) o `file_id` NU não abre (404) · S4 link assinado para OUTRA sessão não abre (404)
   C1 CENSO: nenhuma linha SERVÍVEL (committed, não expirada) tem tipo fora da allowlist da
      sua classe. Expirada responde 410 — e a própria bateria de mutação deixa uma (M1 grava o
      HTML que a regra desligada não barra), que o probe expira na limpeza.
@@ -31,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 
 import asyncpg
 
-from plughub_channel_gateway.attachment_store import CLASS_MIME_LIMITS
+from plughub_channel_gateway.attachment_store import CLASS_MIME_LIMITS, sign_attachment_url
 from plughub_channel_gateway.config import get_settings
 from plughub_channel_gateway.main import _create_attachment_store
 
@@ -50,9 +51,9 @@ def ok(ramo: str, cond: bool, detalhe: str) -> None:
         falhas.append(ramo)
 
 
-def get(file_id: str):
+def get(url: str):
     try:
-        with urllib.request.urlopen(f"{HTTP}/{file_id}", timeout=10) as r:
+        with urllib.request.urlopen(url, timeout=10) as r:
             return r.status, r.headers, r.read()  # HTTPMessage: busca sem caixa
     except urllib.error.HTTPError as e:
         return e.code, e.headers, b""
@@ -96,15 +97,22 @@ async def main() -> int:
         pdf, err = await gravar(HOSTIL, "application/pdf", PDF)
         ok("W3", err is None, f"PDF gravado (controle){'' if err is None else ': ' + err}")
 
-        # ── porta ──
-        st, h, corpo = get(img)
+        # ── porta (ATT-03: só abre com URL assinada, como a entrega cunha) ──
+        def assinada(fid, para=sid):
+            return sign_attachment_url(HTTP, fid, para, secret=settings.jwt_secret)
+
+        st, _, _ = get(f"{HTTP}/{img}")
+        ok("S0", st == 404, f"file_id NU na porta pública → {st} (esperado 404)")
+        st, _, _ = get(assinada(img, para="outra-sessao"))
+        ok("S4", st == 404, f"link assinado para OUTRA sessão → {st} (esperado 404)")
+        st, h, corpo = get(assinada(img))
         ok("S1", st == 200 and h.get("X-Content-Type-Options") == "nosniff"
            and "sandbox" in (h.get("Content-Security-Policy") or "")
            and (h.get("Content-Disposition") or "").startswith("inline;") and corpo == JPEG,
            f"imagem: {st} · nosniff={h.get('X-Content-Type-Options')} · "
            f"csp={h.get('Content-Security-Policy')!r} · cd={h.get('Content-Disposition')!r}")
         if pdf and pdf in gravados:
-            st, h, corpo = get(pdf)
+            st, h, corpo = get(assinada(pdf))
             cd = h.get("Content-Disposition") or ""
             ok("S2", st == 200 and cd.startswith("attachment;")
                and h.get("X-Content-Type-Options") == "nosniff" and corpo == PDF,

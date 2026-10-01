@@ -542,8 +542,11 @@ class TestPortaPublica:
             yield b"OggS"
         store.stream_bytes = AsyncMock(return_value=_gen())
         monkeypatch.setattr(upload_router._main_module, "_attachment_store", store, raising=False)
+        # ATT-03: a porta pública só abre com URL assinada — o controle assina como a entrega assina
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(upload_router.public_attachment_url("f", SID)).query)
         try:
-            return await upload_router.serve_attachment("f")
+            return await upload_router.serve_attachment("f", exp=q["exp"][0], sig=q["sig"][0])
         except HTTPException as exc:
             return exc
 

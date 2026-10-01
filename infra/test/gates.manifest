@@ -438,7 +438,8 @@ probe_voz28_call_upload.sh
 # pagina. Store REAL, amostra propria (expirada ao final): W0 controle imagem · W1 text/html recusado ·
 # W2 JPEG com bytes de HTML recusado · W3 controle PDF · S1 imagem inline + nosniff + CSP sandbox ·
 # S2 PDF como download · S3 nome hostil nao injeta cabecalho · C1 censo: nenhuma servivel fora da
-# allowlist da classe. Bateria: mut_att01_attachment_door.sh.
+# allowlist da classe. ATT-03: S0 file_id NU 404 · S4 link de OUTRA sessao 404 (a porta so abre com
+# URL assinada). Bateria: mut_att01_attachment_door.sh (M4 = assinatura nao conferida).
 probe_att01_attachment_door.sh
 # ATT-02 (2026-10-01): a porta INTERNA do anexo — pelo caminho do Console (5174 /analytics/...).
 # A1 sem token 401 · A2 sem `contacts.transcricao` 403, id inexistente tambem (sem oraculo) ·

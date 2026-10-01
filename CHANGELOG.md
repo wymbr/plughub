@@ -1,5 +1,49 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (5) — ATT-03: a porta pública do anexo só abre com URL assinada, cunhada na entrega
+
+**Antes:** o `file_id` nu era a credencial. Quem o tivesse (de um log, de um evento no Kafka, do
+histórico durável) baixava o arquivo pela porta pública **para sempre**, e a `url` absoluta ficava
+gravada no stream, no Postgres e no Kafka.
+
+**O que passou a ser verdade:**
+- **URL assinada.** A URL que o cliente recebe é `…/attachments/{file_id}?exp=…&sig=…`: HMAC-SHA256
+  sobre `(file_id, session_id, exp)`, com separação de domínio e o segredo do webchat, por **1 h**.
+  O `session_id` não aparece na URL: a porta o lê do registro do anexo, então um link de uma sessão
+  não abre arquivo de outra.
+- **Respostas da porta:** sem assinatura, ou com assinatura errada, **404** (igual a id
+  desconhecido, sem oráculo); vencida, **403 `link_expired`**.
+- **Cunhada na ENTREGA, nunca copiada.** São três lugares: o `upload.committed`, a mídia do webchat
+  e o `StreamSubscriber`, que ganhou `url_signer` e recunha pelo `file_id` a cada entrega ao widget
+  (reconectar renova os links).
+- **Sem segredo, não sai URL nenhuma.** O anexo vai sem link e o motivo vai em `ERROR`; nunca uma
+  URL nua que a porta recusaria calada.
+- O `infra/webchat-client` deixou de mandar a URL como **legenda**: com ele, a URL ia parar no texto
+  do transcript, no ClickHouse e no masking.
+
+**Consequência declarada:** a `url` antiga gravada no histórico durável e no Kafka deixa de abrir.
+Nenhum leitor da plataforma a usa desde a ATT-02 (Console e transcript vão por `file_id` à porta
+interna).
+
+**Testes ajustados, porque o contrato mudou:**
+- `test_webchat_adapter` (VOZ-28): a URL da mídia é caminho + `exp` + `sig`.
+- `test_webrtc_egress::TestPortaPublica`: o controle assina como a entrega assina.
+- Controle da `probe_voz36` (A6): pede ao gateway a URL assinada.
+
+**Gates:**
+- `probe_att01_attachment_door.sh` ganhou **S0** (`file_id` nu → 404) e **S4** (link assinado para
+  outra sessão → 404). A bateria `mut_att01_attachment_door.sh` ganhou **M4** (assinatura não
+  conferida) e pegou M1–M4.
+  - Ao acrescentar o M4, a bateria mostrou um defeito próprio: uma expressão de mutação que FALHA
+    não gerava arquivo e era contada como "pega".
+  - Hoje o `aplica` recusa (`NAO_APLICOU`) quando a transformação não produz arquivo.
+- `test_att03_signed_url.py`: 15 casos (ida e volta, outra sessão, outro arquivo, prazo esticado,
+  vencido, sem segredo, porta e entrega).
+- Suíte do gateway: **1555 passed**.
+- Ao vivo, verdes: `probe_att02`, `probe_voz36_recording_access`, `probe_voz28_call_upload` (U4 baixa
+  pela URL assinada do `upload.committed`) e `probe_route_anon_sweep` (motivo da isenção da porta
+  pública atualizado).
+
 ## 2026-10-01 (4) — ATT-02: quem atende vê o anexo pela porta INTERNA, com capacidade, escopo da sessão e trilha
 
 **O que a medição achou.** O Console (VOZ-28) e o transcript abriam a `url` gravada na mensagem: uma

@@ -32,8 +32,12 @@ Cron de expurgo (dois estágios):
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import re
+import time
 from urllib.parse import quote
 import logging
 import os
@@ -225,6 +229,56 @@ def content_disposition(original_name: str | None, mime_type: str) -> str:
 def served_media_type(mime_type: str | None) -> str:
     """O tipo que a porta declara: o gravado se está na allowlist; senão, bytes opacos."""
     return mime_type if mime_type in CONTACT_MIME_LIMITS else "application/octet-stream"
+
+
+# ─── URL pública ASSINADA (ATT-03) ────────────────────────────────────────────
+#
+# Até a ATT-03 o `file_id` nu era a credencial da porta pública: quem o tivesse — de um log, de um
+# histórico, de um evento — baixava o arquivo para sempre. Agora a URL entregue ao widget leva
+# `exp` e `sig`, e a assinatura cobre `(file_id, session_id, exp)`: o `session_id` não aparece na
+# URL, mas a porta o lê do registro do anexo — um link de uma sessão não abre arquivo de outra.
+#
+# A URL é cunhada na ENTREGA (upload.committed, mídia do webchat, mapeamento do stream para o
+# widget), nunca copiada de uma `url` gravada: gravada, ela envelhece. Quem atende não usa esta
+# porta (ATT-02).
+
+ATTACHMENT_URL_TTL_S = 3600
+_SIG_DOMAIN = b"plughub-attachment-url-v1"
+
+
+def _url_signature(secret: str, file_id: str, session_id: str, exp: int) -> str:
+    msg = b"\x00".join([_SIG_DOMAIN, file_id.encode(), session_id.encode(), str(exp).encode()])
+    mac = hmac.new(secret.encode(), msg, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).rstrip(b"=").decode()
+
+
+def sign_attachment_url(base_url: str, file_id: str, session_id: str, *, secret: str,
+                        ttl_s: int = ATTACHMENT_URL_TTL_S, now: float | None = None) -> str:
+    """`{base}/{file_id}?exp=…&sig=…`. Sem segredo não há URL: devolve "" (o widget mostra o anexo
+    sem link) e o motivo é dito por quem chama — nunca uma URL nua que a porta recusaria."""
+    if not secret or not file_id or not session_id:
+        return ""
+    exp = int((now if now is not None else time.time()) + ttl_s)
+    sig = _url_signature(secret, file_id, session_id, exp)
+    return f"{base_url.rstrip('/')}/{file_id}?exp={exp}&sig={sig}"
+
+
+def verify_attachment_signature(file_id: str, session_id: str, exp: str | None, sig: str | None,
+                                *, secret: str, now: float | None = None) -> str | None:
+    """None se a assinatura vale; senão o motivo: `missing` · `bad` · `expired` · `no_secret`."""
+    if not secret:
+        return "no_secret"
+    if not exp or not sig:
+        return "missing"
+    try:
+        exp_i = int(exp)
+    except ValueError:
+        return "bad"
+    if not hmac.compare_digest(_url_signature(secret, file_id, session_id, exp_i), sig):
+        return "bad"
+    if exp_i < (now if now is not None else time.time()):
+        return "expired"
+    return None
 
 
 def normalize_mime(mime_type: str | None) -> str:

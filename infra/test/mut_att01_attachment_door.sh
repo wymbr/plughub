@@ -5,10 +5,11 @@
 # M1 a regra some do commit (`validate_content` devolve None)     → exige VERMELHO (W1/W2)
 # M2 a porta perde os cabeçalhos (`SERVE_SECURITY_HEADERS = {}`)  → exige VERMELHO (S1/S2)
 # M3 tudo inline (`content_disposition` ignora o tipo)            → exige VERMELHO (S2)
+# M4 a assinatura deixa de ser conferida (ATT-03)                 → exige VERMELHO (S0/S4)
 #
 # Cada mutação é aplicada por `docker cp` no container e `docker restart` (o uvicorn não
 # recarrega); `cmp` confirma que o arquivo mudou. O `trap` recria o container a partir da
-# IMAGEM, que é a versão sem mutação. ⚠️ ASSISTIDO: reinicia o gateway quatro vezes.
+# IMAGEM, que é a versão sem mutação. ⚠️ ASSISTIDO: reinicia o gateway cinco vezes.
 # Saída: 0 todas pegas · 1 alguma sobreviveu · 2 não mediu. Rode de dentro do WSL.
 set -u
 cd "$(dirname "$0")/../.."
@@ -43,6 +44,7 @@ s = io.open(src, encoding="utf-8").read()
 t = eval(expr, {"s": s})
 io.open(dst, "w", encoding="utf-8").write(t)
 PY
+  [ -s "$TMP/$1.py" ] || { echo "NAO_APLICOU"; return; }
   if cmp -s "$TMP/orig.py" "$TMP/$1.py"; then echo "NAO_APLICOU"; return; fi
   docker cp "$TMP/$1.py" "$GW:$PKG/attachment_store.py" >/dev/null
   docker restart "$GW" >/dev/null
@@ -59,8 +61,9 @@ declare -A MUT=(
   [M1]='s.replace("def validate_content(artifact_class: str | None, mime_type: str, data: bytes) -> str | None:", "def validate_content(artifact_class: str | None, mime_type: str, data: bytes) -> str | None:\n    return None", 1)'
   [M2]='s.replace("SERVE_SECURITY_HEADERS = {", "SERVE_SECURITY_HEADERS = {} and {", 1)'
   [M3]='s.replace("disposition = \"inline\" if mime_type in INLINE_MIMES else \"attachment\"", "disposition = \"inline\"", 1)'
+  [M4]='s.replace("    if not secret:\n        return \"no_secret\"", "    return None\n    if not secret:\n        return \"no_secret\"", 1)'
 )
-for m in M1 M2 M3; do
+for m in M1 M2 M3 M4; do
   rc=$(aplica "$m" "${MUT[$m]}")
   case "$rc" in
     1)          echo "  ✓ $m pega (probe VERMELHO)";;

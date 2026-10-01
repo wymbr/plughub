@@ -118,7 +118,27 @@ os consuma.
   aspas, reescrevia o cabeçalho;
 - serve tipo fora da allowlist (linha antiga) como `application/octet-stream`.
 
-A porta pública continua tomando o `file_id` como credencial até a **ATT-03** (URL assinada).
+### A porta pública só abre com URL ASSINADA (ATT-03, 2026-10-01)
+
+O `file_id` nu deixou de ser credencial. A URL entregue ao cliente é
+`/webchat/v1/attachments/{file_id}?exp=…&sig=…`:
+
+- **A assinatura** é HMAC-SHA256 sobre `(file_id, session_id, exp)`, com separação de domínio e o
+  segredo do webchat (`PLUGHUB_JWT_SECRET`).
+- **O `session_id` não aparece na URL.** A porta o lê do registro do anexo, então um link de uma
+  sessão não abre arquivo de outra.
+- **Vale 1 h** (`ATTACHMENT_URL_TTL_S`).
+- **Respostas da porta:** sem assinatura, ou com assinatura errada, 404, igual a id desconhecido
+  (sem oráculo); vencida, 403 `link_expired`.
+- **A URL é cunhada na ENTREGA, nunca copiada da gravada.** São três lugares: o `upload.committed`,
+  a mídia do webchat (`_handle_media`) e o `StreamSubscriber`, que recebe um `url_signer` e recunha
+  pelo `file_id` a cada entrega ao widget. Uma reconexão, portanto, renova os links.
+- **Sem segredo, não há URL**: o anexo vai sem link, e o motivo vai ao log em `ERROR`. Nunca sai uma
+  URL nua.
+
+A `url` que já estava gravada no histórico durável e no Kafka deixa de abrir, de propósito: nenhum
+leitor da plataforma a usa desde a ATT-02. De passagem, o cliente de teste `infra/webchat-client`
+deixou de mandar a URL como legenda, o que a fazia parar no texto do transcript.
 
 ### Quem atende vê pela porta INTERNA (ATT-02, 2026-10-01)
 

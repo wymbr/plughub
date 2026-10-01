@@ -667,7 +667,10 @@ class TestMediaMessages:
         evs = await self._media_events("meu", mock_producer, registry, context_reader, settings, mock_redis)
         p = evs[0]["content"]["payload"]
         assert (p["file_name"], p["mime_type"], p["size_bytes"]) == ("contrato.pdf", "application/pdf", 1234)
-        assert p["url"].endswith("/attachments/meu")
+        # ATT-03: o link e ASSINADO — caminho do arquivo + exp + sig, cunhado na entrega
+        caminho, _, query = p["url"].partition("?")
+        assert caminho.endswith("/attachments/meu")
+        assert "exp=" in query and "sig=" in query
 
     async def test_file_of_another_session_is_refused(
         self, mock_producer, registry, context_reader, settings, mock_redis, caplog

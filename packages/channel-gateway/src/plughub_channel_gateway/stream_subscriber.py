@@ -29,7 +29,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 import redis.asyncio as aioredis
 
@@ -86,7 +86,11 @@ class StreamSubscriber:
         session_id: str,
         cursor:     str = "0",
         customer_participant_id: str = "",
+        url_signer: "Callable[[str], str] | None" = None,
     ) -> None:
+        # ATT-03: quem entrega ao widget CUNHA a URL do anexo pelo `file_id` (assinada, curta).
+        # Copiar a `url` gravada no stream entregaria um link vencido — ou nu, que a porta recusa.
+        self._url_signer = url_signer
         self._redis      = redis
         self._stream_key = f"session:{session_id}:stream"
         self._closed_key = f"session:{session_id}:closed"
@@ -243,6 +247,12 @@ class StreamSubscriber:
         # não são entregues ao cliente na fase 1
         return None
 
+    def _attachment_url(self, content: dict) -> str:
+        fid = content.get("file_id") or ""
+        if self._url_signer is not None and fid:
+            return self._url_signer(str(fid))
+        return content.get("url", "")
+
     def _map_message(self, decoded: dict) -> dict | None:
         """Mapeia evento 'message' para o tipo WebSocket correto.
 
@@ -325,7 +335,7 @@ class StreamSubscriber:
                 **base,
                 "type":          "msg.image",
                 "file_id":       content.get("file_id", ""),
-                "url":           content.get("url", ""),
+                "url":           self._attachment_url(content),
                 "mime_type":     content.get("mime_type", ""),
                 "original_name": content.get("original_name", ""),
                 "size_bytes":    content.get("size_bytes", 0),
@@ -339,7 +349,7 @@ class StreamSubscriber:
                 **base,
                 "type":          "msg.document",
                 "file_id":       content.get("file_id", ""),
-                "url":           content.get("url", ""),
+                "url":           self._attachment_url(content),
                 "mime_type":     content.get("mime_type", ""),
                 "original_name": content.get("original_name", ""),
                 "size_bytes":    content.get("size_bytes", 0),
@@ -352,7 +362,7 @@ class StreamSubscriber:
                 **base,
                 "type":           "msg.video",
                 "file_id":        content.get("file_id", ""),
-                "url":            content.get("url", ""),
+                "url":            self._attachment_url(content),
                 "mime_type":      content.get("mime_type", ""),
                 "original_name":  content.get("original_name", ""),
                 "size_bytes":     content.get("size_bytes", 0),

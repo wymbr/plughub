@@ -45,7 +45,7 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ..attachment_store import AttachmentStore, FilesystemAttachmentStore
+from ..attachment_store import AttachmentStore, FilesystemAttachmentStore, sign_attachment_url
 from ..config import Settings
 from ..context_reader import ContextReader
 from ..models import (
@@ -558,6 +558,9 @@ class WebchatAdapter:
             session_id               = self._session_id,
             cursor                   = self._initial_cursor,
             customer_participant_id   = self._customer_participant_id,
+            url_signer               = lambda fid: sign_attachment_url(
+                self._settings.webchat_serving_base_url, fid, str(self._session_id),
+                secret=self._settings.jwt_secret),
         )
         try:
             async for msg in subscriber.messages():
@@ -705,7 +708,10 @@ class WebchatAdapter:
                 "file_name":  getattr(meta, "original_name", None),
                 "mime_type":  getattr(meta, "mime_type", None),
                 "size_bytes": getattr(meta, "size_bytes", None),
-                "url":        getattr(meta, "serving_url", None),
+                # ATT-03: assinada e curta; quem atende não usa esta URL (ATT-02, por file_id)
+                "url":        sign_attachment_url(
+                    self._settings.webchat_serving_base_url, str(file_id), str(self._session_id),
+                    secret=self._settings.jwt_secret) or None,
             }
 
         snapshot = await self._context_reader.get_snapshot(self._session_id)

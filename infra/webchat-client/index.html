@@ -613,7 +613,8 @@ function handleUploadCommitted(msg) {
   if (mime.startsWith('video/')) type = 'msg.video';
 
   const sendPayload = JSON.stringify({
-    type, id: 'msg-' + Date.now(), file_id: msg.file_id, caption: msg.url
+    // ATT-03: a URL NAO e legenda — ia parar no texto do transcript, no ClickHouse e no masking
+    type, id: 'msg-' + Date.now(), file_id: msg.file_id
   });
   ws.send(sendPayload);
   log('→ ' + type + ' file_id=' + msg.file_id, 'send');

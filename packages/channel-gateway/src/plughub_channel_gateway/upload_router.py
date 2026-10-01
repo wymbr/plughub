@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from . import main as _main_module  # for access to _attachment_store + _registry
@@ -38,12 +38,24 @@ from .attachment_store import (
     SERVE_SECURITY_HEADERS,
     content_disposition,
     served_media_type,
+    sign_attachment_url,
+    verify_attachment_signature,
 )
 from .usage_emitter import emit_attachment
 
 logger = logging.getLogger("plughub.channel-gateway.upload")
 
 router = APIRouter(prefix="/webchat/v1")
+
+
+def public_attachment_url(file_id: str, session_id: str) -> str:
+    """A URL da porta pública para ESTE anexo desta sessão, assinada agora (ATT-03)."""
+    s = _main_module.get_settings()
+    url = sign_attachment_url(s.webchat_serving_base_url, file_id, session_id, secret=s.jwt_secret)
+    if not url:
+        logger.error("ATT-03: sem PLUGHUB_JWT_SECRET o anexo %s sai SEM link (nao ha como assinar)",
+                     file_id)
+    return url
 
 
 # ── POST /webchat/v1/upload/{file_id} ─────────────────────────────────────────
@@ -86,7 +98,8 @@ async def upload_file(file_id: str, request: Request) -> Response:
     committed_msg = {
         "type":         "upload.committed",
         "file_id":      meta.file_id,
-        "url":          meta.serving_url,
+        # ATT-03: a URL que o cliente recebe é ASSINADA e curta, cunhada aqui
+        "url":          public_attachment_url(meta.file_id, meta.session_id),
         "mime_type":    meta.mime_type,
         "size_bytes":   meta.size_bytes,
         "content_type": content_type,
@@ -122,10 +135,17 @@ async def upload_file(file_id: str, request: Request) -> Response:
 # ── GET /webchat/v1/attachments/{file_id} ─────────────────────────────────────
 
 @router.get("/attachments/{file_id}")
-async def serve_attachment(file_id: str) -> StreamingResponse:
+async def serve_attachment(
+    file_id: str,
+    exp: str | None = Query(None),
+    sig: str | None = Query(None),
+) -> StreamingResponse:
     """
-    Streams the binary content of a committed attachment.
-    The file_id is the capability token — no additional auth required in phase 1.
+    Streams the binary content of a committed attachment — to whoever holds a SIGNED URL.
+
+    ATT-03 (2026-10-01): the bare `file_id` stopped being the credential. The URL carries `exp` and
+    `sig` over `(file_id, session_id, exp)`; missing or wrong signature answers like an unknown id
+    (404, no existence oracle), an expired one answers 403 `link_expired`.
     """
     store    = _main_module._attachment_store
     settings = _main_module.get_settings()
@@ -143,6 +163,14 @@ async def serve_attachment(file_id: str) -> StreamingResponse:
     if klass != "webchat_attachment":
         logger.warning("attachment %s de classe %s RECUSADO na porta publica de anexos",
                        file_id, klass)
+        raise HTTPException(status_code=404, detail="not found")
+    motivo = verify_attachment_signature(file_id, str(meta.session_id), exp, sig,
+                                         secret=settings.jwt_secret)
+    if motivo == "expired":
+        raise HTTPException(status_code=403, detail="link_expired")
+    if motivo is not None:
+        logger.warning("ATT-03: anexo %s pedido na porta publica com assinatura %s — 404",
+                       file_id, motivo)
         raise HTTPException(status_code=404, detail="not found")
     if meta.deleted_at is not None:
         raise HTTPException(status_code=410, detail="attachment expired")
