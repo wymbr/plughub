@@ -1,5 +1,58 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-01 (18) — AUT-71: o tenant de toda gestão no auth-api é o do token
+
+Achado da AAS-08 ao montar um segundo tenant: o auth-api gravava usuário no tenant do **corpo**.
+Medido antes de mexer, o furo era bem maior que as três rotas da ficha. Com o token do admin do
+`tenant_demo`, contra outro tenant:
+
+- `POST /auth/users` → **201** (usuário criado lá; com `roles: ["admin"]` é tomada do tenant);
+- `GET /auth/users?tenant_id=<outro>` → 200, com os usuários de lá;
+- `GET /auth/users/{id}` e `…/module-config` → 200;
+- `GET /auth/templates?tenant_id=<outro>` e `GET /auth/v1/groups?tenant_id=<outro>` → 200.
+
+**Por quê.** O ABAC responde *"pode administrar pessoas"* (`config.users`) e o `admin` passa pelo
+organograma por definição (`_irrestrito_para_pessoas`, AUT-39). Nenhuma rota de gestão perguntava
+*"de qual tenant"*: irrestrito DENTRO do tenant virou irrestrito na instalação. Agravantes que a
+varredura achou:
+- as listagens tinham **default fixo `"tenant_demo"`** — sem `?tenant_id=`, qualquer tenant lia o
+  do demo;
+- o grupo de nascimento (AUT-44) dizia *"não existe neste tenant"* sem olhar o tenant;
+- os grupos aceitavam pôr usuário de outro tenant como membro ou supervisor — e o
+  `supervised_user_ids` do token levaria o escopo junto;
+- `POST /auth/modules` é upsert por `module_id`: um tenant sobrescrevia módulo de PLATAFORMA só
+  por repetir o id, e `PATCH …/active` desligava módulo de plataforma para todos.
+
+**O conserto é uma casa** (`tenant_scope.py`: `claims_tenant` · `same_tenant` · `own_row`),
+aplicada em 27 rotas — 9 de usuário e module-config, 5 de template, 11 de grupo, 2 de módulo:
+- tenant declarado no corpo ou na query diferente do token → **403 `tenant_mismatch`** (o chamador
+  escreveu o outro tenant; dizer que é proibido não revela nada);
+- linha por id de outro tenant → **404**, igual a inexistente (403 confirmaria que o id existe
+  noutro tenant — a regra da AUT-63);
+- módulo de plataforma → **403 `platform_module_write`** (nasce do `modules.yaml` no boot, nunca
+  de token); `module_id` alheio → **409**;
+- token sem tenant → **403 `tenant_claim_missing`**, nunca *"sem tenant = todos"*.
+
+O `tenant_id` do corpo continua OBRIGATÓRIO (não virou default do token): os chamadores reais —
+telas de Acesso e Grupos, `seed_auth.py` — já o mandam igual ao do token, e conferir o que veio é
+mais fácil de provar que reescrever o que não veio. O `agent_principals` (AAS-04) já nasceu
+tirando o tenant do token e não mudou.
+
+**Gates.** `probe_aut71_tenant_scope.sh` (AUTO) monta a vítima `probe_aut71_outro` como o
+`auth-seed` monta uma instalação e ataca com o admin do demo: A declarado divergente (403, e a
+VÍTIMA confere que nada nasceu lá) · B linha por id (404, e a vítima confere que nada mudou) · C
+módulo de plataforma · D controles positivos — a vítima administra o dela e as chamadas das telas
+seguem 200. `mut_aut71_tenant_scope.sh`: 5/5 pelo ramo declarado, duas vezes — M3 e M4 tiram a
+conferência de UMA rota só, porque derrubar a casa inteira qualquer ramo pega. A bateria deixa
+intruso na vítima; o probe passou a limpar a sobra ANTES de medir (a 1ª rodada mostrou o 409 da
+sobra no lugar do 201). Não medido ao vivo e declarado: a volta do default `"tenant_demo"` (o
+atacante do probe É do demo) — guardada por `test_aut71_tenant_scope.py` (42 testes, asserta o
+tenant passado ao banco). Suíte do auth-api 166/166; `test_delete_template` passou a mockar a
+leitura que a rota agora faz. O usuário criado na medição da AAS-08 foi apagado pela API.
+
+`docs/arcos/arc7-auth.md` § Endpoints dizia `X-Admin-Token` nas rotas de usuário — falso desde
+2026-06-26 — e foi corrigido junto.
+
 ## 2026-10-01 (17) — AAS-08: os dois SDKs oficiais do A2A falam com o canal, e outro tenant para na porta
 
 Fase A6 do `adr-a2a-server-binding`, a parte que se mede sem conta de terceiro (decisão do dono):

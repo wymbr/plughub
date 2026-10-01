@@ -76,12 +76,33 @@ Token opaco de 43 chars URL-safe (~258 bits de entropia). Armazenado como SHA-25
 | `POST` | `/auth/refresh` | body refresh_token | Rotation → novo par |
 | `POST` | `/auth/logout` | body refresh_token | Invalida refresh_token (idempotente) |
 | `GET` | `/auth/me` | Bearer | Claims do access token |
-| `GET` | `/auth/users` | X-Admin-Token | Lista usuários do tenant |
-| `POST` | `/auth/users` | X-Admin-Token | Cria usuário |
-| `GET` | `/auth/users/{id}` | X-Admin-Token | Detalhe do usuário |
-| `PATCH` | `/auth/users/{id}` | X-Admin-Token | Atualiza usuário (name, password, roles, accessible_pools, active) |
-| `DELETE` | `/auth/users/{id}` | X-Admin-Token | Remove usuário |
+| `GET` | `/auth/users` | Bearer `config.users` (leitura) | Lista usuários do tenant DO TOKEN |
+| `POST` | `/auth/users` | Bearer `config.users` + guarda de concessão | Cria usuário (`tenant_id` do corpo = o do token) |
+| `GET` | `/auth/users/{id}` | Bearer `config.users` (leitura) | Detalhe do usuário |
+| `PATCH` | `/auth/users/{id}` | Bearer `config.users` | Atualiza usuário (name, password, roles, accessible_pools, active) |
+| `DELETE` | `/auth/users/{id}` | Bearer `config.users` | Remove usuário |
 | `GET` | `/health` | — | Healthcheck |
+
+> *Corrigido em 2026-10-01 (AUT-71).* A coluna dizia `X-Admin-Token`, e isso é falso desde
+> 2026-06-26 (G-PROBE: gestão autoriza pelo JWT + ABAC, sem fallback de admin-token).
+
+**O tenant de toda gestão é o do TOKEN (AUT-71, 2026-10-01).** Usuários, templates, grupos,
+`module_config` e módulos de plugin. Casa única: `tenant_scope.py` (`same_tenant` · `own_row`).
+- `tenant_id` declarado no corpo ou na query diferente do token → **403 `tenant_mismatch`**;
+  ausente vale o do token (as listagens tinham default fixo `"tenant_demo"`).
+- Linha buscada por id que é de outro tenant → **404**, igual a inexistente (não confirma que o
+  id existe noutro tenant). Vale também para o MEMBRO e o SUPERVISOR posto num grupo.
+- Módulo de PLATAFORMA (`tenant_id` nulo) nasce do `modules.yaml` no boot e não se grava nem se
+  liga/desliga por token de tenant (**403 `platform_module_write`**); repetir o `module_id` de
+  módulo alheio é **409** (o upsert é por `module_id`).
+- Token sem `tenant_id` → **403 `tenant_claim_missing`**.
+
+Por que existia o furo: o ABAC responde *"pode administrar pessoas"*, e o `admin` passa pelo
+organograma por definição (`_irrestrito_para_pessoas`) — irrestrito DENTRO do tenant virou
+irrestrito na instalação, porque nenhuma rota perguntava *"de qual tenant"*. Medido ao vivo antes
+do conserto: o admin do `tenant_demo` criou usuário noutro tenant (201) e leu usuários, fichas,
+`module_config`, templates e grupos de lá. Gate: `infra/test/probe_aut71_tenant_scope.sh`
+(bateria `mut_aut71_tenant_scope.sh`).
 
 ### Seed automático
 

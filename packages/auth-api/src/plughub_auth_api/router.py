@@ -25,6 +25,7 @@ from . import db as db_mod
 from . import grants
 from . import presets as presets_mod
 from . import permissions as perms_mod
+from . import tenant_scope as ts
 from .config import Settings, get_settings
 from .jwt_utils import (
     create_access_token,
@@ -424,6 +425,10 @@ async def _grupos_de_nascimento(
                 existe = await db_mod.get_group(pool, gid)
             except Exception:            # uuid mal formado cai aqui
                 existe = None
+            # AUT-71: a mensagem dizia "neste tenant" e o codigo nao olhava o tenant —
+            # grupo de OUTRO tenant passava e a pessoa nascia membro dele.
+            if existe and str(existe.get("tenant_id") or "") != ts.claims_tenant(claims):
+                existe = None
             if not existe:
                 raise HTTPException(
                     status_code=422,
@@ -643,6 +648,7 @@ async def create_user(
     claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
 ) -> UserResponse:
     pool = _get_pool(request)
+    ts.same_tenant(claims, body.tenant_id, "criar usuario")   # AUT-71: antes de qualquer leitura
     # MOD-02/E2: nascer com papel/escopo e CONCEDER. O master passa direto; o
     # delegado passa pelo guard de RANK.
     #
@@ -737,9 +743,8 @@ async def create_user_from_template(
     claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
 ) -> UserResponse:
     pool = _get_pool(request)
-    linha = await perms_mod.get_template(pool, template_id)
-    if not linha:
-        raise HTTPException(status_code=404, detail="Template not found")
+    ts.same_tenant(claims, body.tenant_id, "criar usuario por template")
+    linha = ts.own_row(claims, await perms_mod.get_template(pool, template_id), "Template")
     cfg = linha.get("config")
     if isinstance(cfg, str):
         cfg = json.loads(cfg)
@@ -810,12 +815,14 @@ async def create_user_from_template(
             dependencies=[Depends(_USUARIOS_READ)])
 async def list_users(
     request: Request,
-    tenant_id: str = "tenant_demo",
+    tenant_id: str | None = None,
     limit: int = 100,
     offset: int = 0,
     claims: dict[str, Any] = Depends(_USUARIOS_READ),
 ) -> list[UserResponse]:
     pool = _get_pool(request)
+    # AUT-71: o default era `"tenant_demo"` — sem `?tenant_id=`, qualquer tenant lia o do demo.
+    tenant_id = ts.same_tenant(claims, tenant_id, "listar usuarios")
     # `None` = sem recorte (admin). Caso contrario, o organograma decide — e ele
     # decide no SQL, nunca depois do LIMIT.
     quem = None if _irrestrito_para_pessoas(claims) else str(claims.get("sub") or "")
@@ -832,9 +839,7 @@ async def get_user(
     claims: dict[str, Any] = Depends(_USUARIOS_READ),
 ) -> UserResponse:
     pool = _get_pool(request)
-    row = await db_mod.get_user_by_id(pool, user_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="User not found")
+    row = ts.own_row(claims, await db_mod.get_user_by_id(pool, user_id), "User")
     await _assert_pode_administrar(pool, claims, row, "ver")
     return _user_to_response(row)
 
@@ -848,10 +853,8 @@ async def update_user(
     claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
 ) -> UserResponse:
     pool = _get_pool(request)
-    # Garante que o usuário existe
-    existing = await db_mod.get_user_by_id(pool, user_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Garante que o usuário existe — e é do tenant do token (AUT-71)
+    existing = ts.own_row(claims, await db_mod.get_user_by_id(pool, user_id), "User")
     if set(body.model_fields_set) & _CAPACITY_FIELDS:
         await _assert_pode_conceder(
             pool, claims, "editar usuario",
@@ -888,17 +891,18 @@ async def delete_user(
     claims: dict[str, Any] = Depends(_USUARIOS_WRITE),
 ) -> None:
     pool = _get_pool(request)
-    alvo = await db_mod.get_user_by_id(pool, user_id)
-    if alvo:
-        await _assert_pode_administrar(pool, claims, alvo, "remover")
-        _assert_may_touch(claims, alvo, "remover")
+    # AUT-71: a linha tem de existir E ser do tenant do token ANTES do DELETE. O codigo
+    # anterior so guardava "se existe" e deixava o DELETE decidir o 404 — e o DELETE nao
+    # olha tenant.
+    alvo = ts.own_row(claims, await db_mod.get_user_by_id(pool, user_id), "User")
+    await _assert_pode_administrar(pool, claims, alvo, "remover")
+    _assert_may_touch(claims, alvo, "remover")
     deleted = await db_mod.delete_user(pool, user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="User not found")
     # A trilha sobrevive ao alvo: `user_admin_log.target_id` nao tem FK, senao o
     # CASCADE apagaria o registro de quem apagou.
-    if alvo:
-        await _registrar_trilha(pool, claims, alvo, "delete", [])
+    await _registrar_trilha(pool, claims, alvo, "delete", [])
 
 
 # ─── Platform permissions — REMOVIDO em 2026-08-30 ───────────────────────────
@@ -937,8 +941,12 @@ def _tmpl_to_response(row: dict[str, Any]) -> TemplateResponse:
 
 @router.post("/templates", response_model=TemplateResponse, status_code=201,
              dependencies=[Depends(_PERMS_WRITE)])
-async def create_template(body: CreateTemplateRequest, request: Request) -> TemplateResponse:
+async def create_template(
+    body: CreateTemplateRequest, request: Request,
+    claims: dict[str, Any] = Depends(_PERMS_WRITE),
+) -> TemplateResponse:
     pool = _get_pool(request)
+    ts.same_tenant(claims, body.tenant_id, "criar template")   # AUT-71
     row = await perms_mod.create_template(
         pool,
         tenant_id=body.tenant_id,
@@ -953,20 +961,23 @@ async def create_template(body: CreateTemplateRequest, request: Request) -> Temp
             dependencies=[Depends(_PERMS_READ)])
 async def list_templates(
     request: Request,
-    tenant_id: str = "tenant_demo",
+    tenant_id: str | None = None,
+    claims: dict[str, Any] = Depends(_PERMS_READ),
 ) -> list[TemplateResponse]:
     pool = _get_pool(request)
+    tenant_id = ts.same_tenant(claims, tenant_id, "listar templates")   # AUT-71
     rows = await perms_mod.list_templates(pool, tenant_id)
     return [_tmpl_to_response(r) for r in rows]
 
 
 @router.get("/templates/{template_id}", response_model=TemplateResponse,
             dependencies=[Depends(_PERMS_READ)])
-async def get_template(template_id: str, request: Request) -> TemplateResponse:
+async def get_template(
+    template_id: str, request: Request,
+    claims: dict[str, Any] = Depends(_PERMS_READ),
+) -> TemplateResponse:
     pool = _get_pool(request)
-    row = await perms_mod.get_template(pool, template_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Template not found")
+    row = ts.own_row(claims, await perms_mod.get_template(pool, template_id), "Template")
     return _tmpl_to_response(row)
 
 
@@ -976,11 +987,10 @@ async def update_template(
     template_id: str,
     body: UpdateTemplateRequest,
     request: Request,
+    claims: dict[str, Any] = Depends(_PERMS_WRITE),
 ) -> TemplateResponse:
     pool = _get_pool(request)
-    existing = await perms_mod.get_template(pool, template_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Template not found")
+    ts.own_row(claims, await perms_mod.get_template(pool, template_id), "Template")
     row = await perms_mod.update_template(
         pool, template_id,
         name=body.name, description=body.description, config=body.config,
@@ -990,8 +1000,12 @@ async def update_template(
 
 @router.delete("/templates/{template_id}", status_code=204,
                dependencies=[Depends(_PERMS_WRITE)])
-async def delete_template(template_id: str, request: Request) -> None:
+async def delete_template(
+    template_id: str, request: Request,
+    claims: dict[str, Any] = Depends(_PERMS_WRITE),
+) -> None:
     pool = _get_pool(request)
+    ts.own_row(claims, await perms_mod.get_template(pool, template_id), "Template")   # AUT-71
     deleted = await perms_mod.delete_template(pool, template_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -1102,7 +1116,10 @@ async def get_module(
 
 @router.post("/modules", response_model=dict, status_code=201,
              dependencies=[Depends(_PERMS_WRITE)])
-async def register_module(body: dict, request: Request) -> dict:
+async def register_module(
+    body: dict, request: Request,
+    claims: dict[str, Any] = Depends(_PERMS_WRITE),
+) -> dict:
     """
     Registra ou atualiza um módulo (upsert por module_id).
     Usado por plugins para declarar seus módulos e permission_schemas.
@@ -1112,6 +1129,21 @@ async def register_module(body: dict, request: Request) -> dict:
     module_id: str = body.get("module_id", "")
     if not module_id:
         raise HTTPException(status_code=422, detail="module_id is required")
+    # AUT-71: modulo de PLATAFORMA (`tenant_id` nulo) vale para TODOS os tenants e nasce
+    # do `modules.yaml` no boot (`_register_platform_modules`), nunca desta rota — um
+    # token de tenant que o gravasse mudaria o catalogo de toda a instalacao. E o upsert
+    # e por `module_id`: sem a conferencia abaixo, um tenant sobrescreveria o modulo de
+    # plataforma (ou o de outro tenant) so por repetir o id.
+    if not body.get("tenant_id"):
+        logger.warning("modules RECUSA: %s tentou gravar modulo de PLATAFORMA `%s`",
+                       claims.get("sub"), module_id)
+        raise HTTPException(status_code=403, detail="platform_module_write")
+    tenant = ts.same_tenant(claims, str(body.get("tenant_id")), "registrar modulo")
+    atual = await db_mod.get_module(pool, module_id)
+    if atual and str(atual.get("tenant_id") or "") != tenant:
+        logger.warning("modules RECUSA: %s (tenant %s) repetiu o module_id `%s`, que nao e dele",
+                       claims.get("sub"), tenant, module_id)
+        raise HTTPException(status_code=409, detail="module_id_unavailable")
     row = await db_mod.upsert_module(
         pool,
         module_id=module_id,
@@ -1119,7 +1151,7 @@ async def register_module(body: dict, request: Request) -> dict:
         icon=body.get("icon", "📦"),
         nav_path=body.get("nav_path", ""),
         schema=body.get("permission_schema", {}),
-        tenant_id=body.get("tenant_id"),  # None = platform-wide
+        tenant_id=tenant,
         active=body.get("active", True),
     )
     return _module_to_dict(row)
@@ -1127,8 +1159,18 @@ async def register_module(body: dict, request: Request) -> dict:
 
 @router.patch("/modules/{module_id}/active", response_model=dict,
               dependencies=[Depends(_PERMS_WRITE)])
-async def set_module_active(module_id: str, request: Request, active: bool = True) -> dict:
+async def set_module_active(
+    module_id: str, request: Request, active: bool = True,
+    claims: dict[str, Any] = Depends(_PERMS_WRITE),
+) -> dict:
     pool = _get_pool(request)
+    # AUT-71: desligar modulo de plataforma desligaria o de todos os tenants
+    atual = await db_mod.get_module(pool, module_id)
+    if atual and not atual.get("tenant_id"):
+        logger.warning("modules RECUSA: %s tentou %s o modulo de PLATAFORMA `%s`",
+                       claims.get("sub"), "ligar" if active else "desligar", module_id)
+        raise HTTPException(status_code=403, detail="platform_module_write")
+    ts.own_row(claims, atual, "Module")
     ok = await db_mod.set_module_active(pool, module_id, active)
     if not ok:
         raise HTTPException(status_code=404, detail="Module not found")
@@ -1159,13 +1201,14 @@ async def set_module_active(module_id: str, request: Request, active: bool = Tru
 # hidratado com o que o chamador nao pode ver salvaria por cima com o vazio.
 @router.get("/users/{user_id}/module-config", response_model=dict,
             dependencies=[Depends(_USUARIOS_READ)])
-async def get_user_module_config(user_id: str, request: Request) -> dict:
+async def get_user_module_config(
+    user_id: str, request: Request,
+    claims: dict[str, Any] = Depends(_USUARIOS_READ),
+) -> dict:
     """Retorna o module_config completo do usuário."""
     pool = _get_pool(request)
-    # Verifica existência
-    existing = await db_mod.get_user_by_id(pool, user_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Verifica existência — e o tenant (AUT-71)
+    ts.own_row(claims, await db_mod.get_user_by_id(pool, user_id), "User")
     cfg = await db_mod.get_user_module_config(pool, user_id)
     return cfg
 
@@ -1182,9 +1225,7 @@ async def set_user_module_config(
     Retorna 422 se houver violações de schema.
     """
     pool = _get_pool(request)
-    existing = await db_mod.get_user_by_id(pool, user_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="User not found")
+    existing = ts.own_row(claims, await db_mod.get_user_by_id(pool, user_id), "User")   # AUT-71
 
     # MOD-02/E2 — a SEGUNDA porta. Ate aqui esta rota exigia `config.permissions` e
     # NAO comparava nada com o config do chamador: quem a alcancasse concedia
@@ -1243,7 +1284,7 @@ async def patch_user_module_config(
     # MOD-02/E2: mesma porta, mesmo predicado. O corpo aqui e o config de UM modulo,
     # entao ele viaja embrulhado com a chave do modulo — o guard raciocina sobre
     # `modulo.campo`, e passar o corpo cru faria os campos virarem modulos.
-    alvo = await db_mod.get_user_by_id(pool, user_id)
+    alvo = ts.own_row(claims, await db_mod.get_user_by_id(pool, user_id), "User")   # AUT-71
     if alvo:
         _assert_may_touch(claims, alvo, "escrever o module_config")
         await _assert_pode_conceder(

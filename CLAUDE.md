@@ -1214,6 +1214,12 @@ ponto em que a ordem do `py-authz` e a lista indexada da UI discordavam)*;
   o papel depois não reescreve grants, e múltiplos papéis rendem o MAIOR acesso por campo.
 - **O catálogo de módulos (`GET /auth/modules`) não é público** (AUT-69): exige Bearer com
   `config.users` ou `config.permissions`, e o tenant é o do token. Ele descreve quem vê o quê.
+- **O tenant de toda GESTÃO no auth-api é o do token** (AUT-71) — usuários, templates, grupos,
+  `module_config`, módulos. `admin` é irrestrito DENTRO do tenant, nunca na instalação: até
+  2026-10-01 nenhuma rota de gestão perguntava *"de qual tenant"*, e o admin de um tenant criava
+  e lia gente de outro. Casa única `tenant_scope.py`: tenant declarado divergente é 403, linha
+  alheia por id é 404, módulo de plataforma não se grava por token. Gate:
+  `probe_aut71_tenant_scope.sh`.
 - **O menu tem um portão só, e ele é GRANT-FIRST.** Ausência de grants nunca é autorização — mesma
   inversão de `accessible_pools`, pela mesma razão.
 - **ESCOPO e CAPACIDADE são eixos distintos**, e um claim de escopo nunca concede capacidade.

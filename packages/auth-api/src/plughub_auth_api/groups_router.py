@@ -35,12 +35,38 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from . import db as db_mod
+from . import tenant_scope as ts
 from .config import Settings, get_settings
 # G-PROBE platform-wide: grupos autorizam pelo JWT do operador + ABAC `config.usuarios`
 # (mesmo gate de users/permissions); sem fallback de admin-token.
 from .router import _PERMS_WRITE, _USUARIOS_READ, _USUARIOS_WRITE
 
 logger = logging.getLogger("plughub.auth_api.groups")
+
+Claims = dict[str, Any]
+
+
+async def _own_group(pool: asyncpg.Pool, claims: Claims, group_id: str) -> dict[str, Any]:
+    """AUT-71: grupo por id é do tenant do token, ou 404 — como inexistente.
+
+    Antes nenhuma rota daqui olhava o tenant: o admin de um tenant listava, lia,
+    editava e apagava os grupos de outro, e (pior) punha usuário dele num grupo de lá.
+    """
+    try:
+        row = await db_mod.get_group(pool, group_id)
+    except ValueError:                   # uuid mal formado: o mesmo 404 do inexistente
+        row = None
+    return ts.own_row(claims, row, "Group")
+
+
+async def _own_user(pool: asyncpg.Pool, claims: Claims, user_id: str) -> dict[str, Any]:
+    """Membro ou supervisor tem de ser usuário do MESMO tenant (senão o organograma
+    cruza tenants, e o `supervised_user_ids` do token leva o escopo junto)."""
+    try:
+        row = await db_mod.get_user_by_id(pool, user_id)
+    except ValueError:
+        row = None
+    return ts.own_row(claims, row, "User")
 
 groups_router = APIRouter(prefix="/auth/v1/groups", tags=["groups"])
 
@@ -103,17 +129,23 @@ class AddSupervisorRequest(BaseModel):
                    dependencies=[Depends(_USUARIOS_READ)])
 async def list_groups(
     request: Request,
-    tenant_id: str = "tenant_demo",
+    tenant_id: str | None = None,
+    claims: Claims = Depends(_USUARIOS_READ),
 ) -> list[dict]:
     pool = _get_pool(request)
+    tenant_id = ts.same_tenant(claims, tenant_id, "listar grupos")
     rows = await db_mod.list_groups(pool, tenant_id)
     return [_serialize_group(r) for r in rows]
 
 
 @groups_router.post("", response_model=dict, status_code=201,
                     dependencies=[Depends(_USUARIOS_WRITE)])
-async def create_group(body: CreateGroupRequest, request: Request) -> dict:
+async def create_group(
+    body: CreateGroupRequest, request: Request,
+    claims: Claims = Depends(_USUARIOS_WRITE),
+) -> dict:
     pool = _get_pool(request)
+    ts.same_tenant(claims, body.tenant_id, "criar grupo")
     row = await db_mod.create_group(
         pool,
         tenant_id=body.tenant_id,
@@ -125,11 +157,12 @@ async def create_group(body: CreateGroupRequest, request: Request) -> dict:
 
 @groups_router.get("/{group_id}", response_model=dict,
                    dependencies=[Depends(_USUARIOS_READ)])
-async def get_group(group_id: str, request: Request) -> dict:
+async def get_group(
+    group_id: str, request: Request,
+    claims: Claims = Depends(_USUARIOS_READ),
+) -> dict:
     pool = _get_pool(request)
-    row = await db_mod.get_group(pool, group_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Group not found")
+    row = await _own_group(pool, claims, group_id)
     # Enrich with users (members) and supervisors
     users     = await db_mod.list_group_users(pool, group_id)
     supers    = await db_mod.list_group_supervisors(pool, group_id)
@@ -145,8 +178,10 @@ async def update_group(
     group_id: str,
     body: UpdateGroupRequest,
     request: Request,
+    claims: Claims = Depends(_USUARIOS_WRITE),
 ) -> dict:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
     row = await db_mod.update_group(pool, group_id, name=body.name, description=body.description)
     if not row:
         raise HTTPException(status_code=404, detail="Group not found")
@@ -155,8 +190,12 @@ async def update_group(
 
 @groups_router.delete("/{group_id}", status_code=204,
                       dependencies=[Depends(_USUARIOS_WRITE)])
-async def delete_group(group_id: str, request: Request) -> None:
+async def delete_group(
+    group_id: str, request: Request,
+    claims: Claims = Depends(_USUARIOS_WRITE),
+) -> None:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
     deleted = await db_mod.delete_group(pool, group_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Group not found")
@@ -166,8 +205,12 @@ async def delete_group(group_id: str, request: Request) -> None:
 
 @groups_router.get("/{group_id}/users", response_model=list[dict],
                    dependencies=[Depends(_USUARIOS_READ)])
-async def list_users(group_id: str, request: Request) -> list[dict]:
+async def list_users(
+    group_id: str, request: Request,
+    claims: Claims = Depends(_USUARIOS_READ),
+) -> list[dict]:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
     rows = await db_mod.list_group_users(pool, group_id)
     return [_serialize_user(r) for r in rows]
 
@@ -178,8 +221,11 @@ async def add_user(
     group_id: str,
     body: AddUserRequest,
     request: Request,
+    claims: Claims = Depends(_USUARIOS_WRITE),
 ) -> dict:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
+    await _own_user(pool, claims, body.user_id)
     row = await db_mod.add_group_user(pool, group_id, body.user_id)
     return _serialize_user(row)
 
@@ -190,8 +236,10 @@ async def remove_user(
     group_id: str,
     user_id: str,
     request: Request,
+    claims: Claims = Depends(_USUARIOS_WRITE),
 ) -> None:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
     await db_mod.remove_group_user(pool, group_id, user_id)
 
 
@@ -199,8 +247,12 @@ async def remove_user(
 
 @groups_router.get("/{group_id}/supervisors", response_model=list[dict],
                    dependencies=[Depends(_USUARIOS_READ)])
-async def list_supervisors(group_id: str, request: Request) -> list[dict]:
+async def list_supervisors(
+    group_id: str, request: Request,
+    claims: Claims = Depends(_USUARIOS_READ),
+) -> list[dict]:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
     rows = await db_mod.list_group_supervisors(pool, group_id)
     return [_serialize_user(r) for r in rows]
 
@@ -219,8 +271,11 @@ async def add_supervisor(
     group_id: str,
     body: AddSupervisorRequest,
     request: Request,
+    claims: Claims = Depends(_PERMS_WRITE),
 ) -> dict:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
+    await _own_user(pool, claims, body.user_id)
     row = await db_mod.add_group_supervisor(pool, group_id, body.user_id)
     return _serialize_user(row)
 
@@ -231,6 +286,8 @@ async def remove_supervisor(
     group_id: str,
     user_id: str,
     request: Request,
+    claims: Claims = Depends(_PERMS_WRITE),
 ) -> None:
     pool = _get_pool(request)
+    await _own_group(pool, claims, group_id)
     await db_mod.remove_group_supervisor(pool, group_id, user_id)

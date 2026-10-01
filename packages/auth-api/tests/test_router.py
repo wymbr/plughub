@@ -1127,9 +1127,12 @@ class TestTemplates:
 
     def test_delete_template(self, client):
         c, _ = client
-        with patch("plughub_auth_api.router.perms_mod.delete_template",
+        # AUT-71: a rota confere o tenant da LINHA antes de apagar, então lê o template
+        with patch("plughub_auth_api.router.perms_mod.get_template",
+                   new=AsyncMock(return_value=_SAMPLE_TMPL)), \
+             patch("plughub_auth_api.router.perms_mod.delete_template",
                    new=AsyncMock(return_value=True)):
-            r = c.delete(f"/auth/templates/{uuid.uuid4()}",
+            r = c.delete(f"/auth/templates/{_SAMPLE_TMPL['id']}",
                          headers=_perms_headers())
         assert r.status_code == 204
 
