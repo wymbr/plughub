@@ -433,6 +433,8 @@ probe_voz11_media_degradation.sh
 # U2 POST 204 + upload.committed no chat · U3 o documento vira MENSAGEM do stream (`[Anexo: …]` +
 # `content.attachment` com link — vermelho antes: o bridge descartava `media`) · U4 bytes servidos
 # iguais · U5 a chamada segue de pe · N1 controle: PDF falso 415. Premissa: pool de IA com audio.
+# WCH-16 (2026-10-02): P1 o preflight CORS do navegador e aceito — medido de FORA do container, porque
+# o corpo roda la dentro, onde CORS nao existe (foi assim que o gate ficou verde com o upload quebrado).
 probe_voz28_call_upload.sh
 # ATT-01 (2026-10-01): o tipo do remetente nao e gravado, e a porta publica de anexos nao serve
 # pagina. Store REAL, amostra propria (expirada ao final): W0 controle imagem · W1 text/html recusado ·

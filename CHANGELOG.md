@@ -1,5 +1,49 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (1) — WCH-16: o upload do anexo pelo navegador passa a funcionar — o gateway não tinha CORS
+
+**O que o dono viu:** no widget do chat de demo, anexar um PDF dava *"Falha ao enviar o anexo:
+TypeError: Failed to fetch"*, duas vezes seguidas.
+
+**Medido:** o widget sobe o binário por `fetch` para o gateway, que é outra origem (a página está
+em `localhost:5173`, o gateway em `localhost:8010`; em produção, o widget mora no site do cliente).
+O navegador manda antes um preflight `OPTIONS`, e o gateway respondia **405, sem cabeçalho de CORS
+nenhum**. A requisição de verdade nunca saía. **Nenhum upload pelo navegador funcionou desde a
+VOZ-28.** O gate dela subia o arquivo de **dentro do container**, onde CORS não existe, e ficou
+verde medindo um caminho que nenhum cliente usa.
+
+**O que mudou:**
+- **Middleware só no prefixo `/webchat/v1/upload/`** (`upload_router.upload_cors`): responde o
+  preflight e põe o cabeçalho em toda resposta do upload, **inclusive na recusa** (415, 413, 404).
+  Sem ele, o navegador esconde o motivo atrás do mesmo *"Failed to fetch"*.
+- **Origem aberta (`*`) e sem credencial, de propósito.** Quem autoriza é o slot: o `file_id` é
+  reservado pelo WebSocket já autenticado, é de uso único e vale 300 s. Nada depende de cookie,
+  então CORS não protegeria nada aqui; é o modelo da URL pré-assinada.
+- **O resto do gateway segue sem CORS.**
+- **Gate.** O `probe_voz28_call_upload.sh` ganhou o ramo **P1**, que faz o preflight **de fora**
+  do container, como o navegador faz.
+
+**Ao vivo:**
+- o preflight passou a responder 204 com os cabeçalhos;
+- a recusa (404) leva o cabeçalho;
+- **controle:** `/health` continua sem CORS;
+- **no navegador** (built-in, origem `localhost:5173`), o mesmo `fetch` lê a resposta do gateway
+  em vez de cair em `TypeError`;
+- **upload completo pelo botão do widget:** um PDF virou `[Anexo: teste_wch16.pdf]` com
+  `content.attachment` no stream da sessão.
+
+**Testes:** channel-gateway 1741, com 4 novos:
+- o preflight é aceito, sem credencial;
+- o POST e a recusa levam o cabeçalho;
+- **controle:** rota fora do prefixo sem CORS;
+- o middleware está registrado no app que roda.
+
+**Ficha nova:**
+- **`ATT-08`:** o atendente não anexa arquivo no Console. O caminho de volta já existe pela metade
+  (o gateway entrega `image`/`document` do stream ao cliente). Faltam a reserva e o upload
+  autenticados pelo atendente, na mesma esteira de ingestão do cliente, a mensagem de mídia do
+  agente, o botão no Console e o widget desenhando o que chega.
+
 ## 2026-10-02 (1) — AAS-19: a pessoa prova fora de banda, e a task A2A segue sozinha
 
 Fase B2 do `adr-a2a-server-binding`, o item 2 da D12. Depois da AAS-09 o assistente do cliente

@@ -6,6 +6,7 @@
 # chamada não cai por isso. A chamada é MEIO do contato de chat; o anexo é do chat.
 #
 # RAMOS (corpo em `_voz28_call_upload.py`, rodado dentro do gateway):
+#   P1 o preflight CORS do NAVEGADOR é aceito (WCH-16; de fora do container, como o browser)
 #   C0 a chamada abriu (`webrtc.ready`) — sem ela, INCONCLUSIVO
 #   U1 upload.ready · U2 POST 204 + upload.committed no chat · U3 msg.document no stream
 #   U4 o arquivo servido devolve os mesmos bytes · U5 a chamada segue de pé depois
@@ -37,10 +38,24 @@ case "$POLITICA" in
   audio) echo "  premissa: pool $POOL de IA com politica de audio" ;;
   *)     echo "  INCONCL premissa falsa: o pool $POOL nao oferece audio ($POLITICA) — escolha outro (VOZ28_POOL)"; exit 2 ;;
 esac
+# P1 (WCH-16) — o NAVEGADOR sobe o binário de outra origem: sem resposta ao preflight, todo upload
+# do widget morria em "Failed to fetch". O corpo abaixo roda dentro do container, onde CORS não
+# existe — por isso este ramo é de FORA, como o navegador faz.
+PRE=$(curl -s -o /dev/null -D - -X OPTIONS "${GW_URL:-http://localhost:8010}/webchat/v1/upload/x" \
+  -H "Origin: http://site-do-cliente.example" -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: content-type")
+if printf '%s' "$PRE" | grep -qi '^access-control-allow-origin:' && printf '%s' "$PRE" | grep -qiE '^HTTP/[0-9.]+ 2'; then
+  echo "  OK     P1 o preflight do navegador e aceito (CORS no upload)"
+  P1=0
+else
+  echo "  FALHA  P1 o preflight do navegador e recusado: $(printf '%s' "$PRE" | head -1 | tr -d '\r')"
+  P1=1
+fi
 docker cp infra/test/_voz28_call_upload.py "$GW":/tmp/_voz28_call_upload.py >/dev/null || {
   echo "  INCONCL nao copiou o corpo do probe"; exit 2; }
 docker exec -e POOL="$POOL" "$GW" python /tmp/_voz28_call_upload.py
 rc=$?
+[ "$rc" = 0 ] && [ "$P1" = 1 ] && rc=1
 echo "────────────────────────────────────────────────────────────────────"
 case $rc in 0) echo " VERDE";; 1) echo " VERMELHO";; *) echo " INCONCLUSIVO";; esac
 exit $rc

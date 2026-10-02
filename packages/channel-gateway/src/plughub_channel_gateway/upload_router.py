@@ -51,6 +51,32 @@ logger = logging.getLogger("plughub.channel-gateway.upload")
 
 router = APIRouter(prefix="/webchat/v1")
 
+# ── CORS do upload (WCH-16) ───────────────────────────────────────────────────
+# O widget mora no site do CLIENTE (outra origem) e manda o binário por `fetch`: sem resposta ao
+# preflight, o navegador recusava TODO upload com "Failed to fetch", e nada chegava aqui. O gate
+# da VOZ-28 subia de dentro do container, onde CORS não existe, e ficava verde.
+# Origem ABERTA e sem credencial, de propósito: quem autoriza é o slot (`file_id` reservado pelo
+# WebSocket já autenticado, uso único, 300 s), não cookie — o modelo da URL pré-assinada. Só este
+# prefixo; o resto do gateway segue sem CORS. O cabeçalho vai também na RECUSA (415, 413, 404):
+# sem ele o navegador esconde o motivo atrás do mesmo "Failed to fetch".
+UPLOAD_CORS_PREFIX = "/webchat/v1/upload/"
+UPLOAD_CORS_HEADERS = {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "content-type",
+    "Access-Control-Max-Age":       "600",
+}
+
+
+async def upload_cors(request: Request, call_next):
+    if not request.url.path.startswith(UPLOAD_CORS_PREFIX):
+        return await call_next(request)
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=UPLOAD_CORS_HEADERS)
+    response = await call_next(request)
+    response.headers.update(UPLOAD_CORS_HEADERS)
+    return response
+
 
 def public_attachment_url(file_id: str, session_id: str) -> str:
     """A URL da porta pública para ESTE anexo desta sessão, assinada agora (ATT-03)."""
