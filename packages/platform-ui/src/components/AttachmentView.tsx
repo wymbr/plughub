@@ -18,6 +18,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { apiFetch } from '@/api/apiFetch'
+import { attachmentDownloadName } from './attachmentName'
+import type { MaskingRulesMap } from './MaskedToken'
 
 export interface AttachmentRef {
   media_type?: string
@@ -31,20 +33,18 @@ interface Props {
   ns:         'agentAssist' | 'contacts'
   keyPrefix:  'attachment' | 'transcript.attachment'
   className?: string
+  /** ATT-09 — o texto da mensagem (`[Anexo: nome] …`), de onde sai o nome do download */
+  text?:         string
+  maskingRules?: MaskingRulesMap
 }
 
 type View = 'original' | 'blurred' | 'revealed'
-
-const EXT: Record<string, string> = {
-  'application/pdf': 'pdf', 'video/mp4': 'mp4', 'video/webm': 'webm', 'audio/ogg': 'ogg',
-  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
-}
 
 function attachmentPath(fileId: string, reveal: boolean): string {
   return `/analytics/v1/attachments/${encodeURIComponent(fileId)}${reveal ? '?reveal=true' : ''}`
 }
 
-export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, className }) => {
+export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, className, text, maskingRules }) => {
   const { t } = useTranslation(ns, { keyPrefix })
   const kind = t(`kind.${attachment.media_type ?? ''}`, { defaultValue: attachment.media_type ?? '' })
   const fileId = attachment.file_id
@@ -117,7 +117,8 @@ export const AttachmentView: React.FC<Props> = ({ attachment, ns, keyPrefix, cla
     const u = URL.createObjectURL(res.blob)
     const a = document.createElement('a')
     a.href = u
-    a.download = `${attachment.media_type ?? 'attachment'}-${fileId.slice(0, 8)}.${EXT[attachment.mime_type ?? ''] ?? 'bin'}`
+    // ATT-09: o nome do balão, mascarado como ele — nunca o `Content-Disposition` (nome cru)
+    a.download = attachmentDownloadName(text, attachment, maskingRules)
     a.click()
     URL.revokeObjectURL(u)
   }

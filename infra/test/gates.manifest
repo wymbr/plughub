@@ -477,6 +477,11 @@ probe_att07_upload_limit.sh
 # nome · A3 o CLIENTE recebe msg.document com URL assinada · A4 mesmos bytes · N2 bytes que nao sao
 # o tipo → 415 pela esteira do cliente e o stream nao muda. Mutacao: unitarios (8 + 6).
 probe_att08_agent_attachment.sh
+# ATT-09 (2026-10-02): o Console salva o anexo com o nome do BALAO, mascarado pela mesma regra do chip
+# (tokenScreenValue), nunca pelo Content-Disposition cru. Exercita attachmentName.ts via esbuild:
+# N1 controle · N2..N4 display_partial/full_mask/hidden · N5 extensao do tipo real · N6 sanitiza ·
+# N7 sem indicador → generico · W1/W2 fiacao. Mutacao: M1..M6 no proprio ciclo (CHANGELOG).
+probe_att09_download_name.sh
 # CFG-01 (2026-10-01): salvar uma chave com descricao VAZIA (o que a tela manda) mantem a gravada.
 # Contra o Postgres REAL do config-api, numa chave de rascunho global que o probe cria e apaga:
 # K1 vazia mantem · V1 o valor muda · C1 controle: descricao nova troca · L1 rascunho apagado ·

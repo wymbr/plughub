@@ -27,9 +27,10 @@ interface MessageBubbleProps {
 }
 
 /** VOZ-28 — o anexo do cliente. ATT-02: pela porta interna, por `file_id` (nunca a `url` gravada). */
-const AttachmentView: React.FC<{ attachment: ChatAttachment }> = ({ attachment }) => (
-  <AttachmentDoor attachment={attachment} ns="agentAssist" keyPrefix="attachment" />
-);
+const AttachmentView: React.FC<{ attachment: ChatAttachment; text?: string; maskingRules?: MaskingRulesMap }> =
+  ({ attachment, text, maskingRules }) => (
+    <AttachmentDoor attachment={attachment} ns="agentAssist" keyPrefix="attachment" text={text} maskingRules={maskingRules} />
+  );
 
 function agentLabel(agentTypeId: string | undefined): string {
   if (!agentTypeId) return "IA";
@@ -172,7 +173,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       </span>
       <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${bubbleStyle}`}>
         {renderWithTokens(message.text, maskingRules)}
-        {message.attachment && <AttachmentView attachment={message.attachment} />}
+        {message.attachment && <AttachmentView attachment={message.attachment} text={message.text} maskingRules={maskingRules} />}
       </div>
     </div>
   );

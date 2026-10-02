@@ -1,5 +1,37 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (3) — ATT-09: o Console salva o anexo com o nome do balão, mascarado
+
+**O que o dono viu:** depois da ATT-08, o arquivo baixado pelo Console saía como
+`document-a8383516.pdf`, enquanto o balão mostrava `PlugHub — folder técnico.pdf`. No widget do
+cliente o mesmo arquivo era salvo com o nome original.
+
+**Medido:** não era decisão de produto, era lacuna. O `AttachmentView` (ATT-02) baixa por blob
+e montava o nome sozinho: tipo, 8 caracteres do id e extensão. O `Content-Disposition` com o nome
+original já chegava ao navegador, porque o gateway o manda e a analytics-api o repassa, mas o
+Console não o lia. **E ler o cabeçalho seria o erro oposto:** ele traz o nome CRU, e quem não atende
+o contato (supervisor, avaliador) só vê o nome mascarado no balão. A ausência do nome no
+`attachment` é deliberada (VOZ-28: um nome com dado pessoal não escapa por um campo lateral), então o
+nome tem de vir de onde o mascarado já está.
+
+**Como ficou:** `src/components/attachmentName.ts`, uma função pura usada pelo `AttachmentView`.
+- **Origem do nome:** sai do indicador `[Anexo: nome]` que o balão desenha. Os dois balões (Console
+  e transcrição) passam o texto da mensagem e as regras de máscara.
+- **Máscara:** o token mascarado vira texto pela MESMA regra do chip (`tokenScreenValue`). Ela agora
+  mora numa casa só, e o `MaskedToken` também a usa. `display_partial` mostra o parcial, `full_mask`
+  mostra `•••••` e `hidden` mostra só a categoria.
+- **Nome de arquivo:** `*` vira `•`, porque o Windows recusa `*` e `***00` virava `___00`, que já não
+  parece máscara. Os outros caracteres proibidos viram `_`. A extensão do tipo real é acrescentada
+  quando o nome não a traz.
+- **Sem indicador legível** (entrada antiga), continua o nome genérico de antes.
+
+**Prova:**
+- `infra/test/probe_att09_download_name.sh` (verde). Cobre nome simples, as três regras de máscara
+  sem o número cru, extensão, caracteres proibidos, a falta de indicador e a fiação.
+- As seis mutações reprovaram: regra ignorada, token cru no nome, sem limpar caracteres, sem
+  extensão, volta ao nome genérico e leitura do cabeçalho cru.
+- Typecheck limpo. O platform-ui foi reconstruído e posto no ar.
+
 ## 2026-10-02 (2) — ATT-08: o atendente manda arquivo ao cliente pelo Console
 
 **O que faltava:** o cliente do webchat já subia arquivo (VOZ-28, WCH-16), e o gateway já entregava

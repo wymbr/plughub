@@ -702,7 +702,7 @@ function ContentRenderer({ normalized, maskingRules }: {
     return (
       <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
         {renderWithTokens(normalized.text, maskingRules)}
-        {att && <AttachmentView attachment={att} ns="contacts" keyPrefix="transcript.attachment" />}
+        {att && <AttachmentView attachment={att} ns="contacts" keyPrefix="transcript.attachment" text={normalized.text} maskingRules={maskingRules} />}
       </div>
     )
   }

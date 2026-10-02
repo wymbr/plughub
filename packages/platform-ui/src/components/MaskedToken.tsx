@@ -17,6 +17,7 @@ import React from 'react'
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/auth/useAuth'
 import { apiFetch } from '@/api/apiFetch'
+import { tokenScreenValue } from './attachmentName'
 
 // ── Token regex ────────────────────────────────────────────────────────────────
 
@@ -100,9 +101,8 @@ export function MaskedToken({ token, context = 'screen', rules }: MaskedTokenPro
 
   let displayValue: string | null
   if (context === 'screen') {
-    if (rule.token_display === 'hidden')         displayValue = null
-    else if (rule.token_display === 'full_mask') displayValue = '•••••'
-    else                                         displayValue = token.display // display_partial
+    // uma casa para a regra: o nome do download (ATT-09) aplica a mesma
+    displayValue = tokenScreenValue(rule.token_display, token.display)
   } else {
     displayValue = token.display
   }
