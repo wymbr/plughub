@@ -607,6 +607,9 @@
     "aiTypingAria": "Agente IA está digitando"
   },
   "agentInput": {
+    "attachAriaLabel": "Anexar arquivo (o texto digitado vira a legenda)",
+    "attachSending": "Enviando arquivo…",
+    "attachRefused": "Arquivo não enviado: {{reason}}",
     "wrapUpBanner": "Wrap-up em andamento — responda às perguntas dos agentes de finalização abaixo.",
     "label": "Mensagem",
     "placeholder": "Digite sua mensagem… (Enter envia · Shift+Enter nova linha)",

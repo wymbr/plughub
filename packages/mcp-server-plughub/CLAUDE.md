@@ -149,6 +149,7 @@ agent-assist-ui via Vite proxy (`/api → :3100`):
 | GET  | `/supervisor_state/:sessionId`    | Live session AI state from Redis |
 | GET  | `/supervisor_capabilities/:sessionId` | Suggested agents and escalations |
 | POST | `/agent_done/:sessionId`          | Human agent signals end of session |
+| POST | `/agent_attachment/:sessionId`    | Attendant sends a file to the customer (ATT-08, `lib/agent-attachment.ts`; webchat only) |
 | GET  | `/health`                         | Service healthcheck |
 
 ### `/agent_done` and conference handling

@@ -514,6 +514,12 @@
                isAgent ? (msg.author.name || 'Agente') : null);
         return;
       }
+      // ATT-08 — arquivo que o ATENDENTE mandou. O link é ASSINADO e curto (ATT-03), cunhado na
+      // entrega; nunca vem de mensagem gravada.
+      if (msg.type === 'msg.image' || msg.type === 'msg.document' || msg.type === 'msg.video') {
+        addAttachment(msg);
+        return;
+      }
       if (msg.type === 'presence.agent_joined') {
         addMsg('Agente entrou no atendimento', 'sys');
         return;
@@ -581,6 +587,33 @@
       addMsg('Falha ao enviar o anexo: ' + err, 'sys');
       pendingUpload = null;
     }
+  }
+
+  function addAttachment(msg) {
+    const box = document.getElementById('messages');
+    const who = document.createElement('div');
+    who.className = 'label';
+    who.textContent = 'Agente';
+    const body = document.createElement('div');
+    body.className = 'msg in';
+    const nome = msg.original_name || (msg.type === 'msg.image' ? 'imagem' : msg.type === 'msg.video' ? 'vídeo' : 'documento');
+    if (msg.type === 'msg.image' && msg.url) {
+      const img = document.createElement('img');
+      img.src = msg.url; img.alt = nome;
+      img.style.maxWidth = '220px'; img.style.borderRadius = '6px'; img.style.display = 'block';
+      body.appendChild(img);
+    }
+    const a = document.createElement('a');
+    a.textContent = '📎 ' + nome;
+    if (msg.url) { a.href = msg.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    body.appendChild(a);
+    if (msg.caption) {
+      const c = document.createElement('div');
+      c.textContent = msg.caption;
+      body.appendChild(c);
+    }
+    box.appendChild(who); box.appendChild(body);
+    box.scrollTop = box.scrollHeight;
   }
 
   // ── Send message ────────────────────────────────────────────────────────────

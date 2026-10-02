@@ -8,6 +8,8 @@ pelo pool da sessão (`authorize_session_scope`, a mesma resposta do transcript)
 entrega, e só a quem apresenta a credencial de SERVIÇO do gateway.
 
     GET /v1/attachments/{file_id}/meta     → de qual sessão é, tipo, tamanho, se expirou
+    POST /v1/attachments/agent-upload       → o ATENDENTE envia um arquivo (ATT-08): reserva +
+                                              commit pela MESMA esteira do cliente
     GET /v1/attachments/{file_id}/content  → os bytes, com os cabeçalhos da porta (ATT-01)
         ?variant=blurred                    → a PRÉVIA BORRADA de uma imagem (ATT-06), para quem
                                               não atende o contato; quem decide é a analytics-api
@@ -22,11 +24,18 @@ from __future__ import annotations
 import logging
 from typing import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
 from . import main as _main_module
+from datetime import datetime, timedelta, timezone
+
 from .attachment_store import (
+    MIME_TO_CONTENT_TYPE,
+    AttachmentInfected,
+    FilesystemAttachmentStore,
+    resolve_attachment_expiry_days,
+    webchat_upload_limit,
     SERVE_SECURITY_HEADERS,
     content_disposition,
     serve_refusal,
@@ -34,6 +43,8 @@ from .attachment_store import (
 )
 from .identity_auth import identity_principal
 from .media_sanitize import blurred_preview, is_image
+from .usage_emitter import emit_attachment
+from .webchat_config import webchat_config
 
 logger = logging.getLogger("plughub.channel-gateway.attachment-internal")
 
@@ -57,6 +68,77 @@ async def _meta(file_id: str, tenant_id: str):
     if meta is None or klass != ARTIFACT_CLASS:
         raise HTTPException(status_code=404, detail="not found")
     return store, meta
+
+
+def _service_dep(request: Request) -> None:
+    """O portão como DEPENDÊNCIA: o FastAPI a resolve antes de validar a query, então o anônimo
+    ouve 401, não o 422 dos parâmetros obrigatórios (que são a trava da varredura AUT-58)."""
+    _service_only(request)
+
+
+@router.post("/agent-upload", status_code=201, dependencies=[Depends(_service_dep)])
+async def agent_upload(
+    request:     Request,
+    tenant_id:   str = Query(...),
+    session_id:  str = Query(...),
+    file_name:   str = Query(...),
+    mime_type:   str = Query(...),
+    uploaded_by: str = Query(""),
+) -> dict:
+    """ATT-08 — o arquivo que o ATENDENTE manda ao cliente.
+
+    Quem decide se o atendente pode mandar (ele ATENDE a sessão, com `agent_assist.atender`) é o
+    mcp-server, que conhece o roster; aqui só serviço entra. O que importa é que a ESTEIRA é a
+    mesma do cliente — classe, tamanho (o teto do tenant, ATT-07), assinatura, antivírus e
+    re-codificação moram no `commit` (ATT-01/05) —, e não uma segunda, mais frouxa, para quem
+    está do lado de dentro. Reserva e commit numa ida só: o atendente não tem slot a abrir.
+    """
+    _service_only(request)
+    if not (tenant_id and session_id and file_name and mime_type):
+        raise HTTPException(status_code=400, detail="tenant_id, session_id, file_name e mime_type obrigatorios")
+    store = _main_module._attachment_store
+    s = _main_module.get_settings()
+    if store is None:
+        raise HTTPException(status_code=503, detail="attachment store not available")
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty body")
+    limite = webchat_upload_limit(mime_type, webchat_config.get("upload_limits_mb"))
+    err = FilesystemAttachmentStore.validate_mime(mime_type, len(data), limit=limite)
+    if err is not None:
+        raise HTTPException(status_code=413 if "grande" in err or "large" in err else 415, detail=err)
+    dias = await resolve_attachment_expiry_days(_main_module._redis, tenant_id, s.attachment_expiry_days)
+    file_id, _ = await store.reserve(
+        tenant_id  = tenant_id,
+        session_id = session_id,
+        file_name  = file_name,
+        mime_type  = mime_type,
+        size_bytes = len(data),
+        expires_at = datetime.now(timezone.utc) + timedelta(days=dias),
+        artifact_class = ARTIFACT_CLASS,
+        attrs      = {"uploaded_by": uploaded_by} if uploaded_by else None,
+    )
+    try:
+        meta = await store.commit(file_id=file_id, tenant_id=tenant_id, data=data)
+    except AttachmentInfected as exc:
+        logger.warning("ATT-08: anexo do atendente recusado pelo antivirus file_id=%s por=%s: %s",
+                       file_id, uploaded_by, exc)
+        raise HTTPException(status_code=422, detail="attachment_infected") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    if _main_module._producer is not None:
+        await emit_attachment(producer=_main_module._producer, tenant_id=tenant_id,
+                              session_id=session_id, file_id=meta.file_id,
+                              mime_type=meta.mime_type, size_bytes=meta.size_bytes)
+    logger.info("ATT-08: anexo do atendente gravado file_id=%s session=%s por=%s size=%d",
+                meta.file_id, session_id, uploaded_by or "-", meta.size_bytes)
+    return {
+        "file_id":      meta.file_id,
+        "mime_type":    meta.mime_type,
+        "size_bytes":   meta.size_bytes,
+        "content_type": MIME_TO_CONTENT_TYPE.get(meta.mime_type, "document"),
+        "scan_status":  getattr(meta, "scan_status", None),
+    }
 
 
 @router.get("/{file_id}/meta")

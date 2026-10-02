@@ -1,5 +1,56 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (2) — ATT-08: o atendente manda arquivo ao cliente pelo Console
+
+**O que faltava:** o cliente do webchat já subia arquivo (VOZ-28, WCH-16), e o gateway já entregava
+ao cliente mensagem `image`/`document`/`video` do stream com link assinado (ATT-03). Mas nada do lado
+de dentro produzia essa mensagem: o Console não tinha botão de anexar, não havia rota de upload para
+AGENTE, e o widget de demo não desenhava `msg.document`.
+
+**Como ficou:**
+- **Botão de clipe no Console** (`AgentInput`). O texto digitado vira a legenda. Não há eco
+  otimista: a mensagem só aparece depois que o servidor aceitou, e a recusa vira aviso na tela.
+- **`POST /api/agent_attachment/:sessionId`** no mcp-server. A decisão mora em
+  `lib/agent-attachment.ts`, porque o roster está ali. Quem pode mandar:
+  `agent_assist.atender` em escrita, com escopo que cubra o pool da sessão, **e** a instância
+  `human-{sub}` atendendo esta sessão (`session:{sid}:human_agents`, a mesma pergunta do token de
+  mídia, VOZ-15). Ter o grant no pool não basta: quem não atende recebe 403 `not_attending`. O
+  tenant é o do token.
+- **A esteira é a do cliente, e não uma segunda.** Os bytes vão à rota interna, só de serviço,
+  `POST /v1/attachments/agent-upload` do gateway. Ela aplica o teto do tenant (ATT-07) e faz
+  reserva e `commit` numa ida só. É no `commit` que moram a classe, o tamanho real, a assinatura, o
+  antivírus e a re-codificação (ATT-01/05). Se a esteira recusa, o motivo volta ao Console e nada
+  vai ao stream.
+- **Só em canal que mostra mídia vinda do stream**, que hoje é o webchat. WhatsApp, e-mail e SMS
+  recebem a fala do agente pelo `conversations.outbound`, que não leva arquivo. Nesses canais a
+  recusa diz o motivo (409 `channel_without_media`), em vez de "enviado" sem o cliente receber.
+- **No stream**, a mensagem do atendente tem `content.type` de mídia (o que o gateway entrega ao
+  cliente como `msg.document`), o indicador `[Anexo: nome] legenda` como texto, mascarado como a
+  fala do atendente, e um `attachment` como o do cliente: sem link e sem o nome. A transcrição do
+  Console mostra o anexo, e o widget de demo agora desenha `msg.image`/`msg.document`/`msg.video`.
+- **Borda:** o nginx do platform-ui ganhou `location` própria para a rota, com 512 MB e sem
+  buffer. O 1 MB padrão recusaria quase qualquer arquivo com 413.
+
+**Achado no caminho:** a varredura anônima (AUT-58) acusou a rota interna como `nao_medida`. O
+portão de serviço estava dentro do handler, e a validação dos parâmetros obrigatórios respondia
+422 antes dele. Agora o portão é dependência da rota, que o FastAPI resolve antes de validar a
+query, e o anônimo ouve 401.
+
+**Prova:**
+- `infra/test/probe_att08_agent_attachment.sh` passa pela borda 5174, com cliente real no
+  WebSocket do chat. Os dois controles negativos ficam ao lado: quem tem o grant mas não atende
+  recebe 403 e nada vai ao stream; bytes que não são PDF recebem 415 e o stream não muda. No caminho
+  positivo, quem atende recebe 201, o stream registra `document` sem link e sem nome, o cliente
+  recebe `msg.document` com URL assinada, e essa URL devolve os mesmos bytes.
+- Unitários: 8 testes em `agent-attachment.test.ts` e 8 em `test_att08_agent_upload.py`.
+- Mutações, as nove reprovadas:
+  - na lib: sem conferir atendimento, sem conferir canal, escopo ignorado, recusa do gateway
+    ignorada, nome no `attachment`;
+  - no gateway: sem portão de serviço, sem validar tipo, classe errada, portão fora da dependência.
+- Gates verdes: `probe_mcp_rest_surface` (rota declarada), `probe_route_anon_sweep`,
+  `probe_i18n_duplicate_keys`, `probe_ui_color_scale_classes`, `probe_voz28_call_upload`,
+  `probe_att06_attachment_view`. Suíte do gateway: 1749.
+
 ## 2026-10-02 (1) — WCH-16: o upload do anexo pelo navegador passa a funcionar — o gateway não tinha CORS
 
 **O que o dono viu:** no widget do chat de demo, anexar um PDF dava *"Falha ao enviar o anexo:

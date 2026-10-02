@@ -115,6 +115,7 @@ GET /health|aberta-isenta|liveness do compose; exigir credencial acopla o boot d
 GET /internal/context-audit|gateada|x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, e FALHA FECHADA (503 sem env)
 GET /sse|gateada|requireTransportCredential: x-service-token contra MCP_INTERNAL_SERVICE_TOKEN, FALHA FECHADA (503 sem env) — CAP-10 2026-09-29; e NAO publicado pela borda
 POST /api/dialog/preview|gateada|verifyJwtPayload SEM campo, por decisao escrita no handler: funcao PURA sobre o corpo enviado (nao le store); um campo aqui seria segundo portao, mais grosseiro, sobre config.dialog_forms. Se passar a ler a forma do store, ganha portao de escopo ANTES
+POST /api/agent_attachment/:sessionId|gateada|verifyJwtPayload + agent_assist.atender read_write no pool da sessao + human-{sub} em human_agents (ATT-08, lib/agent-attachment.ts)
 POST /api/agent_done/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write escrita (CAP-12)
 POST /api/force-complete/:sessionId|gateada|requireJwtGrant agent_assist.supervisionar read_write
 POST /api/inject-context/:sessionId|gateada|requireJwtGrant agent_assist.atender read_write

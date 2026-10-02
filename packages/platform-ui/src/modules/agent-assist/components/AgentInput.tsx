@@ -1,7 +1,9 @@
 /**
  * AgentInput
  * Text composition area. Contains only:
- *   [/ (canned)]  [textarea]  [Enviar]
+ *   [/ (canned)]  [📎 anexar]  [textarea]  [Enviar]
+ *
+ * ATT-08: o clipe manda um arquivo ao cliente; o texto digitado vai como LEGENDA dele.
  *
  * "Encerrar" was moved to ActionBar.
  * The "/" button opens CannedPhrasesPalette above the input.
@@ -9,7 +11,7 @@
 
 import React, { KeyboardEvent, useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Clock } from "lucide-react";
+import { Clock, Paperclip } from "lucide-react";
 import { SupervisorCapabilities } from "../types";
 import { CannedPhrasesPalette } from "./CannedPhrasesPalette";
 
@@ -18,13 +20,19 @@ interface AgentInputProps {
   disabled?:     boolean;
   sessionClosed?: boolean;
   capabilities?: SupervisorCapabilities | null;
+  /** ATT-08 — manda o arquivo; resolve `true` quando entrou na conversa. Ausente = sem clipe. */
+  onAttach?:     (file: File, caption: string) => Promise<boolean>;
 }
+
+/** O que a plataforma aceita de anexo (ATT-01); o servidor confere de novo, pelo conteúdo. */
+const ATTACH_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,application/pdf,video/mp4,video/webm";
 
 export const AgentInput: React.FC<AgentInputProps> = ({
   onSend,
   disabled      = false,
   sessionClosed = false,
   capabilities,
+  onAttach,
 }) => {
   // During wrap-up (sessionClosed=true) the input stays active so the agent
   // can respond to hook agent prompts (wrap-up notes, classification, etc.).
@@ -33,6 +41,20 @@ export const AgentInput: React.FC<AgentInputProps> = ({
   const [text,         setText]         = useState("");
   const [showPalette,  setShowPalette]  = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef     = useRef<HTMLInputElement>(null);
+  const [sending,      setSending]      = useState(false);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !onAttach || inputDisabled) return;
+    setSending(true);
+    try {
+      if (await onAttach(file, text.trim())) setText("");
+    } finally {
+      setSending(false);
+    }
+  };
 
   // Re-focus textarea when palette closes
   const closePalette = useCallback(() => {
@@ -125,6 +147,25 @@ export const AgentInput: React.FC<AgentInputProps> = ({
         >
           <span aria-hidden="true">/</span>
         </button>
+
+        {/* ATT-08 — anexar arquivo (o texto digitado vira a legenda) */}
+        {onAttach && (
+          <>
+            <input ref={fileRef} type="file" accept={ATTACH_ACCEPT} className="hidden"
+                   onChange={handleFile} aria-hidden="true" tabIndex={-1} />
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={inputDisabled || sending}
+              aria-label={t('agentInput.attachAriaLabel')}
+              title={sending ? t('agentInput.attachSending') : t('agentInput.attachAriaLabel')}
+              className="flex-shrink-0 w-11 h-11 rounded-lg border bg-surface border-border text-muted
+                hover:border-primary hover:text-primary flex items-center justify-center transition-colors self-end
+                disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Paperclip className={`w-4 h-4 ${sending ? "animate-pulse" : ""}`} aria-hidden="true" />
+            </button>
+          </>
+        )}
 
         {/* Textarea */}
         <label htmlFor="agent-message-input" className="sr-only">

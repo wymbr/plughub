@@ -79,6 +79,7 @@ import {
   mayRouteMentions,
 }                                  from "./lib/participant-role"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
+import { sendAgentAttachment }     from "./lib/agent-attachment"
 import { sentimentFromCtxHash }    from "./lib/session-sentiment"
 import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-filter"
 import { decideLedgerRehydration, type LedgerCandidate } from "./lib/ledger-rehydration"
@@ -3014,6 +3015,83 @@ export async function startServer(config: ServerConfig): Promise<void> {
       res.status(500).json({ error: "publish_failed" })
     }
   })
+
+  // POST /api/agent_attachment/:sessionId  (ATT-08)
+  // O atendente manda um arquivo ao cliente pelo Console. Corpo = os BYTES (octet-stream);
+  // nome, tipo e legenda na query. Quem pode, a esteira e o canal: `lib/agent-attachment.ts`.
+  // O teto do corpo aqui é o da plataforma (512 MB, vídeo); o do tenant, o gateway confere.
+  app.post(
+    "/api/agent_attachment/:sessionId",
+    express.raw({ type: () => true, limit: "512mb" }),
+    async (req: Request, res: Response) => {
+      const { sessionId } = req.params
+      let payload: Record<string, unknown>
+      try {
+        payload = verifyJwtPayload(req.headers.authorization)
+      } catch (err) {
+        if (err instanceof AuthNaoDisponivel) {
+          res.status(503).json({ error: "auth_unavailable" })
+          return
+        }
+        res.status(401).json({ error: "unauthorized" })
+        return
+      }
+      const gw    = (process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010").replace(/\/$/, "")
+      const svc   = process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"] ?? ""
+      const q     = req.query as Record<string, string | undefined>
+      try {
+        const out = await sendAgentAttachment({
+          tenantOf: sid => resolveSessionTenant(redis, sid, "agent_attachment"),
+          attends:  async (sid, inst) => (await redis.sismember(`session:${sid}:human_agents`, inst)) === 1,
+          roleOf:   async (sid, inst) => {
+            const p = await resolveParticipantRole(redis as any, sid, inst)
+            return p.resolved ? String(p.role) : "primary"
+          },
+          uploadToGateway: async a => {
+            const qs = new URLSearchParams({
+              tenant_id: a.tenantId, session_id: a.sessionId, file_name: a.fileName,
+              mime_type: a.mimeType, uploaded_by: a.uploadedBy,
+            })
+            const r = await fetch(`${gw}/v1/attachments/agent-upload?${qs}`, {
+              method:  "POST",
+              headers: { "Content-Type": "application/octet-stream",
+                         "x-service-token": svc, "x-service-name": "mcp-server-plughub" },
+              body:    a.data,
+            })
+            let body: Record<string, unknown> = {}
+            try { body = await r.json() as Record<string, unknown> } catch { body = { detail: r.statusText } }
+            return { status: r.status, body }
+          },
+          mask: async (tenantId, text, logCtx) => {
+            const m = await maskMessageContent(redis as any, tenantId,
+              { type: "text", text, metadata: {} }, logCtx, "[agent-attachment]")
+            const safe = m.finalContent.type === "text" ? (m.finalContent.text ?? text) : text
+            return {
+              safe, display: tokensToDisplay(safe),
+              extra: m.masked ? { original_content: m.originalContent, masked: true,
+                                  masked_categories: m.maskedCategories } : {},
+            }
+          },
+          writeStream: async entry => {
+            await writeStreamEntry(redis as any, entry as any)
+            await redis.expire(`session:${sessionId}:stream`, 14400)
+          },
+          publishAgents: async (sid, ev) => { await redis.publish(`agent:events:${sid}`, JSON.stringify(ev)) },
+          publishAnalytics: async ev => { await kafka.publish("conversations.events", ev) },
+          newId: () => crypto.randomUUID(),
+          now:   () => new Date().toISOString(),
+        }, {
+          payload, sessionId: String(sessionId),
+          fileName: q["file_name"] ?? "", mimeType: q["mime_type"] ?? "", caption: q["caption"] ?? "",
+          data: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+        })
+        res.status(out.status).json(out.body)
+      } catch (err) {
+        console.error(`[agent_attachment] falha session=${sessionId}:`, err)
+        res.status(502).json({ error: "attachment_failed" })
+      }
+    },
+  )
 
   // POST /api/session_transfer/:sessionId
   // Console "Transfer" action (human agent → another pool). Mirrors the

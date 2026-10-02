@@ -28,7 +28,44 @@
  */
 
 import { apiFetch } from '@/api/apiFetch'
-import { ChatMessage } from './types'
+import { ChatAttachment, ChatMessage } from './types'
+
+/** ATT-08 — o que o servidor devolve quando o arquivo do atendente entrou na conversa. */
+export interface SentAttachment {
+  message_id: string
+  text:       string
+  timestamp:  string
+  attachment: ChatAttachment
+}
+
+/**
+ * ATT-08 — o atendente manda um arquivo ao cliente. O corpo são os BYTES; nome, tipo e legenda
+ * vão na query. Quem pode (atende a sessão), a esteira (a mesma do cliente) e o canal são
+ * decididos no servidor; a recusa volta com o motivo, nunca vira sucesso aparente.
+ */
+export async function sendAgentAttachment(
+  sessionId: string, file: File, caption: string,
+): Promise<{ ok: true; sent: SentAttachment } | { ok: false; reason: string }> {
+  const qs = new URLSearchParams({
+    file_name: file.name, mime_type: file.type || 'application/octet-stream',
+    ...(caption ? { caption } : {}),
+  })
+  let res: Response
+  try {
+    res = await apiFetch(`/api/agent_attachment/${encodeURIComponent(sessionId)}?${qs}`, {
+      method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' },
+    })
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+  }
+  let body: Record<string, unknown> = {}
+  try { body = await res.json() as Record<string, unknown> } catch { /* sem corpo */ }
+  if (!res.ok) {
+    const detail = body['detail'] ?? body['error'] ?? `HTTP ${res.status}`
+    return { ok: false, reason: typeof detail === 'string' ? detail : JSON.stringify(detail) }
+  }
+  return { ok: true, sent: body as unknown as SentAttachment }
+}
 
 export interface ConversationHistory {
   messages: ChatMessage[]

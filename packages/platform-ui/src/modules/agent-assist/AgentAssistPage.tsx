@@ -61,7 +61,7 @@ import { WebRTCOverlay }   from "./components/WebRTCOverlay";
 import { hasMedia } from "./hooks/useWebRTCSession";
 import { apiFetch } from '@/api/apiFetch'
 import { maskedFieldEcho } from "./maskedFieldEcho";
-import { loadConversationHistory } from "./api";
+import { loadConversationHistory, sendAgentAttachment } from "./api";
 
 // Set vazio estável para o preview read-only (ChatArea sem seleção de mensagens).
 const EMPTY_MESSAGE_IDS: Set<string> = new Set<string>();
@@ -334,6 +334,44 @@ export const AgentAssistPage: React.FC = () => {
       });
     },
     [send, selectedSessionId, setContacts]
+  );
+
+  // ATT-08 — o arquivo do atendente. Diferente do texto, não há eco otimista: a mensagem só
+  // entra no chat depois que o servidor a aceitou (esteira, antivírus, canal), e a recusa vira
+  // aviso com o motivo — um balão de "enviado" para arquivo recusado seria mentir ao atendente.
+  const handleAttach = useCallback(
+    async (file: File, caption: string): Promise<boolean> => {
+      if (!selectedSessionId) return false;
+      const sid = selectedSessionId;
+      const r = await sendAgentAttachment(sid, file, caption);
+      if (!r.ok) {
+        addToast(t("agentInput.attachRefused", { reason: r.reason }), "error");
+        return false;
+      }
+      const now = Date.now();
+      setContacts(prev => {
+        const c = prev.get(sid);
+        if (!c || c.messages.some(m => m.id === r.sent.message_id)) return prev;
+        const next = new Map(prev);
+        const responseTimer: ResponseTimer = c.responseTimer.status === 'counting'
+          ? { status: 'frozen', elapsedMs: now - c.responseTimer.startedAt }
+          : c.responseTimer;
+        next.set(sid, {
+          ...c,
+          messages: [...c.messages, {
+            id:         r.sent.message_id,
+            author:     "agent_human",
+            text:       r.sent.text,
+            timestamp:  r.sent.timestamp,
+            attachment: r.sent.attachment,
+          }],
+          responseTimer,
+        });
+        return next;
+      });
+      return true;
+    },
+    [selectedSessionId, setContacts, addToast, t]
   );
 
   const handleClose = useCallback(
@@ -967,6 +1005,7 @@ export const AgentAssistPage: React.FC = () => {
                 {/* Agent input */}
                 <AgentInput
                   onSend={handleSend}
+                  onAttach={handleAttach}
                   disabled={!selected}
                   sessionClosed={selected.sessionClosed}
                   capabilities={selected.capabilities ?? null}

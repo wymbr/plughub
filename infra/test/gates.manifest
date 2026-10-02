@@ -471,6 +471,12 @@ probe_att06_attachment_view.sh
 # L1 reload · C1 controle imagem pequena reserva · R1 imagem declarada 2 MB recusada · R2 corpo real
 # de 2 MB → 413 · C2 controle 204 · P1 PDF de 2 MB reserva. Restaura o valor. Bateria: mut_att07.
 probe_att07_upload_limit.sh
+# ATT-08 (2026-10-02): o ATENDENTE manda arquivo ao cliente pelo Console, pela borda 5174. Quem atende
+# e a fixture `human_agents`; o caminho medido e o da tela. N1 controle: grant sem atender → 403 e
+# nada no stream · A1 quem atende → 201 · A2 stream `document`, indicador, attachment sem link e sem
+# nome · A3 o CLIENTE recebe msg.document com URL assinada · A4 mesmos bytes · N2 bytes que nao sao
+# o tipo → 415 pela esteira do cliente e o stream nao muda. Mutacao: unitarios (8 + 6).
+probe_att08_agent_attachment.sh
 # CFG-01 (2026-10-01): salvar uma chave com descricao VAZIA (o que a tela manda) mantem a gravada.
 # Contra o Postgres REAL do config-api, numa chave de rascunho global que o probe cria e apaga:
 # K1 vazia mantem · V1 o valor muda · C1 controle: descricao nova troca · L1 rascunho apagado ·

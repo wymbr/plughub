@@ -51,6 +51,19 @@ RUN printf 'server {\n\
         proxy_read_timeout 3600s;\n\
     }\n\
 \n\
+    # ATT-08: o arquivo do atendente. O teto padrao do nginx (1 MB) recusaria quase todo anexo\n\
+    # com 413 antes de o mcp-server ver; aqui vale o da plataforma (512 MB, video), e o do\n\
+    # tenant o gateway confere. Corpo em streaming, sem gravar em disco no proxy.\n\
+    location ~ ^/api/agent_attachment/ {\n\
+        set $up_mcp_att http://mcp-server-plughub:3100;\n\
+        proxy_pass         $up_mcp_att;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        client_max_body_size 512m;\n\
+        proxy_request_buffering off;\n\
+        proxy_read_timeout 300s;\n\
+    }\n\
+\n\
     # mcp-server-plughub (REST /api)\n\
     location ~ ^/api(/|$) {\n\
         set $up_mcp http://mcp-server-plughub:3100;\n\

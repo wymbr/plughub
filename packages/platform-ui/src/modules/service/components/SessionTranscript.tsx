@@ -666,6 +666,12 @@ function normalizeContent(content: unknown): NormalizedContent {
     const options = Array.isArray(obj.options) ? obj.options as { id: string; label: string }[] : []
     const fields  = Array.isArray(obj.fields)  ? obj.fields  as { id: string; label: string; type?: string }[] : []
 
+    // ATT-08 — o anexo do ATENDENTE grava `type: image|document|video` (é o que o gateway lê
+    // para entregar ao cliente), com o mesmo `attachment` e o mesmo indicador do anexo do cliente.
+    if ((type === 'image' || type === 'document' || type === 'video')
+        && obj.attachment && typeof obj.attachment === 'object') {
+      return { kind: 'text', text, attachment: obj.attachment as AttachmentRef }
+    }
     if (type === 'text' || (!type && text)) {
       // VOZ-28 — o anexo do cliente viaja em `content.attachment` (o texto é o indicador)
       const att = obj.attachment && typeof obj.attachment === 'object'

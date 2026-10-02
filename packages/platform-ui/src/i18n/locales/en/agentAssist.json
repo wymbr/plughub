@@ -607,6 +607,9 @@
     "aiTypingAria": "AI agent is typing"
   },
   "agentInput": {
+    "attachAriaLabel": "Attach a file (the typed text becomes its caption)",
+    "attachSending": "Sending file…",
+    "attachRefused": "File not sent: {{reason}}",
     "wrapUpBanner": "Wrap-up in progress — respond to the finalization agents' prompts below.",
     "label": "Message",
     "placeholder": "Type your message… (Enter sends · Shift+Enter new line)",
