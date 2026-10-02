@@ -130,7 +130,10 @@ r(read_hook and read_hook <= emitted_token,
 r("negotiated_medium" not in re.sub(r"(//[^\n]*|/\*.*?\*/)", "", hook, flags=re.S),
   "A3 Console nao le `negotiated_medium` fora de comentario")
 sup = src("packages/platform-ui/src/modules/agent-assist/components/WebRTCSupervisorView.tsx")
-r(re.search(r'useWebRTCSession\([^)]*"supervisor"\)', sup) is not None, "A3 visao de supervisor pede role=supervisor")
+# o papel é o 4º argumento, e pode vir seguido de outros (WCH-05 acrescentou `callActive`) — a
+# regex antiga exigia o `)` logo depois e reprovava uma visão que pedia o papel certo (VOZ-52)
+r(re.search(r'useWebRTCSession\((?:[^,()]*,){3}\s*"supervisor"\s*[,)]', sup) is not None,
+  "A3 visao de supervisor pede role=supervisor (4o argumento)")
 widget = src("infra/demo/web/webrtc-widget.html")
 def handler_reads(t):
     m = re.search(r"msg\.type === '%s'\) \{(.*?)\n    \}" % re.escape(t), widget, re.S)

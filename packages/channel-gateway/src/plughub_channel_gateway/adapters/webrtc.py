@@ -158,6 +158,10 @@ _KEEPALIVE_INTERVAL = 20       # seconds between server-side ping probes
 # (2026-09-21), 28 timeouts numa chamada de 3 min. No observador do canal isso era `debug`, calado.
 _STREAM_BLOCK_MS    = 3_000
 _STREAM_WATCHER_SLEEP = 1.0    # seconds to sleep on stream watcher error
+# VOZ-52: quanto o observador do stream espera a entrega do fechamento pela plataforma (Kafka, com a
+# despedida e o motivo) antes de mandar ele mesmo o `webrtc.session_closed` — medido: a entrega
+# chega ~50 ms depois do `session_closed` no stream
+_CLOSE_DELIVERY_GRACE_S = 5.0
 
 # ── Coleta mascarada (VOZ-05, fatia A) ────────────────────────────────────────
 #
@@ -468,6 +472,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         # chamada; a resolução de cada sessão é feita UMA vez e compartilhada entre STT e TTS
         self.speech_profiles = SpeechProfiles(settings.config_api_url)
         self._speech_resolved: dict[str, asyncio.Task] = {}
+        # VOZ-52: o fechamento da plataforma já foi entregue ao cliente (o observador espera por ele)
+        self._close_events:    dict[str, asyncio.Event] = {}
         # VOZ-54: o serviço de fala que CAI com a chamada de pé — falhas consecutivas por sessão
         self._bot_leg_health = BotLegHealth()
         self._screen_invalids: dict[str, dict[str, int]]         = {}
@@ -999,6 +1005,13 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             "active": is_typing,
         })
 
+    def _close_delivered(self, session_id: str) -> asyncio.Event:
+        """VOZ-52: o sinal de que o `webrtc.session_closed` da PLATAFORMA já foi ao cliente."""
+        ev = self._close_events.get(session_id)
+        if ev is None:
+            ev = self._close_events[session_id] = asyncio.Event()
+        return ev
+
     async def deliver_session_closed(self, payload: dict) -> None:
         """
         Notify the WebRTC client that the session has ended and close the WS.
@@ -1046,6 +1059,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         if not reason:
             del closed["reason"]          # ausente, nunca string vazia com cara de motivo
         await self._ws_send(ws, closed)
+        self._close_delivered(session_id).set()
         try:
             await ws.close(code=1000)
         except Exception:
@@ -1155,6 +1169,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         await self._close_session(session_id, "customer_disconnect")
         self._connections.pop(session_id, None)
         self._customer_media.pop(session_id, None)
+        self._close_events.pop(session_id, None)
         logger.info("webrtc WS session complete: session=%s contact=%s", session_id, contact_id)
 
     # ── Auth handshake ────────────────────────────────────────────────────────
@@ -1358,6 +1373,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                                 "webrtc stream_watcher: %s for session=%s",
                                 event_type, session_id,
                             )
+                            await self._await_close_delivery(ws, session_id, fields)
                             return
 
             except Exception as exc:
@@ -1366,6 +1382,31 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                     session_id, exc,
                 )
                 await asyncio.sleep(_STREAM_WATCHER_SLEEP)
+
+    async def _await_close_delivery(self, ws: Any, session_id: str, fields: dict) -> None:
+        """VOZ-52: o observador NÃO derruba o socket antes de o cliente saber que acabou.
+
+        O `session_closed` chega ao stream e, ~50 ms depois, a mesma notícia chega pelo Kafka de
+        saída (`deliver_session_closed`, com a despedida e o motivo). Retornar daqui encerra o laço
+        do WebSocket e fecha o socket — e a entrega que viesse depois era enviada a um socket
+        fechado, falhando calada: o cliente ficava sem `webrtc.session_closed` (e sem a despedida)
+        numa corrida que ninguém via. Agora o observador ESPERA a entrega por uma janela curta; se
+        ela não vier, ele mesmo manda o fechamento, com o motivo do stream — nunca fecha calado."""
+        try:
+            await asyncio.wait_for(self._close_delivered(session_id).wait(), _CLOSE_DELIVERY_GRACE_S)
+            return
+        except asyncio.TimeoutError:
+            pass
+        reason = str(fields.get("reason") or "")
+        if reason == "agent_done":
+            reason = ""
+        logger.warning("webrtc: o fechamento da plataforma NAO chegou pelo outbound em %.0f s "
+                       "(session=%s) — o cliente recebe o session_closed pelo stream (motivo=%s)",
+                       _CLOSE_DELIVERY_GRACE_S, session_id, reason or "?")
+        closed = {"type": "webrtc.session_closed", "reason": reason}
+        if not reason:
+            del closed["reason"]
+        await self._ws_send(ws, closed)
 
     # ── Mídia por PARTICIPANTE (VOZ-09) ───────────────────────────────────────
     #

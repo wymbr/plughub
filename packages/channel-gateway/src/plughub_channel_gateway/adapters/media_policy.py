@@ -58,7 +58,9 @@ BOT        = "bot"
 
 # Chaves que o gateway LÊ da política do pool — tem de ser exatamente as do
 # `PoolMediaPolicySchema`; o `probe_webrtc_pool_media_policy.sh` confere os dois lados.
-POLICY_KEYS: tuple[str, ...] = ("customer_publish", "agent_publish")
+# `recording` (VOZ-06) é lida em `attendant_record` desde 2026-09-21, e esta lista ficou para
+# trás até a VOZ-52: a paridade acusava, com razão, uma declaração que não dizia o que se lê.
+POLICY_KEYS: tuple[str, ...] = ("customer_publish", "agent_publish", "recording")
 
 
 @dataclass(frozen=True)

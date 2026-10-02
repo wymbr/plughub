@@ -1,5 +1,47 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (6) — VOZ-52: os três probes de mídia vermelhos, e uma corrida que tirava do cliente o aviso de fim
+
+A ficha mandava conferir se cada probe tinha envelhecido ou se o código tinha regredido antes de
+mexer. Deu um de cada, e o terceiro escondia um defeito real.
+
+**1. `probe_webrtc_pool_media_policy.sh` A1 — a DECLARAÇÃO envelheceu, não o probe.** O schema Zod
+ganhou `recording` (VOZ-06), e o leitor do gateway o LÊ (`attendant_record`). Só a lista
+`POLICY_KEYS`, que diz o que o gateway lê, ficou com duas chaves. A paridade acusava com razão.
+`POLICY_KEYS` passou a ter as três (e o teste que a fixava também).
+
+**2. `probe_webrtc_participant_media.sh` A3 — o PROBE envelheceu.** A visão de supervisão continua
+pedindo `role="supervisor"`, mas a WCH-05 acrescentou `callActive` depois dele, e a regex exigia o
+`)` logo em seguida. A regex nova confere o papel como 4º argumento, seguido de qualquer coisa.
+Mutação: com `"agent"` no lugar, A3 reprova.
+
+**3. `probe_voz39_recording_badge.sh` B0 — uma CORRIDA real.**
+- **Sintoma:** a ficha via o B0 só no modo `aborta`. Nesta medição ele saiu no modo `grava`, e
+  isolado o `grava` passava. Era intermitente em qualquer modo.
+- **O que os logs mostraram:** a plataforma fechou a sessão 80 ms depois do `fim`. No gateway, porém,
+  o `WS session complete` vinha ANTES do `session_closed delivered`.
+- **A causa:** desde a VOZ-11 fatia a (2026-09-30), o `_stream_watcher` RETORNA ao ver
+  `session_closed` no stream, e isso encerra o laço do WebSocket. A mesma notícia chega ~50 ms depois
+  pelo Kafka de saída (`deliver_session_closed`, com a despedida e o motivo), que primeiro publica o
+  `agent_done` e só depois manda o frame. Quando o watcher ganhava a corrida, o frame ia para um
+  socket fechado, e o `_ws_send` engole essa falha em DEBUG.
+- **O efeito:** intermitentemente, o cliente do webrtc ficava sem `webrtc.session_closed` e sem a
+  despedida da plataforma (teto de fila, sem recurso), e via só a conexão cair.
+
+**Conserto:** ao ver o fim no stream, o watcher ESPERA a entrega da plataforma
+(`_await_close_delivery`, até `_CLOSE_DELIVERY_GRACE_S` = 5 s, sinalizada por `deliver_session_closed`).
+Se ela não vier, ele mesmo manda o `webrtc.session_closed` com o motivo do stream e loga WARNING. O
+cliente nunca fica sem o aviso de fim.
+
+**Prova:**
+- Os três probes estão VERDES; o da VOZ-39 rodou duas vezes seguidas.
+- A reserva do watcher não disparou nenhuma vez: a entrega veio sempre dentro da janela.
+- Testes novos em `TestCloseDeliveryRace`: o watcher espera, e despedida e fechamento saem uma vez
+  cada, nessa ordem; sem entrega, ele manda o fechamento com o motivo.
+- Mutações, as três reprovadas: o watcher volta a não esperar, a entrega não sinaliza, e sem o frame
+  de reserva.
+- Suíte do gateway: 1763. `probe_voz11_media_degradation` verde.
+
 ## 2026-10-02 (5) — ALW-20: os temporários do probe de paridade saem do git
 
 O `probe_context_tag_extractor_parity.sh` grava seus temporários em `infra/test/.ctx_parity_tmp/`,

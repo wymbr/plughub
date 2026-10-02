@@ -1150,7 +1150,7 @@ ou do autor, `author_id`, `participant_id` — contra o conjunto registrado; nun
 | `session_escalate` | mcp-server `session.ts` | `instance_id` do token no payload |
 | IA nativa | bridge `_write_participant_left_to_stream` (`agents_only`) | instância em tudo |
 
-O observador para no `session_closed` do stream. O resto da VOZ-11 está na § 20b.
+O observador para no `session_closed` do stream, mas não derruba o socket antes de o cliente saber (VOZ-52): espera a entrega do fechamento da plataforma (Kafka, com a despedida e o motivo) por até `_CLOSE_DELIVERY_GRACE_S`, e sem ela manda ele mesmo o `webrtc.session_closed` com o motivo do stream. Retornar direto fazia a entrega cair num socket fechado, calada. O resto da VOZ-11 está na § 20b.
 
 ## 20b. Estado real, capacidade e incapacidade dita (VOZ-11 b, c, d, 2026-10-01)
 

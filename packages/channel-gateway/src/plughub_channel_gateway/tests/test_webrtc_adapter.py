@@ -619,7 +619,7 @@ class TestMediaPolicy:
         assert media_policy.agent_ceiling({"ia1": self._rec("native")}) == frozenset()
 
     def test_chaves_lidas_sao_as_do_schema(self):
-        assert media_policy.POLICY_KEYS == ("customer_publish", "agent_publish")
+        assert media_policy.POLICY_KEYS == ("customer_publish", "agent_publish", "recording")
 
     def test_fontes_em_ordem_estavel(self):
         assert media_policy.publish_sources({"video", "audio"}) == ["microphone", "camera"]
@@ -1236,5 +1236,60 @@ class TestStreamWatcherStops:
 
         adapter._redis.xread = _xread
         import asyncio
-        await asyncio.wait_for(adapter._stream_watcher(AsyncMock(), str(uuid.uuid4()), "p"), timeout=2)
+        from plughub_channel_gateway.adapters import webrtc as webrtc_mod
+        webrtc_mod._CLOSE_DELIVERY_GRACE_S = 0.05
+        try:
+            await asyncio.wait_for(adapter._stream_watcher(AsyncMock(), str(uuid.uuid4()), "p"), timeout=2)
+        finally:
+            webrtc_mod._CLOSE_DELIVERY_GRACE_S = 5.0
         assert chamadas["n"] == 1
+
+
+class TestCloseDeliveryRace:
+    """VOZ-52: o observador encerrava o WebSocket ao ver `session_closed` no stream, e a entrega
+    do fechamento pela plataforma (Kafka, ~50 ms depois) era mandada a um socket FECHADO, calada:
+    o cliente ficava sem `webrtc.session_closed` e sem a despedida, numa corrida intermitente."""
+
+    def _adapter(self):
+        return _make_adapter(provider=MockWebRTCProvider(), redis=_fake_redis(),
+                             settings=_fake_settings(webrtc_stt_enabled=False))
+
+    @staticmethod
+    def _xread_fechando(reason):
+        n = {"v": 0}
+
+        async def _xread(*a, **k):
+            n["v"] += 1
+            if n["v"] == 1:
+                return [("k", [("1-0", {"type": "session_closed", "reason": reason})])]
+            raise AssertionError("o observador seguiu lendo depois do session_closed")
+        return _xread
+
+    @pytest.mark.asyncio
+    async def test_the_watcher_waits_for_the_platform_close(self):
+        import asyncio
+        adapter, sid = self._adapter(), str(uuid.uuid4())
+        adapter._redis.xread = self._xread_fechando("flow_complete")
+        ws = AsyncMock()
+        adapter._connections[sid] = ws
+        watcher = asyncio.create_task(adapter._stream_watcher(ws, sid, "p"))
+        await asyncio.sleep(0.05)
+        assert not watcher.done(), "o observador encerrou o socket antes de o cliente saber"
+        await adapter.deliver_session_closed({"session_id": sid, "close_reason": "flow_complete",
+                                              "farewell_text": "tchau"})
+        await asyncio.wait_for(watcher, 2)
+        enviados = [c.args[0] for c in ws.send_json.call_args_list]
+        assert [m["type"] for m in enviados] == ["webrtc.message", "webrtc.session_closed"],             "despedida e fechamento da plataforma, uma vez cada, nessa ordem"
+
+    @pytest.mark.asyncio
+    async def test_without_the_platform_close_the_watcher_sends_it(self, monkeypatch):
+        import asyncio
+        from plughub_channel_gateway.adapters import webrtc as webrtc_mod
+        monkeypatch.setattr(webrtc_mod, "_CLOSE_DELIVERY_GRACE_S", 0.05)
+        adapter, sid = self._adapter(), str(uuid.uuid4())
+        adapter._redis.xread = self._xread_fechando("flow_complete")
+        ws = AsyncMock()
+        await asyncio.wait_for(adapter._stream_watcher(ws, sid, "p"), 2)
+        enviados = [c.args[0] for c in ws.send_json.call_args_list]
+        assert enviados == [{"type": "webrtc.session_closed", "reason": "flow_complete"}],             "nunca fecha calado: o motivo do stream vai ao cliente"
+
