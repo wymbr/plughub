@@ -3,7 +3,8 @@
 
 Lido por stdin: `docker exec -i <gw> python - '<json {fones:{…}, customers:[…]}>'`.
 Apaga só o que o exercício criou — por hash de âncora, por id de cliente e pelo sistema de
-importação `__probe_pid09__`, nunca por tenant. Imprime uma linha JSON com as contagens.
+importação (`__probe_pid09__`, ou o `system` do JSON — AAS-19 reusa), nunca por tenant. Imprime
+uma linha JSON com as contagens.
 """
 import asyncio
 import json
@@ -21,6 +22,7 @@ SYSTEM = "__probe_pid09__"
 
 async def main():
     arg = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
+    system = str(arg.get("system") or SYSTEM)
     s = get_settings()
     tenant = s.tenant_id
     salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
@@ -35,14 +37,14 @@ async def main():
             if cids:
                 refs = await conn.fetch(
                     "SELECT customer_id FROM identity.customer_external_refs WHERE tenant_id=$1 AND system=$2",
-                    tenant, SYSTEM)
+                    tenant, system)
                 cids = sorted(set(cids) | {r["customer_id"] for r in refs})
             out["keys"] = await conn.execute(
                 "DELETE FROM identity.customer_secondary_keys WHERE tenant_id=$1 AND "
                 "(customer_id = ANY($2::text[]) OR (kind='phone' AND value_hash = ANY($3::text[])))",
                 tenant, cids, hashes)
             out["refs"] = await conn.execute(
-                "DELETE FROM identity.customer_external_refs WHERE tenant_id=$1 AND system=$2", tenant, SYSTEM)
+                "DELETE FROM identity.customer_external_refs WHERE tenant_id=$1 AND system=$2", tenant, system)
             out["customers"] = await conn.execute(
                 "DELETE FROM identity.customers WHERE customer_id = ANY($1::text[])", cids)
         chaves = ["%s:identity:phone:%s" % (tenant, h) for h in hashes]

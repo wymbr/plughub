@@ -512,5 +512,9 @@ de IDN-07.** A migração dos dois intakes (PID-04) vem **depois** da chave de r
 - **Biometria** — desenhável, não executável: nenhum canal do parque captura mídia (Arc 15).
 - **Voz** — todo o D10 de voz é papel enquanto VOZ-01/VOZ-03 valerem.
 - **A forma do step-up no meio do processo** (revelar dado mascarado, por exemplo) — usa a mesma
-  regra de D5/D6, mas o contrato do N3 para pedir isso não está desenhado aqui.
+  regra de D5/D6, mas o contrato do N3 para pedir isso não está desenhado aqui. *(2026-10-02,
+  AAS-19: a primeira forma existe — prova FORA DE BANDA por link, `identity_proof_link` →
+  `menu` → `identity_proof_status`, a mesma régua do `judgeResumeEvidence`; a evidência entra
+  pelo escritor único, que aceita `otp` por pedido só como `verified`. Ver
+  `adr-a2a-server-binding` D12, *como ficou*.)*
 - Não toca o modelo de escopo `segment`/`session`/`journey`. Ver a desambiguação no topo.

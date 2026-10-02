@@ -146,3 +146,29 @@ class TestDesfechoDaColeta:
         await bridge_mod.process_inbound(msg, r)
         assert (f"menu:result:{SID}:ia-001", forjado) in r.lpushes
         assert not any(k.startswith("menu:signal") for k, _ in r.lpushes)
+
+
+class TestProvaForaDeBanda:
+    """AAS-19 — a página do link de prova confirma, e o menu que espera é acordado por SINAL."""
+
+    async def test_prova_vai_aos_menus_do_cliente_como_sinal_e_nunca_como_mensagem(self, producer):
+        r = _Redis(waiting={
+            "ia-001": _meta("all"),
+            "interno-003": _meta("agents_only"),
+            "copilot-004": _meta("all", standby=True),
+        }, customer_pid="cust_x")
+        await bridge_mod.process_inbound(_menu_result({"proof": "settled"}), r)
+        assert r.lpushes == [(f"menu:signal:{SID}:ia-001", json.dumps({"_proof_settled": True}))]
+        assert r.publishes == [] and r.xadds == [] and producer.sent == []
+
+    async def test_sem_menu_esperando_e_dito(self, producer, caplog):
+        r = _Redis()
+        with caplog.at_level("WARNING"):
+            await bridge_mod.process_inbound(_menu_result({"proof": "settled"}), r)
+        assert r.lpushes == [] and "Prova fora de banda SEM menu do cliente esperando" in caplog.text
+
+    async def test_outro_valor_de_proof_nao_e_sinal(self, producer):
+        # só o valor exato que a página publica; o resto segue o caminho de sempre (resposta vazia)
+        r = _Redis(waiting={"ia-001": _meta("all")})
+        await bridge_mod.process_inbound(_menu_result({"proof": "verified"}), r)
+        assert not any(k.startswith("menu:signal") for k, _ in r.lpushes)

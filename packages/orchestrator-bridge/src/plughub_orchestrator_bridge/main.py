@@ -485,6 +485,22 @@ async def deliver_collect_outcome(redis_client, session_id: str, contact_id: str
     if outcome not in COLLECT_OUTCOMES:
         logger.warning("Desfecho de coleta desconhecido descartado: session=%s outcome=%r", session_id, outcome)
         return 0
+    return await _signal_customer_menus(redis_client, session_id, contact_id,
+                                        {"_collect_outcome": outcome}, "collect", f"Desfecho de coleta {outcome}")
+
+
+async def deliver_proof_settled(redis_client, session_id: str, contact_id: str | None) -> int:
+    """AAS-19 — a prova FORA DE BANDA assentou (a pessoa confirmou o código na página do link). O
+    menu que espera pela prova é acordado por SINAL, e o fluxo decide pelo `identity_proof_status` —
+    o sinal só diz "olhe de novo", nunca "provou". Devolve quantos menus o receberam."""
+    return await _signal_customer_menus(redis_client, session_id, contact_id,
+                                        {"_proof_settled": True}, "proof", "Prova fora de banda")
+
+
+async def _signal_customer_menus(redis_client, session_id: str, contact_id: str | None,
+                                 signal: dict, wake_reason: str, what: str) -> int:
+    """Põe um sinal da PLATAFORMA na fila de cada menu voltado ao CLIENTE desta sessão (os que o
+    cliente vê pela visibilidade, fora os em `standby`) e acorda o que estiver estacionado."""
     waiting = await redis_client.hgetall(f"menu:waiting:{session_id}") or {}
     customer_pid = contact_id or "customer"
     raw_pid = await redis_client.get(f"session:{session_id}:customer_participant_id")
@@ -503,13 +519,13 @@ async def deliver_collect_outcome(redis_client, session_id: str, contact_id: str
         if not (vis == "all" or (isinstance(vis, list) and customer_pid in vis)):
             continue
         key = menu_signal_key(session_id, "" if agent_key == "_default_" else agent_key)
-        await redis_client.lpush(key, json.dumps({"_collect_outcome": outcome}))
-        _spawn(wake_parked_run(redis_client, session_id, agent_key, "collect"))   # DUR-01
+        await redis_client.lpush(key, json.dumps(signal))
+        _spawn(wake_parked_run(redis_client, session_id, agent_key, wake_reason))   # DUR-01
         entregues += 1
     if entregues:
-        logger.info("Desfecho de coleta %s entregue a %d menu(s): session=%s", outcome, entregues, session_id)
+        logger.info("%s entregue a %d menu(s): session=%s", what, entregues, session_id)
     else:
-        logger.warning("Desfecho de coleta %s SEM menu do cliente esperando: session=%s", outcome, session_id)
+        logger.warning("%s SEM menu do cliente esperando: session=%s", what, session_id)
     return entregues
 
 
@@ -10626,6 +10642,10 @@ async def process_inbound(
             # texto — senão vira `[Seleção: [Anexo: …]]`, rótulo de escolha que ninguém fez.
             msg_type = "text"
         elif msg_type == "menu_result":
+            if (content.get("payload") or {}).get("proof") == "settled":
+                # AAS-19: a página do link de prova confirmou — SINAL ao menu, não fala do cliente
+                await deliver_proof_settled(redis_client, session_id, contact_id)
+                return
             outcome = (content.get("payload") or {}).get("outcome")
             if outcome:
                 # Desfecho da coleta (timeout/inválido): vai ao menu como SINAL e a nenhum outro

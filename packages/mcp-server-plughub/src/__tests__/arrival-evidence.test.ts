@@ -22,8 +22,21 @@ describe("PID-09 — judgeArrivalEvidence", () => {
     })
   })
 
-  it("`otp` não é registrável por chegada — só a tool que confere o código o prova", () => {
-    expect(judgeArrivalEvidence({ ...VERIFICADA, mechanism: "otp" }, AGORA)).toMatchObject({ kind: "refuse", status: 422, error: "mechanism_not_arrival" })
+  it("AAS-19: `otp` por pedido só como `verified` (a página do link de prova) — outro status apagaria a prova de pé", () => {
+    expect(judgeArrivalEvidence({ ...VERIFICADA, mechanism: "otp" }, AGORA)).toEqual({
+      kind: "ok", tenantId: "t", sessionId: "S1", mechanism: "otp",
+      record: { status: "verified", anchor_kind: "phone", customer_id: "cus_a", source: "authoritative", verified_at: AGORA, proven_in_session: "S1" },
+    })
+    for (const status of ["pending", "failed", "expired", "not_run"]) {
+      expect(judgeArrivalEvidence({ ...VERIFICADA, mechanism: "otp", status }, AGORA))
+        .toMatchObject({ kind: "refuse", status: 422, error: "otp_so_verified" })
+    }
+    expect(judgeArrivalEvidence({ ...VERIFICADA, mechanism: "otp", source: "declared" }, AGORA))
+      .toMatchObject({ kind: "refuse", error: "verified_sem_fonte_autoritativa" })
+  })
+
+  it("mecanismo fora da lista continua recusado", () => {
+    expect(judgeArrivalEvidence({ ...VERIFICADA, mechanism: "oidc_email" }, AGORA)).toMatchObject({ kind: "refuse", status: 422, error: "mechanism_not_arrival" })
   })
 
   it("verified sem cliente, ou com fonte que não é o cadastro autoritativo, é recusado", () => {

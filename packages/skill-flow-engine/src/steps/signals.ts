@@ -16,6 +16,9 @@ export type PlatformSignal =
   // desfecho da coleta por voz/teclado. `aborted` (NIV-07): o CANAL não conseguiu garantir a
   // coleta protegida — ex.: não tirou da sala quem ouviria a tecla mascarada — e a desfez
   | { kind: "collect"; outcome: "timeout" | "invalid" | "aborted" }
+  // AAS-19: a prova FORA DE BANDA (link de `identity_proof_link`) assentou. Só ACORDA o menu que
+  // espera por ela: o veredito é do `identity_proof_status`, nunca deste sinal
+  | { kind: "proof" }
   | { kind: "unknown"; raw: string }          // sinal ilegível: quem o recebe decide, DITO
 
 export function parseSignal(raw: string): PlatformSignal {
@@ -32,6 +35,7 @@ export function parseSignal(raw: string): PlatformSignal {
   }
   if (p["_mention_terminate"] === true) return { kind: "terminate" }
   if (p["_rule_preempt"] === true) return { kind: "preempt" }
+  if (p["_proof_settled"] === true) return { kind: "proof" }
   if (p["_collect_outcome"] === "timeout" || p["_collect_outcome"] === "invalid"
       || p["_collect_outcome"] === "aborted") {
     return { kind: "collect", outcome: p["_collect_outcome"] }

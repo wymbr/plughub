@@ -20,10 +20,11 @@ export const A2A_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 /**
  * AAS-09 — segmentos de `/a2a/…` que são da PLATAFORMA, não de um pool: o gateway serve a
- * retirada do token do cliente em `/a2a/customer-token/{código}`. Um endereço com esse slug
- * faria a mesma URL significar duas coisas.
+ * retirada do token do cliente em `/a2a/customer-token/{código}` e, desde a AAS-19, a página
+ * da prova fora de banda em `/a2a/proof/{código}`. Um endereço com esse slug faria a mesma URL
+ * significar duas coisas.
  */
-export const A2A_RESERVED_SLUGS: ReadonlySet<string> = new Set(["customer-token"])
+export const A2A_RESERVED_SLUGS: ReadonlySet<string> = new Set(["customer-token", "proof"])
 
 export type A2ACardResult =
   | { card: AgentCard; pool_id: string }

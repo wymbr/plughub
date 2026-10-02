@@ -57,6 +57,7 @@ import { validateDialogForm }       from "@plughub/schemas"
 import { registerSegmentTools }     from "./tools/segment"
 import { registerWorkflowTools }    from "./tools/workflow"
 import { registerCustomerAgentTools } from "./tools/customer-agent"
+import { registerIdentityProofTools } from "./tools/identity-proof"
 import type { WorkflowDeps }        from "./tools/workflow"
 import { registerDialogTools }      from "./tools/dialog"
 import type { DialogDeps }          from "./tools/dialog"
@@ -244,6 +245,12 @@ export function createServer(allDeps?: AllDeps): McpServer {
     authApiUrl:       process.env["AUTH_API_URL"] ?? "http://auth-api:3200",
     authServiceToken: process.env["AUTH_SERVICE_TOKEN"] ?? "",
     a2aPublicBaseUrl: process.env["A2A_PUBLIC_BASE_URL"] ?? "",
+  })
+  // AAS-19 — a prova de posse fora de banda (link que a pessoa abre no navegador)
+  registerIdentityProofTools(server, {
+    redis,
+    channelGatewayUrl:          workflowDeps.channelGatewayUrl,
+    channelGatewayServiceToken: workflowDeps.channelGatewayServiceToken ?? "",
   })
   registerDialogTools(server, dialogDeps)
 
@@ -1471,6 +1478,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
       authApiUrl:       process.env["AUTH_API_URL"] ?? "http://auth-api:3200",
       authServiceToken: process.env["AUTH_SERVICE_TOKEN"] ?? "",
       a2aPublicBaseUrl: process.env["A2A_PUBLIC_BASE_URL"] ?? "",
+    })
+    // AAS-19 — o link de prova é criado pelo gateway (dono da página e do código)
+    registerIdentityProofTools(mcpServer, {
+      redis,
+      channelGatewayUrl:          process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
+      channelGatewayServiceToken: process.env["CHANNEL_GATEWAY_SERVICE_TOKEN"] ?? "",
     })
     registerDialogTools(mcpServer, {
       dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",

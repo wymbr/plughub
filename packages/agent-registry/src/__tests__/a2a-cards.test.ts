@@ -161,6 +161,7 @@ describe("POST/PUT /v1/channel-endpoints — endereço a2a só para pool que exp
     ["slug com maiúscula e espaço", { identifier: "Segunda Via" }, {}, "a2a_slug_invalid"],
     ["slug começando por separador", { identifier: "-x" }, {}, "a2a_slug_invalid"],
     ["slug reservado da plataforma (AAS-09: a retirada do token do cliente)", { identifier: "customer-token" }, {}, "a2a_slug_reserved"],
+    ["slug reservado da plataforma (AAS-19: a página da prova fora de banda)", { identifier: "proof" }, {}, "a2a_slug_reserved"],
     ["pool sem o canal", {}, { channel_types: ["webchat"] }, "a2a_pool_not_exposed"],
     ["pool sem descritor", {}, { a2a: null }, "a2a_pool_not_exposed"],
     ["pool interno", {}, { purpose: "internal" }, "a2a_pool_not_contact"],

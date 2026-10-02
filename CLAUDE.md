@@ -1032,6 +1032,13 @@ Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `
   nasce na retirada por link de uso único e aparece uma vez — **nunca passa pela conversa**; a
   sessão do assistente é do titular; cota por principal na porta (429); o admin só desliga.
   Validade e cota são do contrato A2A do pool, sem default. Gate: `probe_aas09_customer_agent.sh`.
+- **Prova do titular no meio da task é FORA DE BANDA, e o agente nunca vê o código** (AAS-19):
+  o fluxo pede um link (`identity_proof_link`), a pessoa prova por OTP na página do gateway
+  (`/a2a/proof/`), a evidência vai ao escritor único e o `menu` que espera é acordado por SINAL.
+  **O veredito é do `identity_proof_status`, nunca do valor que acordou o menu** — a mensagem do
+  agente não é prova. No `a2a` a task fica `AUTH_REQUIRED` e o stream não fecha. Só a prova
+  CONCLUÍDA se grava por pedido (`otp` não-`verified` apagaria a de pé). Gate:
+  `probe_aas19_auth_required.sh`.
 - **Toda rota de serviço Python tem UMA linha em `infra/test/route_credential_baseline.tsv`** (AUT-58):
   `fechada`, `guard_corpo:<g>` (conferido no código), `isenta` com motivo, ou `divida:<ficha>`. Quem
   mede é uma varredura ANÔNIMA ao vivo, não a leitura do código — o código não mostra guard que falha

@@ -1,5 +1,77 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (1) — AAS-19: a pessoa prova fora de banda, e a task A2A segue sozinha
+
+Fase B2 do `adr-a2a-server-binding`, o item 2 da D12. Depois da AAS-09 o assistente do cliente
+chegava com a prova da EMISSÃO, que de propósito não vira evidência da sessão; skill que exigisse
+prova fresca não a encontrava e seguia `on_failure`. E o caminho de OTP que existia (`otp_challenge`
+→ `menu` → `otp_verify`) não serve a agente de fora: o código seria digitado pelo agente, que é
+exatamente quem não pode vê-lo.
+
+**O fluxo pede um link; a pessoa prova no navegador.** Duas tools novas, ligadas à sessão:
+`identity_proof_link` (cliente e âncora) cria o link no gateway, e `identity_proof_status` dá o
+veredito — a régua do `judgeResumeEvidence`: verificada, desta sessão, ≤ 15 min, deste cliente. O
+padrão é `invoke` link → `menu` com o link no prompt → `invoke` status → `choice`. **O `menu` é só a
+espera; quem decide é o status**, nunca o valor que acordou o menu. Já provado nesta sessão ⇒
+`already_proven`, sem link.
+
+**A página é do gateway** (`identity_proof.py`, `/a2a/proof/{código}`, slug `proof` reservado no
+registry como o `customer-token`). O link **não é credencial**: só manda código ao telefone ou
+e-mail AUTORITATIVO do cadastro (o portão da PID-10, conferido já na criação para o fluxo ouvir a
+recusa, e não a pessoa no navegador), e só quem o recebe prova. Por isso pode passar pelo agente e
+ficar no transcrito. O GET não envia código (preview de link de mensageiro), nenhuma página mostra
+o código — nem o `dev_code` do demo —, a âncora aparece só como dica, e o link morre no uso (410).
+
+**Só a prova CONCLUÍDA vira evidência.** O escritor único (`/internal/identity-evidence`) passou a
+aceitar `otp` por pedido, **só** como `verified` e com fonte autoritativa: quem tem o link não é
+necessariamente a pessoa, e um `pending`/`failed` por pedido APAGARIA uma prova de pé (o escritor
+remove os campos da prova). Código errado não grava nada.
+
+**O menu é acordado por SINAL, nunca por fala.** A página publica um `menu_result` com
+`payload.proof = "settled"`; o bridge o converte em `_proof_settled` na fila `menu:signal` (a
+mesma de MEN-07, que só ele escreve) e acorda o menu estacionado; o engine leva o menu ao
+`on_success` com um marcador. O laço que entregava o desfecho de coleta virou
+`_signal_customer_menus`, usado pelos dois. Nenhum payload de canal carrega `proof` — todos são
+montados pelo gateway —, e ainda assim o veredito não depende do sinal.
+
+**No canal `a2a`**, link pendente (`{t}:proof:session:{sid}`) + menu esperando =
+`TASK_STATE_AUTH_REQUIRED`, motivo `identity_proof`, com o link no texto do status (posto pela
+plataforma se o prompt não o trouxer), numa `DataPart` `authorization` para quem aceita JSON e o
+prazo em `metadata.plughub.auth_deadline` (publicado na extensão `task-lifetime`). Conferido no
+texto CRU da spec (§ 7.6): a credencial chega fora de banda e a task MAY seguir sem mensagem nova,
+o agente SHOULD manter o stream aberto e SHOULD aceitar mensagem nesse estado. Por isso o stream
+**não fecha** em `AUTH_REQUIRED` (continua fechando em `INPUT_REQUIRED`) e o chamador pode
+responder — a mensagem chega ao menu como resposta, e o status continua dizendo a verdade.
+
+**Na sessão do `customer_agent`, só o titular** é provável (`customer_not_holder`). No `partner`
+o `customer_id` vem do fluxo, e o argumento é seguro porque o código vai ao canal autoritativo
+DESSE cliente.
+
+**Gates.** `probe_aas19_auth_required.sh` (AUTO) — cliente importado como autoritativo, telefone
+novo por rodada, skill sem LLM, código lido do log dev do gateway como a pessoa o leria no
+telefone: A a task para em AUTH_REQUIRED com o link e sem o telefone · P GET não envia código, a
+página não o mostra, código errado 400 · C conclui sem o chamador mandar nada, evidência desta
+sessão e cliente, acordada por sinal (C4, com a testemunha N3 provando que o instrumento vê fala
+de cliente quando ela existe) · U uso único · S o stream fica aberto e termina em COMPLETED · N o
+"não" do chamador não vale prova · R âncora não autoritativa recusada nomeando. VERDE.
+`mut_aas19_auth_required.sh`: 6 mutações em três serviços, todas pegas pelo ramo declarado —
+link pendente virando INPUT_REQUIRED (A1), GET que envia código (P2), stream que fecha em
+AUTH_REQUIRED (S1), bridge que não reconhece o sinal (C4), status que diz sempre `verified` (N2) e
+código errado aceito (P5). Duas leituras: **o M4 só o C4 pegou** — sem o sinal, o `menu_result`
+caía no caminho de resposta e a prova virava FALA do cliente, e o fluxo concluía assim mesmo; sem
+o ramo que conta fala no stream (e a testemunha que prova que ele a enxerga), a mutação passaria
+verde. E no M6 o código errado aceito **não** virou prova: o juiz da evidência recusou o
+`verified` sem fonte autoritativa, e a página respondeu 503 — duas camadas, e a bateria mede a de
+fora. O `probe_arrival_evidence.sh` (PID-09) trocou uma mutação: "chegada registra otp" virou o
+comportamento certo, e a nova planta `otp` não-`verified` por pedido.
+Unidade: gateway 27 novos (suíte 1737), mcp-server 16 (563), engine 3 (346), bridge 3 (303), schemas
+(426), registry +1 (186).
+
+**Fora desta entrega, e onde ficou:** a confirmação de ação de risco usa esta mesma mecânica com o
+texto da ação, e o mandato imposto continua a `AAS-20` (desbloqueada). O link pelo webchat e pelo
+WhatsApp funciona — a página é de qualquer canal (D12.6) —, mas só foi validado ao vivo no `a2a`.
+Login federado na mesma página é a `FED-01`.
+
 ## 2026-10-01 (19) — AAS-09: o cliente gera o token do próprio assistente, e ele só fala por ele
 
 Fase B2 do `adr-a2a-server-binding`, a primeira metade. A ficha estava `bloqueada por FED-01` (login

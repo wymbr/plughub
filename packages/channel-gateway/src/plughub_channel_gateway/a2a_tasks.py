@@ -12,6 +12,7 @@ nunca um estado plausível:
     {t}:session:{sid}:result          → COMPLETED (contrato válido, artefato) · FAILED (inválido)
     session:{sid}:closed_recorded     → CANCELED (caller_cancel) · REJECTED (no_resource) · FAILED
     menu:waiting:{sid} (voltado ao cliente) + prompt do agente → INPUT_REQUIRED
+      … e {t}:proof:session:{sid} (link de prova pendente)      → AUTH_REQUIRED (AAS-19)
     session:{sid}:meta com instance_id → WORKING ; sem → SUBMITTED
 
 O que guardamos é só o que NÃO é fato da sessão: de quem é a task (principal, pool) para recusar
@@ -22,6 +23,13 @@ chamador mandou (o stream canônico só tem a fala do agente — o pedido inicia
 contra o `input_schema` do descritor do pool e semeado, com o texto, em `core.a2a.request` ANTES do
 roteamento — o fluxo o lê do primeiro passo. As continuações (`INPUT_REQUIRED`) entram pelo caminho
 de sempre: `conversations.inbound`, que o bridge entrega ao `menu` que espera.
+
+**Prova do titular fora de banda** (AAS-19, D12): o fluxo que exige prova cria um link
+(`identity_proof_link`) e espera num `menu`; enquanto o link está pendente a task é
+`AUTH_REQUIRED`, com o link no status. A pessoa prova no navegador (`identity_proof.py`), e a task
+segue SEM o chamador mandar nada — por isso o stream NÃO fecha nesse estado (spec § 7.6.1). O
+chamador pode mandar mensagem (negociar ou recusar): ela chega ao menu como resposta, e quem decide
+é o `identity_proof_status` do fluxo, nunca a mensagem.
 
 **Bloco mascarado não atravessa** (D8): o canal não declara `masked_input`, e o `notification_send`
 RECUSA menu mascarado antes de publicar — o fluxo segue o `on_failure`. O link fora de banda é
@@ -62,13 +70,16 @@ VERSION_UNSUPPORTED  = -32009
 SUBMITTED      = "TASK_STATE_SUBMITTED"
 WORKING        = "TASK_STATE_WORKING"
 INPUT_REQUIRED = "TASK_STATE_INPUT_REQUIRED"
+AUTH_REQUIRED  = "TASK_STATE_AUTH_REQUIRED"
 COMPLETED      = "TASK_STATE_COMPLETED"
 FAILED         = "TASK_STATE_FAILED"
 CANCELED       = "TASK_STATE_CANCELED"
 REJECTED       = "TASK_STATE_REJECTED"
 UNSPECIFIED    = "TASK_STATE_UNSPECIFIED"
 TERMINAL       = frozenset({COMPLETED, FAILED, CANCELED, REJECTED})
-INTERRUPTED    = frozenset({INPUT_REQUIRED})
+INTERRUPTED    = frozenset({INPUT_REQUIRED, AUTH_REQUIRED})
+# interrompida em que a task SEGUE sozinha (a credencial chega fora de banda): o stream fica aberto
+OUT_OF_BAND    = frozenset({AUTH_REQUIRED})
 
 # ── Prazos PUBLICADOS no card (extensão task-lifetime; D15.5/D15.6) ─────────────
 BLOCKING_CEILING_S = 25.0               # teto do `SendMessage` bloqueante
@@ -102,7 +113,7 @@ def task_lifetime_extension() -> dict:
         "uri": TASK_LIFETIME_EXTENSION_URI,
         "description": ("Prazos da tarefa: teto do SendMessage bloqueante, teto de um stream aberto "
                         "(depois dele, SubscribeToTask), validade do contextId, e onde ler o prazo de "
-                        "resposta de uma tarefa em INPUT_REQUIRED."),
+                        "resposta de uma tarefa em INPUT_REQUIRED e o do link de prova em AUTH_REQUIRED."),
         "required": False,
         "params": {
             "blocking_ceiling_s":   BLOCKING_CEILING_S,
@@ -110,6 +121,8 @@ def task_lifetime_extension() -> dict:
             "context_validity_s":   CONTEXT_TTL_S,
             "task_readable_s":      TASK_RECORD_TTL_S,
             "input_deadline_field": "metadata.plughub.input_deadline",
+            # AAS-19: até quando vale o link de prova de uma tarefa em AUTH_REQUIRED
+            "auth_deadline_field":  "metadata.plughub.auth_deadline",
         },
     }
 
@@ -438,7 +451,9 @@ class A2ATaskService:
 
         def fecha(v: dict) -> bool:
             novo = mark == "-" or v["last_stream_id"] != mark
-            return v["state"] in TERMINAL or (v["state"] in INTERRUPTED and novo)
+            # AUTH_REQUIRED não fecha: a prova chega fora de banda e a task continua sem o chamador
+            # mandar nada — a spec pede manter o stream (§ 7.6.1)
+            return v["state"] in TERMINAL or (v["state"] in INTERRUPTED - OUT_OF_BAND and novo)
 
         cursor = await self._stream_cursor(sid)
         view = await self._facts(t, sid, rec)
@@ -461,7 +476,7 @@ class A2ATaskService:
             final = fecha(view)
             emitiu = False
             novos = [m for m in view["agent_msgs"] if m["id"] not in enviados]
-            if final and view["state"] in INTERRUPTED and novos:
+            if view["state"] in INTERRUPTED and novos:
                 # a última fala de uma task INTERROMPIDA é o prompt, que vai NO status — não duas vezes
                 novos = novos[:-1]
             elif not final:
@@ -794,6 +809,11 @@ class A2ATaskService:
         answered = {_s(x) for x in (await self._r.smembers(self._k_answered(t, sid)) or set())}
         inbox = [json.loads(_s(x)) for x in (await self._r.lrange(self._k_inbox(t, sid), 0, -1) or [])]
         deadline = await self._r.zscore(f"{t}:menu:deadlines", sid)
+        proof_raw = await self._r.get(f"{t}:proof:session:{sid}")
+        try:
+            proof = json.loads(_s(proof_raw)) if proof_raw else None
+        except ValueError:
+            proof = None
         meta = {}
         if meta_raw:
             try:
@@ -845,17 +865,18 @@ class A2ATaskService:
             except ValueError:
                 result = None
 
-        state, reason = self._state(result, closed, meta, waiting, cust_pid, agent_msgs)
+        state, reason = self._state(result, closed, meta, waiting, cust_pid, agent_msgs, proof)
         pending_menu = None
-        if state == INPUT_REQUIRED and last_menu and str(last_menu.get("menu_id") or "") not in answered:
+        if state in INTERRUPTED and last_menu and str(last_menu.get("menu_id") or "") not in answered:
             pending_menu = last_menu
         return {"state": state, "reason": reason, "result": result, "closed": closed,
                 "agent_msgs": agent_msgs, "inbox": inbox, "pending_menu": pending_menu,
-                "last_stream_id": last_id, "input_deadline_ms": deadline}
+                "last_stream_id": last_id, "input_deadline_ms": deadline,
+                "proof": proof if state == AUTH_REQUIRED else None}
 
     @staticmethod
     def _state(result: Optional[dict], closed: str, meta: dict, waiting: dict, cust_pid: str,
-               agent_msgs: list) -> tuple[str, str]:
+               agent_msgs: list, proof: Optional[dict] = None) -> tuple[str, str]:
         # O PRIMEIRO motivo de fim (`closed_recorded`, "a primeira causa vence") manda sobre um
         # resultado: se a sessão fechou por cancelamento/recurso/prazo, o `complete` que o fluxo
         # ainda executou DEPOIS (o menu acordado pelo fechamento sai por on_timeout/on_failure)
@@ -880,6 +901,9 @@ class A2ATaskService:
             except (ValueError, AttributeError):
                 vis = "all"
             if (vis == "all" or (isinstance(vis, list) and cust_pid in vis)) and agent_msgs:
+                # o menu que espera com um link de prova pendente espera a PESSOA, fora de banda
+                if proof:
+                    return AUTH_REQUIRED, "identity_proof"
                 return INPUT_REQUIRED, "menu"
         if meta.get("instance_id"):
             return WORKING, "allocated"
@@ -908,9 +932,24 @@ class A2ATaskService:
         state, reason = view["state"], view["reason"]
         status: dict = {"state": state, "timestamp": _now()}
         meta: dict = {"plughub": {"reason": reason}}
-        if state == INPUT_REQUIRED and view["agent_msgs"]:
+        if state in INTERRUPTED and view["agent_msgs"]:
             last = view["agent_msgs"][-1]
             status["message"] = msg(agent_parts(last), mid=last["id"])
+            proof = view.get("proof")
+            if state == AUTH_REQUIRED and proof:
+                # spec § 7.6.1: o status EXPLICA a autorização pedida. O link é o do fato, não o
+                # que o autor do fluxo lembrou de pôr no prompt — se ele não pôs, a plataforma põe
+                url = str(proof.get("url") or "")
+                if url and not any(url in str(p.get("text") or "") for p in status["message"]["parts"]):
+                    status["message"]["parts"].append({"text": (
+                        "Para continuar, a pessoa precisa confirmar a identidade neste link, no "
+                        f"navegador dela: {url}")})
+                if want_json:
+                    status["message"]["parts"].append({"data": {"authorization": {
+                        "type": "identity_proof", "url": url, "mechanism": proof.get("mechanism"),
+                        "anchor_hint": proof.get("anchor_hint"), "expires_at": proof.get("expires_at"),
+                    }}, "mediaType": JSON_MT})
+                meta["plughub"]["auth_deadline"] = proof.get("expires_at")
             if view["input_deadline_ms"]:
                 meta["plughub"]["input_deadline"] = datetime.fromtimestamp(
                     float(view["input_deadline_ms"]) / 1000, tz=timezone.utc).isoformat()

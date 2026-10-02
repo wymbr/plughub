@@ -403,6 +403,38 @@ procedência como segundo eixo). O canal `a2a` só acrescenta o **transporte**:
 6. **Um mecanismo, vários canais.** A mesma prova serve ao webchat (botão no widget), ao WhatsApp e
    SMS (link) e ao A2A (`AUTH_REQUIRED`). O skill exige *evidência*; o método é escolha do tenant.
 
+**Como ficou (AAS-19, 2026-10-02), o item 2.** O transporte do OTP existente; o login federado (itens
+3–5) continua a `FED-01`, e entra aqui como mais um mecanismo na mesma página.
+
+- **O fluxo pede, o canal traduz.** Duas tools ligadas à sessão: `identity_proof_link` (cliente,
+  âncora) cria o link, e `identity_proof_status` dá o VEREDITO — a régua do `judgeResumeEvidence`
+  (verificada, desta sessão, ≤ 15 min, deste cliente). O padrão é `invoke` link → `menu` com o link
+  no prompt → `invoke` status → `choice`. O `menu` é só a ESPERA; quem decide é o status, nunca o
+  valor que acordou o menu. Já provado nesta sessão ⇒ `already_proven`, sem link.
+- **No canal `a2a`**, link pendente (`{t}:proof:session:{sid}`) + menu esperando =
+  `TASK_STATE_AUTH_REQUIRED`, motivo `identity_proof`, com o link no texto do status (posto pela
+  plataforma se o prompt não o trouxer), numa `DataPart` `authorization` para quem aceita JSON e o
+  prazo em `metadata.plughub.auth_deadline` (publicado na extensão `task-lifetime`). Conferido no
+  texto cru da spec (§ 7.6): a credencial chega fora de banda e a task segue **sem** o chamador
+  mandar nada — por isso o **stream não fecha** em `AUTH_REQUIRED` (fecha em `INPUT_REQUIRED`) —, e
+  o chamador **pode** mandar mensagem nesse estado (negociar ou recusar); ela chega ao menu como
+  resposta, e o status continua dizendo a verdade.
+- **A página é do gateway**, em `/a2a/proof/{código}` (slug `proof` reservado no registry, como o
+  `customer-token`). O link **não é credencial** — só manda código ao telefone ou e-mail
+  AUTORITATIVO do cadastro (PID-10), e só quem o recebe prova —, por isso pode passar pelo agente e
+  ficar no transcrito. O GET não envia código (preview de link), nenhuma página mostra o código (nem
+  o `dev_code` do demo), a âncora aparece só como dica, e o link morre no uso.
+- **Só a prova CONCLUÍDA vira evidência**, pelo escritor único (`/internal/identity-evidence`, que
+  passou a aceitar `otp` **só** como `verified`): quem tem o link não é necessariamente a pessoa, e
+  um `pending`/`failed` por pedido apagaria uma prova de pé. Concluída, o `menu` é acordado por
+  **sinal da plataforma** (`menu:signal`, `_proof_settled`), nunca por fala do cliente.
+- **Na sessão do `customer_agent`, só o titular** é provável (`customer_not_holder`): a sessão fala
+  por uma pessoa. No `partner` o fluxo prova quem identificou (o `customer_id` vem do fluxo, e o
+  código vai ao canal autoritativo DESSE cliente, que é o que torna o argumento seguro).
+- Fora: a confirmação de ação de risco (D13) usa esta mesma mecânica com o texto da ação e é a
+  `AAS-20`; o link pelo webchat e pelo WhatsApp funciona (a página é de qualquer canal), mas não foi
+  validado ao vivo nesses canais.
+
 ### D13 — Mandato do agente do cliente *(rev. 2)*
 
 O token `customer_agent` carrega **o que o agente pode fazer em nome da pessoa**, e não só quem ela
@@ -534,9 +566,9 @@ principal e identidade são os mesmos.
 ## 4. Borda
 
 Prefixo novo: **`/a2a`**, **externo** (o card mora sob ele desde a AAS-03 — `/.well-known` da raiz
-não é servido, ver a correção do D2), mais a página
-do link de prova e de entrada mascarada (D8/D12) sob um prefixo público já existente ou novo, a
-decidir na A4.
+não é servido, ver a correção do D2). As páginas fora de banda moram **sob o mesmo prefixo**, com
+slug reservado no registry: a retirada do token (`/a2a/customer-token/…`, AAS-09) e a prova do
+titular (`/a2a/proof/…`, AAS-19). A de entrada mascarada (D8) segue o mesmo caminho (`AAS-14`).
 
 A allowlist da borda do channel-gateway (hoje **seis** prefixos) é regra, não gosto: cada prefixo
 novo precisa de linha na tabela do `infra/test/probe_edge_surface.sh`, que reprova prefixo sem
@@ -574,7 +606,7 @@ mecanismos de evidência (+`princ` e +`oidc_email`).
 | **A5** | Streaming + A2UI | `message/stream`, `tasks/resubscribe` (SSE) sobre o stream canônico; A2UI no fallback | *(rev. 2)* **otimização, não pré-requisito**: os clientes medidos saem do blocking por polling · **streaming feito em 2026-10-01 (AAS-07)**: `SendStreamingMessage`/`SubscribeToTask`, os nomes da v1.0; A2UI = `AAS-17` |
 | **A6** | Validação | clientes de referência: SDK oficial, **OpenClaw** (o mais restrito) e **Copilot Studio ou Gemini Enterprise** (o comprador real); isolamento cross-tenant e cross-titular (D15.4); probe de borda | gate · **SDKs e isolamento feitos em 2026-10-01 (AAS-08)**: a2a-sdk 1.2.1 e @a2a-js/sdk 1.3.0 de ponta a ponta, outro tenant recusado ao vivo; clientes corporativos = roteiro do dono (`AAS-18`); cross-titular é `customer_agent` (`AAS-09`) |
 | **B1** | Prova federada (ID-FED) | `princ` (PID-21) e `oidc_email` pelo escritor único; RP OIDC por tenant; cofre de segredo | **bloqueia B2** |
-| **B2** | `customer_agent` | emissão por autosserviço após prova, cota por principal (D9), `AUTH_REQUIRED` (D12), mandato (D13) | o caso do consumidor · **emissão, titular, cota e revogação feitas em 2026-10-01 (AAS-09)**, sobre OTP/WhatsApp (o B1 não bloqueia mais); `AUTH_REQUIRED` = `AAS-19`, imposição do mandato = `AAS-20` |
+| **B2** | `customer_agent` | emissão por autosserviço após prova, cota por principal (D9), `AUTH_REQUIRED` (D12), mandato (D13) | o caso do consumidor · **emissão, titular, cota e revogação feitas em 2026-10-01 (AAS-09)**, sobre OTP/WhatsApp (o B1 não bloqueia mais); **`AUTH_REQUIRED` feito em 2026-10-02 (AAS-19)**, pelo OTP em página fora de banda; imposição do mandato = `AAS-20` |
 | **B3** | Pool humano por A2A | fila de pessoas atrás do canal, com `on_no_resource` e cota | *(rev. 2)* deixa de ser "fase 2 com canal a decidir": o canal já existe |
 | **ATT** | Governança de anexo completa | esteira única de ingestão, antivírus com quarentena, portas pública (URL assinada) e interna (capacidade + `audit.access`), retenção como classe do namespace `retention` | **bloqueia `url`/`raw`** (D14.4) |
 | **C** | Face MCP (D16) | ADR próprio | direção |
@@ -697,6 +729,10 @@ principal (D9) tem de ser **menor** que a capacidade do pool.
   por `ChannelEndpoint` `a2a`, sem `/.well-known` na raiz; o card estendido virou a `AAS-13`.
 - **2026-10-01, fase A2 (AAS-04).** D6 ganhou o *como ficou* do `partner`; a porta `POST /a2a/{slug}`
   existe antes da execução; o carimbo do principal no `AuditRecord` foi para a A4.
+- **2026-10-02, fase B2 (AAS-19), o `AUTH_REQUIRED`.** D12 ganhou o *como ficou* do item 2: link
+  de prova pelo fluxo, página do gateway sob `/a2a/proof/`, só a prova concluída vira evidência, o
+  menu acordado por sinal, o stream aberto em `AUTH_REQUIRED`. § 4 deixou de ter a página "a
+  decidir": as páginas fora de banda moram sob `/a2a`, com slug reservado.
 - **2026-10-01, fase B2 (AAS-09), a primeira metade.** D6 ganhou o *como ficou* do
   `customer_agent`. Por decisão do dono a B2 deixou de esperar a B1: as provas de hoje (OTP e a
   chegada pelo WhatsApp) bastam para emitir, e o login social entra depois como mais um mecanismo.

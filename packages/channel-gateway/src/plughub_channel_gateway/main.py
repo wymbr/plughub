@@ -67,6 +67,7 @@ from .context_reader import ContextReader
 from .pool_existence import fetch_pool, pool_existence, resolve_contact_address
 from . import a2a_tasks
 from . import a2a_customer_token
+from . import identity_proof
 from plughub_contextstore.writer import write_context_tags
 from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint
 from .outbound_consumer import OutboundConsumer
@@ -1381,6 +1382,15 @@ class OtpChallengeRequest(BaseModel):
     kind:        str   # só phone | email admitem desafio (D8); os demais recusam
     value:       str
 
+class ProofLinkRequest(BaseModel):
+    """AAS-19 — o link de prova fora de banda de UMA sessão, para UM cliente e UMA âncora."""
+    tenant_id:   str
+    session_id:  str
+    customer_id: str
+    kind:        str
+    value:       str
+
+
 class OtpVerifyRequest(BaseModel):
     tenant_id:   str
     customer_id: str
@@ -1682,6 +1692,32 @@ async def webhook_otp_verify(body: OtpVerifyRequest, request: Request) -> dict:
     return await _webhook_adapter.otp_verify(
         tenant, body.customer_id, body.kind, body.value, body.code,
     )
+
+
+def _proof_deps() -> "identity_proof.ProofDeps":
+    """O que a prova fora de banda usa (AAS-19). Sem o adapter de webhook (dono do OTP) não há prova."""
+    if _webhook_adapter is None or _redis is None or _producer is None:
+        raise HTTPException(status_code=503, detail="prova fora de banda indisponível (gateway iniciando)")
+    s = get_settings()
+
+    async def _publish(topic: str, payload: dict, key: str) -> None:
+        await _producer.send_and_wait(topic, value=json.dumps(payload).encode(), key=key.encode())
+
+    return identity_proof.ProofDeps(
+        redis=_redis, adapter=_webhook_adapter, identity=_webhook_adapter.identity_index,
+        otp_refusal=_webhook_adapter._otp.refusal, publish=_publish,
+        base_url=s.a2a_public_base_url, mcp_url=s.mcp_server_url,
+        service_token=s.mcp_internal_service_token)
+
+
+@app.post("/v1/channels/webhook/identity/proof-link", status_code=200)
+async def webhook_identity_proof_link(body: ProofLinkRequest, request: Request) -> dict:
+    """AAS-19 — cria o link de prova fora de banda (a pessoa prova no navegador). Interna (IDN-06):
+    quem chama é a tool `identity_proof_link`, que já conferiu a sessão pelo token dela."""
+    tenant = _identity_caller(request, body.tenant_id)
+    return await identity_proof.create_link(
+        _proof_deps(), tenant_id=tenant, session_id=body.session_id, customer_id=body.customer_id,
+        kind=body.kind, value=body.value)
 
 
 @app.post("/v1/channels/webhook/identity/key/attach", status_code=200)
@@ -3065,6 +3101,30 @@ async def a2a_customer_token_redeem(code: str):
                 res.principal.get("agent_principal_id"), res.principal.get("customer_id"),
                 res.principal.get("allowed_pools"))
     return HTMLResponse(a2a_customer_token.page_token(res.principal, cards), headers=a2a_customer_token.HEADERS)
+
+
+# ── Prova de posse fora de banda (AAS-19) ────────────────────────────────────
+#
+# Debaixo de `/a2a`, como a retirada da AAS-09; o slug `proof` é reservado no registry. A página
+# serve qualquer canal (o link pode ir por webchat ou WhatsApp também, D12.6). O GET não envia
+# código: ver `identity_proof.py`.
+
+def _proof_page(p: "identity_proof.Page"):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(p.html, status_code=p.status, headers={**identity_proof.HEADERS, **(p.headers or {})})
+
+
+@app.get("/a2a/proof/{code}")
+async def a2a_proof_offer(code: str):
+    return _proof_page(await identity_proof.page_get(_proof_deps(), get_settings().tenant_id, code))
+
+
+@app.post("/a2a/proof/{code}")
+async def a2a_proof_act(code: str, request: Request):
+    from urllib.parse import parse_qs
+    raw = (await request.body())[:4096].decode("utf-8", "replace")
+    form = {k: v[0] for k, v in parse_qs(raw).items() if v}
+    return _proof_page(await identity_proof.page_post(_proof_deps(), get_settings().tenant_id, code, form))
 
 
 async def _a2a_card_urls(settings, pools: list[str]) -> list[str]:

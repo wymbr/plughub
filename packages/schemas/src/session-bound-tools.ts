@@ -15,9 +15,11 @@
 // journey da SESSÃO que verificou — sem o token, a tool não sabe onde gravar.
 // AAS-09: `customer_agent_grant`/`_revoke` emitem e revogam o token do PRÓPRIO cliente pela prova
 // DESTA sessão — sem o token ligado à sessão, quem chamasse escolheria de qual sessão é a prova.
+// AAS-19: `identity_proof_link`/`_status` pedem e leem a prova fora de banda DESTA sessão.
 export const SESSION_BOUND_TOOLS: readonly string[] = [
   "pending_workflow_get", "workflow_resume", "otp_challenge", "otp_verify",
   "customer_agent_grant", "customer_agent_revoke",
+  "identity_proof_link", "identity_proof_status",
 ]
 
 // MEN-08 (2026-09-21): tools que recebem o MESMO token para saber QUEM chama, sem exigi-lo.

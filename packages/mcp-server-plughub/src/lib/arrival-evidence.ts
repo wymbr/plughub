@@ -11,7 +11,10 @@
  * do pedido que atravessa essa fronteira: o que o gateway pode afirmar, e o que o servidor
  * carimba sozinho.
  *
- *   - mecanismo só `whatsapp`: OTP é provado pela tool que confere o código, nunca por pedido
+ *   - mecanismo `whatsapp` (a chegada) e, desde a AAS-19, `otp` — mas SÓ `verified`: é a página
+ *     do link de prova (gateway), onde a pessoa digitou o código que o próprio gateway conferiu.
+ *     Outro status de `otp` por pedido é recusado: quem tem o link não é necessariamente a pessoa,
+ *     e um `pending`/`failed` APAGARIA a prova de pé (o escritor remove os campos da prova)
  *   - `verified` exige `customer_id` e `source = authoritative` — número informado pelo
  *     próprio cliente não prova nada (a mesma regra do desafio de OTP, PID-10)
  *   - `verified_at` e `proven_in_session` são do SERVIDOR: um relógio e uma sessão vindos do
@@ -22,8 +25,8 @@ import {
   type IdentityEvidenceRecord, type IdentityEvidenceStatus, type IdentityMechanism,
 } from "@plughub/schemas"
 
-/** Mecanismos que uma CHEGADA pode registrar. `otp` fica fora de propósito. */
-export const ARRIVAL_MECHANISMS: readonly IdentityMechanism[] = ["whatsapp"]
+/** Mecanismos que um SERVIÇO pode registrar. `otp` só como `verified` (AAS-19, ver o cabeçalho). */
+export const ARRIVAL_MECHANISMS: readonly IdentityMechanism[] = ["whatsapp", "otp"]
 
 export type ArrivalJudgement =
   | { kind: "ok"; tenantId: string; sessionId: string; mechanism: IdentityMechanism; record: IdentityEvidenceRecord }
@@ -45,6 +48,10 @@ export function judgeArrivalEvidence(body: unknown, nowIso: string): ArrivalJudg
   }
   if (!(IDENTITY_EVIDENCE_STATUSES as readonly string[]).includes(status)) {
     return { kind: "refuse", status: 422, error: "status_invalido", message: `status '${status}' desconhecido` }
+  }
+  if (mechanism === "otp" && status !== "verified") {
+    return { kind: "refuse", status: 422, error: "otp_so_verified",
+      message: `otp por pedido só registra a prova concluída (status '${status}' apagaria a prova de pé)` }
   }
   const anchorKind = str("anchor_kind")
   const record: IdentityEvidenceRecord = {

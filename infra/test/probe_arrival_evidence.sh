@@ -180,8 +180,11 @@ else
     ok "controle: suítes do mcp-server passam sobre a cópia"
     mut_ts "chegada aceita fonte não autoritativa" packages/mcp-server-plughub "$MC" lib/arrival-evidence.ts \
       '    if (source !== "authoritative") {' '    if (false) {' "${T_MCP[@]}"
-    mut_ts "chegada registra otp" packages/mcp-server-plughub "$MC" lib/arrival-evidence.ts \
-      'export const ARRIVAL_MECHANISMS: readonly IdentityMechanism[] = ["whatsapp"]' 'export const ARRIVAL_MECHANISMS: readonly IdentityMechanism[] = ["whatsapp", "otp"]' "${T_MCP[@]}"
+    # AAS-19 (2026-10-02): `otp` por pedido passou a ser aceito, mas SÓ `verified` (a página do link
+    # de prova) — a mutação antiga ("chegada registra otp") virou o comportamento certo; a nova
+    # planta o defeito que importa agora: `otp` não-verified por pedido, que apagaria a prova de pé
+    mut_ts "otp por pedido aceita status que não verified" packages/mcp-server-plughub "$MC" lib/arrival-evidence.ts \
+      '  if (mechanism === "otp" && status !== "verified") {' '  if (false) {' "${T_MCP[@]}"
     mut_ts "resume aceita prova de qualquer cliente da journey" packages/mcp-server-plughub "$MC" tools/workflow.ts \
       '  const customerId = await tokenCustomer(redis, tenantId, evidenceCustomers(hash), resumeToken)' \
       '  const customerId = evidenceCustomers(hash)[0]' "${T_MCP[@]}"

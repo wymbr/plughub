@@ -123,6 +123,13 @@ por `XREAD BLOCK` no stream canônico e relê os fatos a cada volta. Ele nunca t
 evento. Fala nova só sai como progresso depois de sobreviver a um ciclo, porque o prompt chega ao
 stream antes do `menu:waiting` e saía duas vezes.
 
+**Prova fora de banda (AAS-19):** `identity_proof.py` cria o link (`POST
+/v1/channels/webhook/identity/proof-link`, interna) e serve a página `/a2a/proof/{código}` — GET
+não envia código, a página nunca mostra o código, só a prova concluída vira evidência (pelo
+`/internal/identity-evidence` do mcp-server) e o menu é acordado por um `menu_result` com
+`payload.proof = "settled"`, que o bridge converte em SINAL. Link pendente + menu esperando =
+`TASK_STATE_AUTH_REQUIRED`; nesse estado o stream NÃO fecha e o chamador pode responder.
+
 ## Chamada entre réplicas (WCH-12)
 
 A chamada (`webrtc`, SIP, chamada presa ao chat) vive na memória de UMA réplica. A saída do Kafka e

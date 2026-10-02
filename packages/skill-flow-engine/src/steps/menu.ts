@@ -37,6 +37,9 @@ import { interpolate, resolveVisibility, resolveInputValue } from "../interpolat
 import { resolveMaskedFields, isFieldMasked, isStepMasked } from "../masking-policy"
 import { redisKeys } from "../redis-keys"
 import { parseSignal } from "./signals"
+
+/** AAS-19 — o que o `output_as` de um menu acordado pela prova fora de banda recebe. */
+export const PROOF_SETTLED = "__proof_settled__"
 import { PipelineStateManager } from "../state"
 
 // ── Dialog primitive §17.3-2 — dynamic options/fields ─────────────────────────
@@ -651,6 +654,15 @@ export async function executeMenu(
             }
             return { next_step_id: step.on_invalid ?? step.on_failure, transition_reason: "on_failure",
                      declared_branch: Boolean(step.on_invalid) }
+          case "proof":
+            // AAS-19: a prova fora de banda assentou — o menu que a esperava segue em frente. O
+            // valor é um MARCADOR, não uma resposta: o fluxo decide pelo `identity_proof_status`
+            return {
+              next_step_id:      step.on_success,
+              transition_reason: "on_success",
+              output_value:      PROOF_SETTLED,
+              ...(step.output_as !== undefined ? { output_as: step.output_as } : {}),
+            }
           default:
             console.warn(`[menu] sinal ilegível em ${step.id}: ${raw.slice(0, 120)} — on_failure`)
             return { next_step_id: step.on_failure, transition_reason: "on_failure" }

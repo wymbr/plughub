@@ -537,6 +537,14 @@ probe_aut71_tenant_scope.sh
 # (429) · A o admin so desliga · V revogar pela prova derruba em <= 31 s.
 # Bateria: mut_aas09_customer_agent.sh.
 probe_aas09_customer_agent.sh
+# AAS-19 (2026-10-02): AUTH_REQUIRED no meio da task — a pessoa prova fora de banda. Cliente
+# importado como autoritativo (telefone novo por rodada), skill sem LLM: link -> menu -> status.
+# A a task para em AUTH_REQUIRED com o link (texto + DataPart), sem o telefone · P a pagina: GET
+# nao envia codigo, nao mostra o codigo, codigo errado 400 · C conclui SEM o chamador mandar nada,
+# evidencia otp desta sessao/cliente, acordada por SINAL (C4, com testemunha N3) · U uso unico ·
+# S o stream nao fecha em AUTH_REQUIRED · N o "nao" do chamador nao vale prova · R ancora nao
+# autoritativa recusada nomeando. Le o codigo no log dev do gateway. Bateria: mut_aas19_auth_required.sh.
+probe_aas19_auth_required.sh
 # VOZ-36 (2026-09-18): ouvir e exportar a gravacao — `contacts.recording` (read_only ouve,
 # read_write exporta), pelo pool que ATENDEU a parte. C0 campo no catalogo VIVO (module_registry) ·
 # A1 sem token 401 · A2 sem o campo 403, inclusive id inexistente (sem oraculo) · A3 dominio de outro
@@ -1120,6 +1128,7 @@ smoke_wrapup_slot_handoff.sh
 =mut_aas08_a2a_sdk.sh                                 mutacao
 =mut_aut71_tenant_scope.sh                            mutacao
 =mut_aas09_customer_agent.sh                          mutacao
+=mut_aas19_auth_required.sh                           mutacao
 =mut_sip_edge_surface.sh                              mutacao
 =mutation_claim_lease_slot.sh                         mutacao
 =mutation_occupancy_peak.sh                           mutacao
