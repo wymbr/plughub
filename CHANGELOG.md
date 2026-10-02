@@ -1,5 +1,63 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (4) — VOZ-54: o bot leg que cai no meio da chamada passa a ser dito
+
+**O defeito:** a degradação da IA por áudio (`bot_leg_unavailable`, VOZ-11) era decidida pela
+CONFIG, lida no início da chamada e a cada troca de atendentes: STT e TTS ligados e com serviço. Se
+o serviço de fala caísse com a chamada de pé, a IA parava de ouvir e de falar, e o que sobrava era
+um ERROR por frase no log. Não havia `media.degraded` nem aviso, e o cliente seguia falando para
+ninguém.
+
+**Medido antes, como a ficha pedia:** de 211 fluxos de fala gravados em `speech_stream_summaries`,
+6 tinham erro de STT. Os 6 eram de probes que usam de propósito um modelo inexistente, e nenhum foi
+queda natural do serviço no demo. Ou seja, a exposição medida aqui é quase zero. Mas esses 6 são
+exatamente o caso não dito: 100% das frases perdidas e nenhuma degradação.
+
+**Como ficou:**
+- **Contagem por sessão.** `adapters/bot_leg_health.py` (puro) conta o desfecho de cada pedido ao
+  serviço de fala, separado por `stt` e `tts`.
+  - Duas falhas CONSECUTIVAS de uma parte viram `lost`.
+  - O primeiro sucesso da parte perdida, quando nenhuma outra segue perdida, vira `restored`.
+  - Uma falha isolada não muda nada: já é dita no log e no `speech.metrics`. Se cada frase perdida
+    acendesse e apagasse o aviso, o cliente veria o aviso piscar a cada soluço da rede.
+- **De onde vem o desfecho.** O provedor `speaches` passou a reportar cada transcrição
+  (`outcome(ok)`, `reports_outcome = True`). Texto vazio pelo VAD conta como resposta, não como
+  falha. A síntese reporta em `_synthesize_pcm`.
+- **O que a transição faz.** Chama o mesmo `_media_changed` da VOZ-11. A degradação passa a ler
+  `_bot_leg_audio(session_id)` (a config converte **e** o serviço não caiu nesta chamada) e sai com o
+  motivo próprio `bot_leg_lost`. Na volta saem `media.restored` e, para o cliente que tinha sido
+  avisado, *"Sua voz voltou a ser recebida neste atendimento."*
+- **O teto no SFU NÃO cai.** O áudio tem de continuar chegando para a volta ser percebida. Por isso
+  a pergunta *"o cliente sente?"* é feita ao teto calculado SEM a IA de áudio. Sem isso, com a IA
+  sozinha, o cliente nunca seria avisado, já que o teto aplicado ainda tem áudio.
+
+**Limite declarado:** só o provedor `speaches` reporta desfecho de STT. O Deepgram legado
+transcreve por streaming e não tem esse ponto, então nele a queda do STT continua não dita.
+
+**Prova:**
+- `infra/test/probe_voz54_bot_leg_lost.sh`, ao vivo e VERDE. Um perfil de fala com modelo de STT
+  inexistente derruba a fala de UMA chamada, sem parar o `speaches` compartilhado. Nessa chamada
+  saíram `media.degraded` `bot_leg_lost` (áudio, para a IA), o aviso ao cliente e o log nomeando a
+  sessão. Controle: a chamada pelo pool, com o modelo real, transcreveu 5 falas e não disse nada.
+- A VOLTA não é medida ao vivo, porque o perfil da chamada é resolvido uma vez por sessão. Ela é
+  medida no unitário.
+- `test_voz54_bot_leg_lost.py` tem 12 testes, cobrindo:
+  - o contador;
+  - a regra;
+  - o provedor;
+  - o adapter: queda, volta, humano ouvindo e cliente não avisado;
+  - a fiação do laço de STT e da síntese.
+- Mutações: 8 de 8 reprovadas. Foram elas:
+  - teto do aviso igual ao teto do SFU;
+  - degradação lida da config;
+  - provedor que não reporta;
+  - síntese que não reporta;
+  - sem aviso de volta;
+  - limiar 1;
+  - laço que não passa o `outcome`;
+  - motivo antigo.
+- Suíte do gateway: 1761. Probe da VOZ-11 de regressão verde.
+
 ## 2026-10-02 (3) — ATT-09: o Console salva o anexo com o nome do balão, mascarado
 
 **O que o dono viu:** depois da ATT-08, o arquivo baixado pelo Console saía como

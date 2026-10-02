@@ -429,6 +429,11 @@ probe_voz39_recording_badge.sh
 # `system_notice` no stream · T1 o microfone publicado vira `media.track` (webhook de trilha) ·
 # N1 controle so-audio: nada dito, com `media.track` lido como testemunha. ~2 min.
 probe_voz11_media_degradation.sh
+# VOZ-54 (2026-10-02): o servico de fala que CAI com a chamada de pe e dito. Perfil com modelo de STT
+# inexistente derruba UMA chamada (sem parar o speaches): L1 media.degraded bot_leg_lost · L2 aviso ao
+# cliente · L3 log nomeando a sessao · C1 controle pelo pool transcreve e nao diz nada. A VOLTA e
+# medida no unitario (o perfil e resolvido uma vez por sessao). ~4 min.
+probe_voz54_bot_leg_lost.sh
 # VOZ-28 (2026-10-01): anexo DURANTE a chamada do chat. C0 a chamada abriu · U1 upload.ready ·
 # U2 POST 204 + upload.committed no chat · U3 o documento vira MENSAGEM do stream (`[Anexo: …]` +
 # `content.attachment` com link — vermelho antes: o bridge descartava `media`) · U4 bytes servidos

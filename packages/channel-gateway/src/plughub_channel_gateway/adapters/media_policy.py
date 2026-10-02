@@ -201,13 +201,18 @@ def agent_ceiling(attendants: dict[str, dict]) -> frozenset[str]:
 #                  (capacidade DEDUZIDA no navegador, `capacity`; ausente = não sabido, sem queixa).
 REASON_CANNOT_CONSUME = "attendant_cannot_consume"
 REASON_BOT_LEG        = "bot_leg_unavailable"
+# VOZ-54: o bot leg estava de pé e o serviço de fala CAIU com a chamada aberta
+REASON_BOT_LEG_LOST   = "bot_leg_lost"
 REASON_NO_DEVICE      = "attendant_no_device"
 TO_ATTENDANT = "to_attendant"
 TO_CUSTOMER  = "to_customer"
 
 
-def degradations(attendants: dict[str, dict], bot_leg_audio: bool = False) -> list[dict]:
-    """Cada perna que não serve uma mídia que a política oferece — ordenado e sem repetição."""
+def degradations(attendants: dict[str, dict], bot_leg_audio: bool = False,
+                 bot_leg_reason: str = REASON_BOT_LEG) -> list[dict]:
+    """Cada perna que não serve uma mídia que a política oferece — ordenado e sem repetição.
+    `bot_leg_reason` diz POR QUE a IA não ouve: a config não converte (`bot_leg_unavailable`) ou o
+    serviço de fala caiu no meio da chamada (`bot_leg_lost`, VOZ-54)."""
     out: list[dict] = []
     for inst in sorted(attendants):
         a = attendants[inst] if isinstance(attendants[inst], dict) else {}
@@ -215,7 +220,7 @@ def degradations(attendants: dict[str, dict], bot_leg_audio: bool = False) -> li
         consumes = attendant_consumes(fw, bot_leg_audio)
         for kind in KINDS:
             if kind in (a.get("customer_publish") or []) and kind not in consumes:
-                reason = (REASON_BOT_LEG if kind == AUDIO and fw in AI_FRAMEWORKS and not bot_leg_audio
+                reason = (bot_leg_reason if kind == AUDIO and fw in AI_FRAMEWORKS and not bot_leg_audio
                           else REASON_CANNOT_CONSUME)
                 out.append({"participant": inst, "framework": fw, "kind": kind,
                             "direction": TO_ATTENDANT, "reason": reason})
@@ -250,6 +255,13 @@ CUSTOMER_NOTICE: dict[tuple[str, str], str] = {
     (TO_ATTENDANT, AUDIO): "Sua voz não é recebida neste atendimento. Continue pelo chat.",
     (TO_CUSTOMER, VIDEO):  "O atendente está sem câmera. A conversa segue por áudio.",
     (TO_CUSTOMER, AUDIO):  "O atendente está sem microfone. A conversa segue por texto.",
+}
+
+
+# VOZ-54: quando o serviço de fala VOLTA, quem foi avisado de que a voz não era recebida ouve que
+# voltou — sem isto, o cliente seguiria no chat por um aviso que deixou de ser verdade.
+CUSTOMER_RESTORED_NOTICE: dict[tuple[str, str], str] = {
+    (TO_ATTENDANT, AUDIO): "Sua voz voltou a ser recebida neste atendimento.",
 }
 
 

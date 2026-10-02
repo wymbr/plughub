@@ -130,6 +130,7 @@ from .webrtc_provider import (
     build_room_name,
 )
 from . import media_policy
+from .bot_leg_health import LOST, BotLegHealth
 from .webrtc_recording import CallRecorder
 from .webrtc_call import CallAttachMixin
 from .sip_leg import SipCall, is_sip_room, parse_sip_participant
@@ -467,6 +468,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         # chamada; a resolução de cada sessão é feita UMA vez e compartilhada entre STT e TTS
         self.speech_profiles = SpeechProfiles(settings.config_api_url)
         self._speech_resolved: dict[str, asyncio.Task] = {}
+        # VOZ-54: o serviço de fala que CAI com a chamada de pé — falhas consecutivas por sessão
+        self._bot_leg_health = BotLegHealth()
         self._screen_invalids: dict[str, dict[str, int]]         = {}
 
         # VOZ-02: sessões cuja chamada entrou por TELEFONE (perna SIP). Não têm WebSocket: a sala
@@ -649,6 +652,26 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
 
     def _convert_available(self) -> bool:
         return self._stt_unavailable is None and self._tts_unavailable is None
+
+    def _bot_leg_audio(self, session_id: str) -> bool:
+        """A IA desta chamada ouve e fala AGORA? A config converte (`_convert_available`) E o serviço
+        de fala não caiu nesta chamada (VOZ-54). Só a DEGRADAÇÃO lê isto: o teto no SFU e o bot leg
+        seguem a config, porque o áudio tem de continuar chegando para a volta ser percebida."""
+        return self._convert_available() and not self._bot_leg_health.is_lost(session_id)
+
+    def _speech_outcome(self, session_id: str, part: str, ok: bool) -> None:
+        """VOZ-54: desfecho de um pedido ao serviço de fala. A TRANSIÇÃO (caiu / voltou) refaz a
+        degradação pelo mesmo caminho da VOZ-11 — `media.degraded`/`media.restored` e aviso."""
+        t = self._bot_leg_health.record(session_id, part, ok)
+        if t is None:
+            return
+        if t == LOST:
+            logger.warning("webrtc fala: o servico de fala CAIU com a chamada de pe (%s, session=%s) — "
+                           "a IA nao ouve nem fala; degradacao bot_leg_lost",
+                           ",".join(self._bot_leg_health.lost_parts(session_id)), session_id)
+        else:
+            logger.info("webrtc fala: o servico de fala VOLTOU (%s, session=%s)", part, session_id)
+        disparar(self._media_changed(session_id, f"bot_leg_{t}"), nome=f"webrtc-botleg-{session_id[:8]}")
 
     def _bot_leg_should_run(self, state: dict, publish: frozenset[str], session_id: str = "") -> bool:
         """O OUVINTE entra quando há atendente de áudio — humano ou IA — E há STT: toda chamada
@@ -2116,7 +2139,14 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         """Compara as degradações de AGORA com as já ditas: a nova vira `media.degraded` no stream
         (agentes) e, se muda o que o cliente vive, aviso ao cliente; a que acabou vira
         `media.restored`. Só por INCAPACIDADE — escolha não passa por aqui."""
-        atual = media_policy.degradations(state["attendants"], bot_leg_audio=self._convert_available())
+        perdido = self._convert_available() and self._bot_leg_health.is_lost(session_id)
+        atual = media_policy.degradations(
+            state["attendants"], bot_leg_audio=self._bot_leg_audio(session_id),
+            bot_leg_reason=media_policy.REASON_BOT_LEG_LOST if perdido else media_policy.REASON_BOT_LEG)
+        # VOZ-54: na queda do serviço o teto no SFU NÃO cai (o áudio precisa seguir chegando para a
+        # volta ser percebida), então "o cliente sente?" se pergunta ao teto SEM a IA de áudio
+        sem_ia = media_policy.customer_ceiling(state["attendants"], bot_leg_audio=False)
+        teto_aviso = sem_ia if perdido else ceiling
         antes = {k: d for k, d in ((media_policy.degradation_key(d), d) for d in state.get("degraded") or [])}
         agora = {media_policy.degradation_key(d): d for d in atual}
         state["degraded"] = atual
@@ -2124,7 +2154,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         for key in sorted(agora.keys() - antes.keys()):
             d = agora[key]
             await self._record_media_event(session_id, "media.degraded", d)
-            if media_policy.customer_feels(d, state["attendants"], ceiling):
+            if media_policy.customer_feels(d, state["attendants"], teto_aviso):
                 # No início da chamada o aviso sai DEPOIS do `webrtc.ready`: antes dele o cliente
                 # leria "seu vídeo não é recebido" de uma chamada que ainda não existe.
                 if defer_notice:
@@ -2135,6 +2165,9 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
             # Só quem SEGUE na chamada "voltou a servir"; a degradação de quem saiu some com ele.
             if antes[key].get("participant") in state["attendants"]:
                 await self._record_media_event(session_id, "media.restored", antes[key])
+                if (antes[key].get("reason") == media_policy.REASON_BOT_LEG_LOST
+                        and media_policy.customer_feels(antes[key], state["attendants"], sem_ia)):
+                    await self._notify_customer(ws, session_id, antes[key], restored=True)
         return adiados
 
     async def _record_media_event(self, session_id: str, kind: str, d: dict) -> None:
@@ -2157,12 +2190,14 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         except Exception as exc:  # noqa: BLE001
             logger.warning("webrtc media: %s NAO chegou ao Console (session=%s): %s", kind, session_id, exc)
 
-    async def _notify_customer(self, ws: Any, session_id: str, d: dict) -> None:
-        text = media_policy.CUSTOMER_NOTICE.get((d.get("direction", ""), d.get("kind", "")))
+    async def _notify_customer(self, ws: Any, session_id: str, d: dict, *, restored: bool = False) -> None:
+        avisos = media_policy.CUSTOMER_RESTORED_NOTICE if restored else media_policy.CUSTOMER_NOTICE
+        text = avisos.get((d.get("direction", ""), d.get("kind", "")))
         if not text:
             return
         message_id = str(uuid.uuid4())
-        await self._ws_send(ws, {"type": "webrtc.notice", "reason": d.get("reason"),
+        await self._ws_send(ws, {"type": "webrtc.notice",
+                                 "reason": "media_restored" if restored else d.get("reason"),
                                  "kind": d.get("kind"), "text": text})
         # O aviso também é fato do stream (o histórico do Console é projeção dele, ALW-18).
         try:
@@ -2368,6 +2403,7 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
         self._screen_invalids.pop(session_id, None)
         self._speech_tuning.pop(session_id, None)
         self._speech_resolved.pop(session_id, None)
+        self._bot_leg_health.forget(session_id)
         self._masked_grace_until.pop(session_id, None)
         self._masked_sip_menu.pop(session_id, None)
         self._media_hold.pop(session_id, None)
@@ -2641,6 +2677,8 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                 kw["model"] = voice.stt_model
             if segmentation is not None:
                 kw["segmentation"] = segmentation
+            if getattr(self._stt, "reports_outcome", False):
+                kw["outcome"] = lambda ok: self._speech_outcome(session_id, "stt", ok)
             if interrompe and getattr(self._stt, "supports_tuning", False):
                 # só a fala do CLIENTE responde menu, logo só ela segue o ajuste da coleta
                 kw["tuning"] = self._speech_tuning.setdefault(session_id, SpeechTuning())
@@ -2930,7 +2968,9 @@ class WebRTCAdapter(CallAttachMixin, ChannelAdapter):
                 audio = await self._tts.synthesize(text, None)
         except Exception as exc:
             logger.warning("webrtc fala: sintese falhou (session=%s): %s — frase NAO falada", session_id, exc)
+            self._speech_outcome(session_id, "tts", False)
             return b"", 0
+        self._speech_outcome(session_id, "tts", bool(audio))
         if not audio:
             return b"", 0
         # O auto-hospedado já devolve PCM (VOZ-05); só o legado devolve MP3 — e a imagem não

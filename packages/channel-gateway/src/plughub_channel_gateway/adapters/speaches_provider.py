@@ -24,7 +24,7 @@ import io
 import logging
 import math
 import wave
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 import httpx
 import numpy as np
@@ -74,6 +74,9 @@ class SpeachesSTTProvider:
     # VOZ-25: o MESMO serviço serve vários modelos pela mesma URL — o perfil de fala da chamada
     # escolhe o modelo (`stream(model=…)`); a URL do serviço continua sendo topologia (env)
     supports_model_choice = True
+    # VOZ-54: cada transcrição diz ao chamador se o SERVIÇO respondeu (`outcome(ok)`) — é assim que
+    # a chamada percebe o serviço de fala caindo com ela de pé
+    reports_outcome = True
 
     def __init__(
         self,
@@ -113,6 +116,7 @@ class SpeachesSTTProvider:
         segmentation: SpeechSegmentation | None = None,
         stats:        SpeechStats | None = None,
         model:        str | None = None,
+        outcome:      Callable[[bool], None] | None = None,
     ) -> AsyncIterator[STTResult]:
         seg = segmentation or self._seg
         modelo = model or self._model
@@ -135,6 +139,8 @@ class SpeachesSTTProvider:
             texto, confianca, erro = await self._transcribe_raw(pcm, sample_rate, lang, seg.vad_filter, modelo)
             if erro and stats is not None:
                 stats.stt_errors += 1
+            if outcome is not None:
+                outcome(not erro)      # VOZ-54: o serviço respondeu? (texto vazio do VAD é resposta)
             if not texto:
                 if stats is not None and seg.vad_filter and not erro:
                     stats.discarded_vad += 1

@@ -525,6 +525,7 @@ class CallAttachMixin:
             await asyncio.wait({stt_task}, timeout=2)
         self._sessions.pop(session_id, None)
         self._speech_resolved.pop(session_id, None)
+        self._bot_leg_health.forget(session_id)
         self._call_menu_armed.pop(session_id, None)     # a próxima chamada rearma o que estiver pendente
         started = session_id in self._call_started
         self._call_started.discard(session_id)

@@ -1182,8 +1182,25 @@ A diferença para o já dito vira `media.degraded`/`media.restored` (stream `age
 quem SAIU não "volta a servir". O cliente só ouve quando a chamada DELE muda (`customer_feels`:
 nenhum outro atendente cobre a mídia) — `webrtc.notice` com texto neutro e `system_notice` no
 stream, sempre DEPOIS do `webrtc.ready`. Fica de fora (fichas próprias): gravação e avaliação lendo o
-que fluiu (`VOZ-53`) e bot leg que cai com a chamada de pé (`VOZ-54`). Preferência no roteamento:
+que fluiu (`VOZ-53`). Preferência no roteamento:
 `VOZ-51`. Gate: `infra/test/probe_voz11_media_degradation.sh`.
+
+**(e) O bot leg que CAI com a chamada de pé (VOZ-54, 2026-10-02).** A regra acima lê a CONFIG (STT
+e TTS ligados e com serviço). O serviço de fala que cai no meio da chamada é contado à parte, por
+sessão (`adapters/bot_leg_health.py`):
+- **Entrada:** o desfecho de cada transcrição (`outcome`, que o provedor `speaches` reporta) e de
+  cada síntese (`_synthesize_pcm`).
+- **Limiar:** duas falhas consecutivas de uma parte (`stt`/`tts`) viram `lost`; o primeiro sucesso,
+  sem outra parte perdida, vira `restored`.
+- **Transição:** passa pelo mesmo `_media_changed`, com o motivo `bot_leg_lost`.
+- **Teto no SFU:** não muda. O áudio segue chegando, e é a próxima frase bem-sucedida que percebe a
+  volta. Por isso o "cliente sente?" é perguntado ao teto SEM a IA de áudio.
+- **Na volta:** além do `media.restored`, o cliente que foi avisado ouve que a voz voltou.
+- **Limite:** o Deepgram legado (streaming) não reporta desfecho, então nele a queda de STT segue
+  não dita.
+
+Gate: `infra/test/probe_voz54_bot_leg_lost.sh`, em que um perfil com modelo de STT inexistente
+derruba UMA chamada, sem parar o serviço compartilhado.
 
 ## 20c. Anexo durante a chamada do chat (VOZ-28, 2026-10-01)
 

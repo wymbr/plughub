@@ -1553,6 +1553,8 @@ porta do ingest, gerando um `session_id` novo de reavaliação a partir do origi
   estado real vem SÓ do webhook de trilha do SFU (`media.track`, `flowed`). O que se nomeia é a
   INCAPACIDADE (`media.degraded`, e ao cliente só quando muda a chamada dele) — da IA pelo deploy e
   bot leg, do humano DEDUZIDA no navegador (`capable` no token; ausente = não sabido, sem queixa).
+  O serviço de fala que CAI com a chamada de pé também é dito (VOZ-54, `bot_leg_lost`, por falhas
+  consecutivas na sessão), sem cortar o teto no SFU: o áudio segue chegando para a volta ser percebida.
   Gate: `probe_voz11_media_degradation.sh`.
 - **A política é config do POOL** (VOZ-10): `pool.media_policy` `{customer_publish, agent_publish}`,
   obrigatória em pool de contato com `webrtc` **ou `voice`** (VOZ-02), lida fresca pelo bridge e levada no `routing.assigned`
