@@ -29,6 +29,13 @@ pergunta e por-CELULA (qual coluna e o status? o bloqueador e um id?), e em
    Vocabulario deliberadamente largo — falso NEGATIVO aqui e barato (deixa
    passar um gatilho ruim), falso POSITIVO seria caro (ensina a ignorar o gate).
 
+  ramo I — TABELA PARTIDA. Toda ficha tem exatamente TRES celulas depois do id
+    (tarefa, status, ancora), contando so o `|` SEM escape, e fecha com `|`. Nasceu em
+    2026-10-02: 14 fichas tinham `|` cru dentro de codigo (`a|b`, `otp` | `none`), o que
+    parte a celula no Markdown e desliza o status para a coluna errada na leitura; e a
+    NIV-06 tinha perdido o `|` final e o fim do texto numa edicao, sem nada acusar. Os
+    ramos G e H nao viam: leem o status como a PENULTIMA celula, que o deslize preserva.
+
 SAIDA: 0 = nada encontrado · 1 = achado (vermelho) · 2 = INCONCLUSIVO
 """
 import io
@@ -64,6 +71,40 @@ def celulas(corpo):
     return c
 
 
+def celulas_md(linha):
+    """Celulas como o Markdown as ve: so `|` sem escape separa. Sem o id."""
+    c = re.split(r"(?<!\\)\|", linha.rstrip("\n"))[1:-1]
+    return c[1:]
+
+
+def ramo_i():
+    achados, total = [], 0
+    for path in ("pending.md", "done.md"):
+        try:
+            texto = io.open(path, encoding="utf-8").read()
+        except OSError as e:
+            print("INCONCLUSIVO: nao consegui ler %s (%s)" % (path, e))
+            return 2
+        for n, l in enumerate(texto.split("\n"), 1):
+            m = LINHA.match(l)
+            if not m:
+                continue
+            total += 1
+            c = celulas_md(l)
+            if not l.rstrip().endswith("|"):
+                achados.append("%s:%d %s nao fecha com `|` (a linha foi cortada?)" % (path, n, m.group(1)))
+            elif len(c) != 3:
+                achados.append("%s:%d %s tem %d celulas, nao 3 — `|` cru no texto? escape como `\\|`"
+                               % (path, n, m.group(1), len(c)))
+    if not total:
+        print("INCONCLUSIVO: nenhuma ficha reconhecida")
+        return 2
+    print("populacao: %d fichas nos dois arquivos" % total)
+    for a in achados:
+        print("   " + a)
+    return 1 if achados else 0
+
+
 def carrega(path):
     itens = []
     try:
@@ -79,11 +120,13 @@ def carrega(path):
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ("G", "H"):
-        print("INCONCLUSIVO: uso: %s G|H" % sys.argv[0])
+    if len(sys.argv) != 2 or sys.argv[1] not in ("G", "H", "I"):
+        print("INCONCLUSIVO: uso: %s G|H|I" % sys.argv[0])
         return 2
 
     ramo = sys.argv[1]
+    if ramo == "I":
+        return ramo_i()
     pend = carrega("pending.md")
     done = carrega("done.md")
     if not pend:

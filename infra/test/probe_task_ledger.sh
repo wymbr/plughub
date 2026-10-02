@@ -144,6 +144,13 @@ case "$H_RC" in
 ' "$H_OUT" | sed 's/^/   /'; FAIL=1 ;;
 esac
 
+I_OUT="$(python3 "$STALL" I 2>&1)"; I_RC=$?
+case "$I_RC" in
+  0) echo "I. verde — toda ficha tem as tres celulas (tarefa, status, ancora) e fecha a linha"; echo "   $(printf '%s' "$I_OUT" | head -1)" ;;
+  1) echo "I. VERMELHO — tabela partida (o status desliza de coluna):"; printf '%s\n' "$I_OUT" | sed 's/^/   /'; FAIL=1 ;;
+  *) echo "I. INCONCLUSIVO — o auditor nao mediu:"; printf '%s\n' "$I_OUT" | sed 's/^/   /'; FAIL=1 ;;
+esac
+
 echo "======================"
 [ "$FAIL" -eq 0 ] && { echo "VERDE"; exit 0; }
 echo "VERMELHO"; exit 1

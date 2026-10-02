@@ -40,6 +40,10 @@ grep -n -i '<sintoma ou termo>' pending.md done.md TODO.md CHANGELOG.md
    Olhar só o `pending.md` já fez reusar id fechado (`PUL-03`).
 3. **Linha de tabela**: `| id | tarefa | estado | evidência |`. A tarefa diz o que falta e a
    medição que a justifica; a evidência aponta arquivo:linha, gate ou `CHANGELOG.md` § data.
+   - **`|` dentro do texto é SEMPRE `\|`**, inclusive dentro de código (`a\|b`): cru, ele parte a
+     célula e o estado desliza de coluna. 15 linhas estavam assim em 2026-10-02 (GAT-08).
+   - **O estado é curto** (`aberto` · `bloqueado` por `XXX-NN` · `adiado` — gatilho: …). O porquê
+     e a história vão na tarefa, nunca na célula de estado.
 4. **Título NUNCA afirma status** — nem de ficha nem de grupo ("concluído", "completo", ✅).
    Status é coluna. O ramo F do portão reprova em título de GRUPO; no texto da ficha, nada
    confere — é disciplina, e foi num título velho que os nove marcadores mentiram.
@@ -81,7 +85,7 @@ wsl.exe -d ubuntu -- bash -lc 'cd /home/a1/projects/plughub && bash infra/test/p
 
 Ramos: A id bem formado · B grupo tem documento · C id em um arquivo só · D nenhum id sumiu
 contra `HEAD` · E linha de `done` cita âncora · F título sem status · G bloqueio com bloqueador
-fechado · H `adiado` sem gatilho.
+fechado · H `adiado` sem gatilho · I tabela partida (três células e fecho, contando só `|` sem escape).
 
 ## 5. Onde registrar cada decisão
 

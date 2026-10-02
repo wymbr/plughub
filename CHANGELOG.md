@@ -1,5 +1,38 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (7) — GAT-08: o ledger tinha 15 linhas de tabela partidas, e uma tinha perdido texto
+
+**O que o dono pediu:** limpar os status ilegíveis da lista de pendências (ALW-19, AUT-70, AUT-09,
+PID-05, DLG-34).
+
+**Medido, contando as células como o Markdown conta** (só `|` sem escape separa):
+- **14 linhas** tinham `|` cru dentro de código (`usage-aggregator|*|fora`, `instrucoes: |`,
+  `áudio|vídeo`) ou entre dois trechos de código (`otp` | `none`). Eram 4 no `pending.md` (AUT-70,
+  PID-05, DLG-34, AIG-01) e **9 no `done.md`**, que ninguém tinha visto. O pipe parte a célula, e a
+  coluna de status desliza.
+- **AUT-09 estava certa** (usa `\|`); só a leitura ingênua da lista a confundia.
+- **ALW-19 e NIV-06:** a célula de status tinha virado parágrafo.
+- **A NIV-06 perdeu texto.** Na edição da NIV-07 (`6e2190e2`, 2026-09-18), ela perdeu o `|` final
+  e o fim da frase: *"(`plain` fala, `masked` bipa, `none` cala — fatia 5b); mas lá o dado
+  MASCARADO vai ao campo protegido da tela … que é a VOZ-02"*. E nunca teve coluna de referência.
+
+**Por que nada acusou:** os ramos G e H do `probe_task_ledger.sh` leem o status como a PENÚLTIMA
+célula, e o deslize preserva a penúltima. O gate via certo justamente as linhas que o leitor humano
+via erradas.
+
+**Como ficou:**
+- Os `|` de dentro do texto passaram a `\|`.
+- ALW-19 e NIV-06 têm o status curto (`bloqueado` por `NIV-06`; `aberto`). O parágrafo foi para a
+  descrição, sem apagar nada.
+- O trecho perdido da NIV-06 foi restaurado, com a nota de onde veio. A NIV-06 ganhou a âncora
+  `CHANGELOG.md` § 2026-09-18 (2) · (3).
+- **Ramo I novo no gate:** toda ficha tem exatamente três células depois do id e fecha com `|`.
+  Mede 612 fichas.
+- A skill `task-ledger` § 2 ganhou a regra de escrita: escapar o `|` e manter o estado curto.
+
+**Prova:** ramo I verde. Contraprova: o pipe cru de volta na PID-05 reprova (`4 celulas, nao 3`), e
+uma linha do `done.md` sem fecho reprova (`nao fecha com |`).
+
 ## 2026-10-02 (6) — VOZ-52: os três probes de mídia vermelhos, e uma corrida que tirava do cliente o aviso de fim
 
 A ficha mandava conferir se cada probe tinha envelhecido ou se o código tinha regredido antes de
