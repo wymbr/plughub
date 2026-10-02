@@ -1,5 +1,17 @@
 # CHANGELOG — PlugHub Implementações Concluídas
 
+## 2026-10-02 (5) — ALW-20: os temporários do probe de paridade saem do git
+
+O `probe_context_tag_extractor_parity.sh` grava seus temporários em `infra/test/.ctx_parity_tmp/`,
+DENTRO da árvore. Isso é de propósito: o ramo TS monta a raiz no container e roda o `run_ts.sh`
+gerado ali. Os 6 arquivos entraram no git na V4 (`60abff5f`). Desde então, cada execução do gate
+sujava a árvore compartilhada e aparecia no `git status` de toda sessão paralela, e o scanner da
+`plughub-review` acusava o `run_ts.sh` gerado como `.sh` sem classe no manifesto.
+
+O conserto não move a pasta: `.gitignore` ganhou `infra/test/.ctx_parity_tmp/` (com o porquê) e os
+6 saíram do índice (`git rm --cached`; o disco não é tocado). O scanner lista os não rastreados com
+`--exclude-standard`, então o falso positivo dele some junto.
+
 ## 2026-10-02 (4) — VOZ-54: o bot leg que cai no meio da chamada passa a ser dito
 
 **O defeito:** a degradação da IA por áudio (`bot_leg_unavailable`, VOZ-11) era decidida pela

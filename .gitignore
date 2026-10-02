@@ -80,3 +80,7 @@ plughub-descritivo-tecnico.pptx
 por-que-plughub-existe.pptx
 plughub-descritivo-tecnico.pptx
 por-que-plughub-existe.pptx
+
+# ALW-20: temporarios do probe_context_tag_extractor_parity.sh. Ficam DENTRO da arvore de proposito
+# (o ramo TS monta a raiz no container e roda o run_ts.sh gerado ali), mas nunca entram no git.
+infra/test/.ctx_parity_tmp/
